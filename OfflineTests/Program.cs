@@ -5,6 +5,7 @@ using CombatBrain.Cavalry;
 using CombatBrain.Ranged;
 using CombatBrain.Compliance;
 using CombatBrain.Morale;
+using CombatBrain.Experience;
 
 namespace OfflineTests
 {
@@ -48,6 +49,10 @@ namespace OfflineTests
             TestMorale();
             Console.WriteLine("== F11 PhasedRetreat ==");
             TestPhasedRetreat();
+            Console.WriteLine("== F10 CounterMatrix ==");
+            TestCounterMatrix();
+            Console.WriteLine("== F10 CampaignHabits ==");
+            TestCampaignHabits();
 
             Console.WriteLine();
             if (_failures == 0)
@@ -257,6 +262,52 @@ namespace OfflineTests
                 "disengage done -> reform");
             Check(PhasedRetreatFSM.Advance(RetreatState.Reform, new RetreatInput { ReformDone = true }) == RetreatState.Hold,
                 "reform done -> hold (loop closes)");
+        }
+
+        private static void TestCounterMatrix()
+        {
+            var cm = new CounterMatrix();
+            CheckApprox(cm.GetConfidence(5), 1f, "default confidence 1");
+
+            cm.OnCountered(5);
+            CheckApprox(cm.GetConfidence(5), 0.7f, "1 counter -> 0.7");
+            Check(!cm.IsShunned(5), "1 counter not shunned");
+
+            cm.OnCountered(5);
+            cm.OnCountered(5);
+            Check(cm.IsShunned(5), "3 counters -> shunned");
+            CheckApprox(cm.GetConfidence(5), 0.343f, "3 counters -> 0.343", 1e-3f);
+
+            cm.OnSuccess(5);
+            Check(!cm.IsShunned(5), "success clears shun");
+            CheckApprox(cm.GetConfidence(5), 0.493f, "success recovers 0.343+0.15", 1e-3f);
+
+            var cm2 = new CounterMatrix();
+            cm2.OnCountered(1);
+            cm2.OnCountered(1);
+            cm2.OnCountered(1);
+            Check(cm2.PickBest(new[] { 1, 2 }) == 2, "pick non-shunned tactic");
+            Check(cm2.PickBest(new[] { 1 }) == -1, "all shunned -> -1");
+            Check(cm2.PickBest(new int[0]) == -1, "empty candidates -> -1");
+
+            var cm3 = new CounterMatrix();
+            cm3.OnSuccess(9);
+            CheckApprox(cm3.GetConfidence(9), 1f, "success clamps at 1");
+        }
+
+        private static void TestCampaignHabits()
+        {
+            var h = new CampaignHabits();
+            Check(h.Predict() == -1, "no records -> -1");
+
+            h.Record(1);
+            h.Record(2);
+            h.Record(2);
+            Check(h.Predict() == 2, "predict most frequent play");
+            Check(h.CountOf(2) == 2 && h.CountOf(1) == 1 && h.CountOf(3) == 0, "counts correct");
+
+            h.Clear();
+            Check(h.Predict() == -1, "clear empties memory");
         }
     }
 }
