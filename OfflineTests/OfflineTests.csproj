@@ -8,6 +8,8 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <Compile Include="..\CombatBrain\Enums.cs" Link="Enums.cs" />
+    <Compile Include="..\CombatBrain\Combat\FighterProfile.cs" Link="Combat\FighterProfile.cs" />
     <Compile Include="..\CombatBrain\Movement\MovementController.cs" Link="Movement\MovementController.cs" />
     <Compile Include="..\CombatBrain\Survival\SurvivalInstinct.cs" Link="Survival\SurvivalInstinct.cs" />
     <Compile Include="..\CombatBrain\Cavalry\CavalryWaveFSM.cs" Link="Cavalry\CavalryWaveFSM.cs" />

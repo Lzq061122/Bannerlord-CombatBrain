@@ -1,4 +1,6 @@
 using System;
+using CombatBrain;
+using CombatBrain.Combat;
 using CombatBrain.Movement;
 using CombatBrain.Survival;
 using CombatBrain.Cavalry;
@@ -35,6 +37,8 @@ namespace OfflineTests
         {
             _failures = 0;
 
+            Console.WriteLine("== F0 FighterProfile ==");
+            TestFighterProfile();
             Console.WriteLine("== F6 MovementController ==");
             TestMovement();
             Console.WriteLine("== F7 SurvivalInstinct ==");
@@ -62,6 +66,57 @@ namespace OfflineTests
             }
             Console.WriteLine(_failures + " FAILURE(S)");
             return 1;
+        }
+
+        private static void TestFighterProfile()
+        {
+            // 等级基线（Bannerlord 兵种阶级 1-6）：1→Recruit、2-3→Soldier、4→Veteran、5-6→Elite
+            Check(FighterProfileFactory.Classify(new SoldierInput { Kind = SoldierKind.Infantry, Level = 1, Armor = ArmorGrade.Cloth }) == SoldierTier.Recruit,
+                "level1 cloth infantry -> Recruit");
+            Check(FighterProfileFactory.Classify(new SoldierInput { Kind = SoldierKind.Infantry, Level = 2, Armor = ArmorGrade.Leather }) == SoldierTier.Soldier,
+                "level2 leather infantry -> Soldier");
+            Check(FighterProfileFactory.Classify(new SoldierInput { Kind = SoldierKind.Infantry, Level = 3, Armor = ArmorGrade.Chainmail }) == SoldierTier.Soldier,
+                "level3 chainmail infantry -> Soldier");
+            Check(FighterProfileFactory.Classify(new SoldierInput { Kind = SoldierKind.Infantry, Level = 4, Armor = ArmorGrade.Chainmail }) == SoldierTier.Veteran,
+                "level4 chainmail infantry -> Veteran");
+            Check(FighterProfileFactory.Classify(new SoldierInput { Kind = SoldierKind.Cavalry, Level = 5, Armor = ArmorGrade.Plate }) == SoldierTier.Elite,
+                "level5 plate cavalry -> Elite");
+
+            // 护甲修正：板甲 +1 档
+            Check(FighterProfileFactory.Classify(new SoldierInput { Kind = SoldierKind.Infantry, Level = 3, Armor = ArmorGrade.Plate }) == SoldierTier.Veteran,
+                "level3 plate infantry -> Veteran (armor lift)");
+            Check(FighterProfileFactory.Classify(new SoldierInput { Kind = SoldierKind.Infantry, Level = 1, Armor = ArmorGrade.Plate }) == SoldierTier.Soldier,
+                "level1 plate infantry -> Soldier (armor lift)");
+
+            // 老兵旗标：+1 档，不超 Elite
+            Check(FighterProfileFactory.Classify(new SoldierInput { Kind = SoldierKind.Infantry, Level = 4, Armor = ArmorGrade.Chainmail, IsVeteran = true }) == SoldierTier.Elite,
+                "veteran lifts Veteran -> Elite");
+            Check(FighterProfileFactory.Classify(new SoldierInput { Kind = SoldierKind.Cavalry, Level = 5, Armor = ArmorGrade.Plate, IsVeteran = true }) == SoldierTier.Elite,
+                "veteran never exceeds Elite");
+
+            // 骑兵保底 Soldier
+            Check(FighterProfileFactory.Classify(new SoldierInput { Kind = SoldierKind.Cavalry, Level = 1, Armor = ArmorGrade.Cloth }) == SoldierTier.Soldier,
+                "cavalry floor is Soldier");
+
+            // 等级 clamp：越界不越档
+            Check(FighterProfileFactory.Classify(new SoldierInput { Kind = SoldierKind.Infantry, Level = 0, Armor = ArmorGrade.Cloth }) == SoldierTier.Recruit,
+                "level 0 clamps to Recruit");
+            Check(FighterProfileFactory.Classify(new SoldierInput { Kind = SoldierKind.Infantry, Level = 30, Armor = ArmorGrade.Plate }) == SoldierTier.Elite,
+                "heroic level clamps to Elite");
+
+            // 过渡兼容重载：不再依赖 agentIndex（任意 index 同结果）
+            Check(FighterProfileFactory.Classify(0) == FighterProfileFactory.Classify(999),
+                "legacy overload ignores agentIndex");
+            Check(FighterProfileFactory.Classify(123) == SoldierTier.Soldier,
+                "legacy overload defaults to Soldier");
+
+            // Create 四档素质单调性
+            Check(FighterProfileFactory.Create(SoldierTier.Recruit).PredictConf < FighterProfileFactory.Create(SoldierTier.Soldier).PredictConf,
+                "predict conf monotonic Recruit<Soldier");
+            Check(FighterProfileFactory.Create(SoldierTier.Veteran).FeintRate > FighterProfileFactory.Create(SoldierTier.Soldier).FeintRate,
+                "feint rate monotonic Soldier<Veteran");
+            Check(FighterProfileFactory.Create(SoldierTier.Elite).FlankAware > FighterProfileFactory.Create(SoldierTier.Recruit).FlankAware,
+                "flank aware monotonic Recruit<Elite");
         }
 
         private static void TestMovement()

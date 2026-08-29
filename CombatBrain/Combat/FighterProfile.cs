@@ -17,6 +17,16 @@ namespace CombatBrain.Combat
         }
     }
 
+    // 士兵分类输入（兵种/等级/护甲/老兵旗标）。由胶水层从游戏侧提取
+    // （CharacterObject.Level、ArmorMaterialTypes、IsHero/久战折算），纯逻辑零依赖。
+    public struct SoldierInput
+    {
+        public SoldierKind Kind;   // 兵种（步兵/射手/骑兵）
+        public int Level;          // 兵种等级 1-6（英雄等级由胶水层折算；越界自动 clamp）
+        public ArmorGrade Armor;   // 护甲材质（视觉可辨：布/皮/锁/板）
+        public bool IsVeteran;     // 老兵旗标（久战精锐；英雄可折算为 true）
+    }
+
     public static class FighterProfileFactory
     {
         public static FighterProfile Create(SoldierTier tier)
@@ -31,15 +41,29 @@ namespace CombatBrain.Combat
             return new FighterProfile(0.50f, 0.12f, 0.30f, 0.50f);
         }
 
-        // 稳定、确定性的分级；TODO: 用兵种等级/护甲/老兵旗标细化
+        // 稳定、确定性的分级：按兵种/等级/护甲/老兵旗标判定（不再依赖 agentIndex 伪随机）。
+        // 等级基线（Bannerlord 兵种阶级 1-6）：1→Recruit、2-3→Soldier、4→Veteran、5-6→Elite；
+        // 板甲 +1 档（重装）；老兵旗标 +1 档（不超 Elite）；骑兵保底 Soldier（马匹昂贵，低级骑兵罕见）。
+        public static SoldierTier Classify(SoldierInput input)
+        {
+            int level = input.Level < 1 ? 1 : (input.Level > 6 ? 6 : input.Level);
+            SoldierTier tier;
+            if (level <= 1) tier = SoldierTier.Recruit;
+            else if (level <= 3) tier = SoldierTier.Soldier;
+            else if (level == 4) tier = SoldierTier.Veteran;
+            else tier = SoldierTier.Elite;
+
+            if (input.Armor == ArmorGrade.Plate && tier < SoldierTier.Elite) tier++;
+            if (input.IsVeteran && tier < SoldierTier.Elite) tier++;
+            if (input.Kind == SoldierKind.Cavalry && tier < SoldierTier.Soldier) tier = SoldierTier.Soldier;
+            return tier;
+        }
+
+        // 过渡兼容重载（t28 胶水接线完成前保持编译可用）：不再使用 agentIndex 伪随机，
+        // 按"典型正规步兵"输入分类（Level=3 / Chainmail / 非老兵 → Soldier）。t28 完成后由胶水层删除。
         public static SoldierTier Classify(int agentIndex)
         {
-            int h = (agentIndex * 1103515245 + 12345) & 0x7fffffff;
-            int bucket = h % 100;
-            if (bucket < 25) return SoldierTier.Recruit;
-            if (bucket < 65) return SoldierTier.Soldier;
-            if (bucket < 90) return SoldierTier.Veteran;
-            return SoldierTier.Elite;
+            return Classify(new SoldierInput { Level = 3, Armor = ArmorGrade.Chainmail });
         }
     }
 }
