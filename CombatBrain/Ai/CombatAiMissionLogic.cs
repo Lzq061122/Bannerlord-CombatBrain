@@ -61,6 +61,9 @@ namespace CombatBrain.Ai
         // F8 骑兵波次胶水：0.5s 编队级周期，冲锋→回撤→重整→再冲（见 CavalryGlue.cs）
         private readonly CavalryGlue _cavalry = new CavalryGlue();
 
+        // F11 士气传导/分阶段撤退胶水：0.5s 编队级周期，邻队崩盘传染 + 请求→批准→脱离（见 MoraleGlue.cs）
+        private readonly MoraleGlue _morale = new MoraleGlue();
+
         // F12 决策抖动横切：格挡决策点（L3）独立实例，避免与走位共用延迟计时
         private readonly DecisionJitterGlue _jitterBlock = new DecisionJitterGlue();
 
@@ -136,6 +139,10 @@ namespace CombatBrain.Ai
             _bench.BeginSection("cavalry");
             TickCavalry(mission, dt);
             _bench.EndSection("cavalry");
+
+            _bench.BeginSection("morale");
+            TickMorale(mission, dt);
+            _bench.EndSection("morale");
 
             _bench.BeginSection("block");
             TickBlock(mission, dt);
@@ -322,6 +329,15 @@ namespace CombatBrain.Ai
             _cavalry.Tick(mission, dt, playerCenter, GetTeamIntent);
         }
 
+        // ---------- F11 士气传导 + 分阶段撤退（编队级） ----------
+
+        private void TickMorale(Mission mission, float dt)
+        {
+            Team playerTeam = mission.PlayerTeam;
+            Vec2 playerCenter = playerTeam != null ? GetTeamCenter(playerTeam) : Vec2.Zero;
+            _morale.Tick(mission, dt, _elapsed, playerCenter, GetTeamIntent, GetMorale);
+        }
+
         private IntentType GetTeamIntent(Team team)
         {
             TeamState state;
@@ -430,6 +446,7 @@ namespace CombatBrain.Ai
                 _survival.Remove(affectedAgent.Index);
                 _ranged.Remove(affectedAgent.Index);
                 _jitterBlock.Remove(affectedAgent.Index);
+                _morale.RecordCasualty(affectedAgent.Formation, _elapsed); // F11 脱阵窗口（事件驱动）
             }
         }
 
