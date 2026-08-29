@@ -1,0 +1,17 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net472</TargetFramework>
+    <AssemblyName>OfflineTests</AssemblyName>
+    <RootNamespace>OfflineTests</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Compile Include="..\CombatBrain\Movement\MovementController.cs" Link="Movement\MovementController.cs" />
+    <Compile Include="..\CombatBrain\Survival\SurvivalInstinct.cs" Link="Survival\SurvivalInstinct.cs" />
+    <Compile Include="..\CombatBrain\Cavalry\CavalryWaveFSM.cs" Link="Cavalry\CavalryWaveFSM.cs" />
+    <Compile Include="..\CombatBrain\Ranged\RangedBrain.cs" Link="Ranged\RangedBrain.cs" />
+  </ItemGroup>
+
+</Project>
