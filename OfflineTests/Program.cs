@@ -3,6 +3,7 @@ using CombatBrain.Movement;
 using CombatBrain.Survival;
 using CombatBrain.Cavalry;
 using CombatBrain.Ranged;
+using CombatBrain.Compliance;
 
 namespace OfflineTests
 {
@@ -40,6 +41,8 @@ namespace OfflineTests
             TestCavalry();
             Console.WriteLine("== F9 RangedBrain ==");
             TestRanged();
+            Console.WriteLine("== F12 DecisionJitter ==");
+            TestCompliance();
 
             Console.WriteLine();
             if (_failures == 0)
@@ -160,6 +163,47 @@ namespace OfflineTests
             Check(RangedBrain.DecideFallback(0.1f, true) == RangedFallback.SwitchToMelee, "low ammo + melee -> SwitchToMelee");
             Check(RangedBrain.DecideFallback(0.1f, false) == RangedFallback.Retreat, "low ammo + far -> Retreat");
             Check(RangedBrain.DecideFallback(0.5f, false) == RangedFallback.KeepShooting, "enough ammo -> KeepShooting");
+        }
+
+        private static void TestCompliance()
+        {
+            var perfect = DecisionJitter.ComputeProfile(1f, 0f, 1f);
+            CheckApprox(perfect.DelayBase, 0f, "perfect: no delay");
+            CheckApprox(perfect.HesitateProb, 0f, "perfect: no hesitation");
+            CheckApprox(perfect.Wobble, 0f, "perfect: no wobble");
+
+            var worst = DecisionJitter.ComputeProfile(0f, 1f, 0f);
+            CheckApprox(worst.DelayBase, 1f, "worst: max delay");
+            CheckApprox(worst.HesitateProb, 1f, "worst: always hesitate");
+            CheckApprox(worst.Wobble, 1f, "worst: max wobble");
+
+            var lo = DecisionJitter.ComputeProfile(0.5f, 0f, 1f);
+            var hi = DecisionJitter.ComputeProfile(0.2f, 0f, 1f);
+            Check(hi.HesitateProb > lo.HesitateProb, "lower discipline -> higher hesitate prob");
+
+            var good = DecisionJitter.ComputeProfile(1f, 0f, 1f);
+            var badMorale = DecisionJitter.ComputeProfile(1f, 0f, 0.2f);
+            Check(badMorale.Wobble > good.Wobble, "low morale -> higher wobble");
+
+            var clamped = DecisionJitter.ComputeProfile(2f, 5f, 3f);
+            CheckApprox(clamped.DelayBase, 0.4f, "out-of-range inputs clamp (delay)");
+            CheckApprox(clamped.HesitateProb, 0.25f, "out-of-range inputs clamp (hesitate)");
+            CheckApprox(clamped.Wobble, 0.3f, "out-of-range inputs clamp (wobble)");
+
+            var rng = new Random(12345);
+            var never = DecisionJitter.Apply(rng, new ComplianceProfile { DelayBase = 0.2f, HesitateProb = 0f, Wobble = 0f });
+            Check(!never.Hesitate, "p=0 never hesitates");
+            Check(never.DelaySeconds >= 0.1f - 1e-4f && never.DelaySeconds <= 0.2f + 1e-4f, "delay within [0.5,1.0] x base");
+
+            var rng2 = new Random(12345);
+            var always = DecisionJitter.Apply(rng2, new ComplianceProfile { DelayBase = 0.2f, HesitateProb = 1f, Wobble = 0f });
+            Check(always.Hesitate, "p=1 always hesitates");
+
+            var rng3 = new Random(999);
+            var a = DecisionJitter.Apply(rng3, new ComplianceProfile { DelayBase = 0.5f, HesitateProb = 0.5f, Wobble = 0.3f });
+            var rng4 = new Random(999);
+            var b = DecisionJitter.Apply(rng4, new ComplianceProfile { DelayBase = 0.5f, HesitateProb = 0.5f, Wobble = 0.3f });
+            Check(a.Hesitate == b.Hesitate && Math.Abs(a.DelaySeconds - b.DelaySeconds) <= 1e-6f, "same seed reproducible");
         }
     }
 }

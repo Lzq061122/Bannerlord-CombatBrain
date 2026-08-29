@@ -12,6 +12,7 @@
     <Compile Include="..\CombatBrain\Survival\SurvivalInstinct.cs" Link="Survival\SurvivalInstinct.cs" />
     <Compile Include="..\CombatBrain\Cavalry\CavalryWaveFSM.cs" Link="Cavalry\CavalryWaveFSM.cs" />
     <Compile Include="..\CombatBrain\Ranged\RangedBrain.cs" Link="Ranged\RangedBrain.cs" />
+    <Compile Include="..\CombatBrain\Compliance\DecisionJitter.cs" Link="Compliance\DecisionJitter.cs" />
   </ItemGroup>
 
 </Project>
