@@ -66,10 +66,10 @@ namespace CombatBrain.Ai
         /// <param name="mission">当前 Mission</param>
         /// <param name="dt">帧时间</param>
         /// <param name="getLod">agent 的 LOD 查询（剧场上限）</param>
-        /// <param name="getProfile">agent 的 FighterProfile 查询（绕侧意识）</param>
+        /// <param name="getProfile">agent 的 FighterProfile 查询（绕侧意识，真实兵种分类）</param>
         /// <param name="getMorale">agent 所属队士气查询（F12 输入，0..1）</param>
         /// <param name="isSurvivalRetreat">F7 求生撤退 / F9 远程后撤态查询（撤退/后撤中跳过走位，优先级最高）</param>
-        public void Tick(Mission mission, float dt, Func<int, LodLevel> getLod, Func<int, FighterProfile> getProfile, Func<Team, float> getMorale, Func<int, bool> isSurvivalRetreat)
+        public void Tick(Mission mission, float dt, Func<int, LodLevel> getLod, Func<Agent, FighterProfile> getProfile, Func<Team, float> getMorale, Func<int, bool> isSurvivalRetreat)
         {
             _sinceTick += dt;
             if (_sinceTick < TickInterval) return;
@@ -98,7 +98,7 @@ namespace CombatBrain.Ai
                 int step = BehaviorLodScheduler.StepFor(lod, agentCount);
                 if (((agent.Index + _phase) % step) != 0) { _cSkipped++; continue; } // 跳帧决策
 
-                ApplyDecision(mission, agent, team, getProfile(agent.Index), dt, getMorale(team));
+                ApplyDecision(mission, agent, team, getProfile(agent), dt, getMorale(team));
             }
 
             _sinceReport += dt;

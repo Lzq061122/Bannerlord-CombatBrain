@@ -62,12 +62,12 @@ namespace CombatBrain.Ai
         /// <param name="mission">当前 Mission</param>
         /// <param name="dt">帧时间</param>
         /// <param name="getLod">agent LOD 查询（剧场上限）</param>
-        /// <param name="getProfile">agent FighterProfile 查询（F12 纪律）</param>
+        /// <param name="getProfile">agent FighterProfile 查询（F12 纪律，真实兵种分类）</param>
         /// <param name="getMorale">队士气查询（F12 输入）</param>
         /// <param name="isSurvivalRetreat">F7 求生撤退态（撤退中跳过远程决策，优先级最高）</param>
         public void Tick(Mission mission, float dt,
             Func<int, LodLevel> getLod,
-            Func<int, FighterProfile> getProfile,
+            Func<Agent, FighterProfile> getProfile,
             Func<Team, float> getMorale,
             Func<int, bool> isSurvivalRetreat)
         {
@@ -97,7 +97,7 @@ namespace CombatBrain.Ai
                 EquipmentIndex rangedSlot = FindRangedSlot(agent);
                 if (rangedSlot == EquipmentIndex.None) continue; // 非远程兵
 
-                ApplyRanged(mission, agent, team, rangedSlot, dt, getProfile(agent.Index), getMorale(team));
+                ApplyRanged(mission, agent, team, rangedSlot, dt, getProfile(agent), getMorale(team));
             }
         }
 

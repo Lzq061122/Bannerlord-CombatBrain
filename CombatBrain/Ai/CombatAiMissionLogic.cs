@@ -430,8 +430,8 @@ namespace CombatBrain.Ai
                 if (attacker == null) continue;
 
                 AttackStats stats = GetAttackStats(attacker.Index);
-                FighterProfile defenderProfile = GetProfile(defender.Index);
-                FighterProfile attackerProfile = GetProfile(attacker.Index);
+                FighterProfile defenderProfile = GetProfile(defender);
+                FighterProfile attackerProfile = GetProfile(attacker);
 
                 AttackDir predicted;
                 float confidence;
@@ -632,15 +632,66 @@ namespace CombatBrain.Ai
             return best;
         }
 
-        private FighterProfile GetProfile(int agentIndex)
+        private FighterProfile GetProfile(Agent agent)
         {
+            if (agent == null) return FighterProfileFactory.Create(SoldierTier.Soldier); // 兜底
+            int agentIndex = agent.Index;
             FighterProfile p;
             if (!_profiles.TryGetValue(agentIndex, out p))
             {
-                p = FighterProfileFactory.Create(FighterProfileFactory.Classify(agentIndex));
+                // F5 分类：真实兵种数据（等级/护甲/老兵旗标），不再用 agentIndex 伪随机
+                p = FighterProfileFactory.Create(FighterProfileFactory.Classify(BuildSoldierInput(agent)));
                 _profiles[agentIndex] = p;
             }
             return p;
+        }
+
+        // 从可观察的兵种信息构造分类输入：骑乘→骑兵（骑射归并）、有远程武器→射手、否则步兵；
+        // 等级取 CharacterObject.Level；护甲取 SpawnEquipment 身体甲材质（None→Cloth 对齐 ArmorGrade）；
+        // 老兵旗标 = 英雄 或 等级≥4（久战折算）。
+        private static SoldierInput BuildSoldierInput(Agent agent)
+        {
+            var input = new SoldierInput();
+            if (agent.HasMount) input.Kind = SoldierKind.Cavalry;
+            else if (HasRangedWeapon(agent)) input.Kind = SoldierKind.Ranged;
+            else input.Kind = SoldierKind.Infantry;
+
+            input.Level = agent.Character != null ? agent.Character.Level : 3; // Classify 内 clamp 1-6
+            input.Armor = ClassifyArmorGrade(agent);
+            input.IsVeteran = (agent.Character != null && agent.Character.IsHero) || input.Level >= 4;
+            return input;
+        }
+
+        private static bool HasRangedWeapon(Agent agent)
+        {
+            for (EquipmentIndex i = EquipmentIndex.WeaponItemBeginSlot; i < EquipmentIndex.NumAllWeaponSlots; i++)
+            {
+                MissionWeapon w = agent.Equipment[i];
+                if (w.IsEmpty || w.CurrentUsageItem == null) continue;
+                if (w.CurrentUsageItem.IsRangedWeapon) return true;
+            }
+            return false;
+        }
+
+        private static ArmorGrade ClassifyArmorGrade(Agent agent)
+        {
+            try
+            {
+                EquipmentElement body = agent.SpawnEquipment[EquipmentIndex.Body];
+                if (body.IsEmpty || body.Item == null || body.Item.ArmorComponent == null)
+                    return ArmorGrade.Cloth; // 无甲视为布
+                switch (body.Item.ArmorComponent.MaterialType)
+                {
+                    case ArmorComponent.ArmorMaterialTypes.Plate: return ArmorGrade.Plate;
+                    case ArmorComponent.ArmorMaterialTypes.Chainmail: return ArmorGrade.Chainmail;
+                    case ArmorComponent.ArmorMaterialTypes.Leather: return ArmorGrade.Leather;
+                    default: return ArmorGrade.Cloth; // None / Cloth
+                }
+            }
+            catch
+            {
+                return ArmorGrade.Cloth;
+            }
         }
 
         private AttackStats GetAttackStats(int agentIndex)

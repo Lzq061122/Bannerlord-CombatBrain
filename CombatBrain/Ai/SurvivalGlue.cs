@@ -67,12 +67,12 @@ namespace CombatBrain.Ai
         /// <param name="dt">帧时间</param>
         /// <param name="now">战斗累计时间（重整窗口时间戳）</param>
         /// <param name="getLod">agent LOD 查询（剧场上限）</param>
-        /// <param name="getProfile">agent FighterProfile 查询（F12 纪律）</param>
+        /// <param name="getProfile">agent FighterProfile 查询（F12 纪律，真实兵种分类）</param>
         /// <param name="getMorale">队士气查询（F12 输入）</param>
         /// <param name="publish">事件发布（重整信号 → 意图引擎）</param>
         public void Tick(Mission mission, float dt, float now,
             Func<int, LodLevel> getLod,
-            Func<int, FighterProfile> getProfile,
+            Func<Agent, FighterProfile> getProfile,
             Func<Team, float> getMorale,
             Action<CombatEvent> publish)
         {
@@ -137,7 +137,7 @@ namespace CombatBrain.Ai
 
                 if (action == SurvivalAction.RetreatToAllies)
                 {
-                    ApplyRetreat(mission, agent, team, nearestEnemy, pos, dt, getProfile(agent.Index), getMorale(team));
+                    ApplyRetreat(mission, agent, team, nearestEnemy, pos, dt, getProfile(agent), getMorale(team));
                 }
                 else
                 {
