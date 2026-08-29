@@ -58,6 +58,9 @@ namespace CombatBrain.Ai
         // F9 远程目标/弹药取舍胶水：0.3s 低频周期，远程选目标 + 弹药告罄回退（见 RangedGlue.cs）
         private readonly RangedGlue _ranged = new RangedGlue();
 
+        // F8 骑兵波次胶水：0.5s 编队级周期，冲锋→回撤→重整→再冲（见 CavalryGlue.cs）
+        private readonly CavalryGlue _cavalry = new CavalryGlue();
+
         // F12 决策抖动横切：格挡决策点（L3）独立实例，避免与走位共用延迟计时
         private readonly DecisionJitterGlue _jitterBlock = new DecisionJitterGlue();
 
@@ -129,6 +132,10 @@ namespace CombatBrain.Ai
             _bench.BeginSection("ranged");
             TickRanged(mission, dt);
             _bench.EndSection("ranged");
+
+            _bench.BeginSection("cavalry");
+            TickCavalry(mission, dt);
+            _bench.EndSection("cavalry");
 
             _bench.BeginSection("block");
             TickBlock(mission, dt);
@@ -304,6 +311,23 @@ namespace CombatBrain.Ai
         private void TickRanged(Mission mission, float dt)
         {
             _ranged.Tick(mission, dt, GetLod, GetProfile, GetMorale, _survival.IsRetreating);
+        }
+
+        // ---------- F8 骑兵波次（编队级） ----------
+
+        private void TickCavalry(Mission mission, float dt)
+        {
+            Team playerTeam = mission.PlayerTeam;
+            Vec2 playerCenter = playerTeam != null ? GetTeamCenter(playerTeam) : Vec2.Zero;
+            _cavalry.Tick(mission, dt, playerCenter, GetTeamIntent);
+        }
+
+        private IntentType GetTeamIntent(Team team)
+        {
+            TeamState state;
+            if (team != null && _states.TryGetValue(team.TeamIndex, out state))
+                return state.LastIntent;
+            return IntentType.Attack;
         }
 
         private LodLevel GetLod(int agentIndex)
