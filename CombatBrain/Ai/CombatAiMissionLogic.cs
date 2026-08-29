@@ -291,10 +291,37 @@ namespace CombatBrain.Ai
             // PenB: 敌方虚弱度 = 过去 5 秒敌方兵力下降斜率
             v.PenB = ComputePenB(state);
 
-            // Cav / Arc: 骨架阶段为校准占位值
-            // TODO: 用 Formation.QuerySystem 编队兵种聚合（骑兵占比 / 有效射手×弹药余量）
-            v.Cav = 0.5f;
-            v.Arc = 0.5f;
+            // Cav / Arc: 编队兵种聚合（Team.QuerySystem 引擎缓存，可观察、非全图逐兵）
+            // Cav = 己方骑兵占比（含骑射）；Arc = 有效射手占比 × 弹药/在射代理
+            TeamQuerySystem ownQs = own.QuerySystem;
+            if (ownQs != null)
+            {
+                v.Cav = VecMath.Clamp01(ownQs.CavalryRatio + ownQs.RangedCavalryRatio);
+                float ranged = ownQs.RangedRatio;                 // 有效射手占比
+                float firing = FormationFiringRatio(own);         // 实际在射比例（弹药余量代理）
+                v.Arc = VecMath.Clamp01(ranged * (0.35f + 0.65f * firing));
+            }
+            else
+            {
+                v.Cav = 0.5f;
+                v.Arc = 0.5f;
+            }
+        }
+
+        // 编队"实际在射"比例：FormationQuerySystem.MakingRangedAttackRatio 按人数加权均值（引擎缓存）。
+        // 弹药告罄的射手不再射击 → 该比例自然衰减，作为弹药余量的可观察代理（非逐兵读取）。
+        private static float FormationFiringRatio(Team team)
+        {
+            float sum = 0f;
+            int total = 0;
+            foreach (Formation f in team.FormationsIncludingEmpty)
+            {
+                if (f == null || f.CountOfUnits == 0) continue;
+                if (f.QuerySystem == null) continue;
+                sum += f.QuerySystem.MakingRangedAttackRatio * f.CountOfUnits;
+                total += f.CountOfUnits;
+            }
+            return total > 0 ? sum / total : 0f;
         }
 
         private static float ComputePenB(TeamState state)
