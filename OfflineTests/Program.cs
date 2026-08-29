@@ -104,12 +104,6 @@ namespace OfflineTests
             Check(FighterProfileFactory.Classify(new SoldierInput { Kind = SoldierKind.Infantry, Level = 30, Armor = ArmorGrade.Plate }) == SoldierTier.Elite,
                 "heroic level clamps to Elite");
 
-            // 过渡兼容重载：不再依赖 agentIndex（任意 index 同结果）
-            Check(FighterProfileFactory.Classify(0) == FighterProfileFactory.Classify(999),
-                "legacy overload ignores agentIndex");
-            Check(FighterProfileFactory.Classify(123) == SoldierTier.Soldier,
-                "legacy overload defaults to Soldier");
-
             // Create 四档素质单调性
             Check(FighterProfileFactory.Create(SoldierTier.Recruit).PredictConf < FighterProfileFactory.Create(SoldierTier.Soldier).PredictConf,
                 "predict conf monotonic Recruit<Soldier");

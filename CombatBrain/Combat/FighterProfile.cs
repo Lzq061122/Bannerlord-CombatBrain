@@ -58,12 +58,5 @@ namespace CombatBrain.Combat
             if (input.Kind == SoldierKind.Cavalry && tier < SoldierTier.Soldier) tier = SoldierTier.Soldier;
             return tier;
         }
-
-        // 过渡兼容重载（t28 胶水接线完成前保持编译可用）：不再使用 agentIndex 伪随机，
-        // 按"典型正规步兵"输入分类（Level=3 / Chainmail / 非老兵 → Soldier）。t28 完成后由胶水层删除。
-        public static SoldierTier Classify(int agentIndex)
-        {
-            return Classify(new SoldierInput { Level = 3, Armor = ArmorGrade.Chainmail });
-        }
     }
 }
