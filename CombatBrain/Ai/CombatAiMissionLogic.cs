@@ -29,6 +29,8 @@ namespace CombatBrain.Ai
             public IntentType LastIntent = IntentType.Defend;
             public float InitialCount = -1f;
             public readonly Queue<float> EnemyCountHistory = new Queue<float>();
+            public Vec2 Center = Vec2.Zero;   // 上次非空编队中心(无一兵时保持)
+            public float Spread = 0f;         // 上次编队离散度(无一兵时保持)
         }
 
         private bool _initialized;
@@ -200,7 +202,7 @@ namespace CombatBrain.Ai
             }
         }
 
-        private static void ComposeVector(
+        private void ComposeVector(
             TeamState state, Team own, Team enemy,
             int aliveSelf, int aliveEnemy, out SituationVector v)
         {
@@ -359,7 +361,7 @@ namespace CombatBrain.Ai
             return list;
         }
 
-        private static Vec2 GetTeamCenter(Team team)
+        private Vec2 GetTeamCenter(Team team)
         {
             float sx = 0f;
             float sy = 0f;
@@ -372,14 +374,23 @@ namespace CombatBrain.Ai
                 sy += p.y;
                 n++;
             }
-            if (n == 0) return Vec2.Zero;
+
+            TeamState state;
+            if (n == 0)
+            {
+                // 无一兵：保持上次中心，避免跳回原点把 Dist 打成 1.0 假象
+                return _states.TryGetValue(team.TeamIndex, out state) ? state.Center : Vec2.Zero;
+            }
+
             var result = Vec2.Zero;
             result.x = sx / n;
             result.y = sy / n;
+            if (_states.TryGetValue(team.TeamIndex, out state))
+                state.Center = result;
             return result;
         }
 
-        private static float FormationSpread(Team team)
+        private float FormationSpread(Team team)
         {
             Vec2 c = GetTeamCenter(team);
             float sum = 0f;
@@ -391,8 +402,18 @@ namespace CombatBrain.Ai
                 sum += VecMath.Dist(p.x, p.y, c.x, c.y);
                 n++;
             }
-            if (n == 0) return 0f;
-            return sum / n;
+
+            TeamState state;
+            if (n == 0)
+            {
+                // 无一兵：保持上次离散度
+                return _states.TryGetValue(team.TeamIndex, out state) ? state.Spread : 0f;
+            }
+
+            float spread = sum / n;
+            if (_states.TryGetValue(team.TeamIndex, out state))
+                state.Spread = spread;
+            return spread;
         }
 
         private static float NearestDistance(float x, float y, List<Vec2> points)
