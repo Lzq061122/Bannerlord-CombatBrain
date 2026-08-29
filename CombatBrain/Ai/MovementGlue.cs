@@ -68,7 +68,8 @@ namespace CombatBrain.Ai
         /// <param name="getLod">agent 的 LOD 查询（剧场上限）</param>
         /// <param name="getProfile">agent 的 FighterProfile 查询（绕侧意识）</param>
         /// <param name="getMorale">agent 所属队士气查询（F12 输入，0..1）</param>
-        public void Tick(Mission mission, float dt, Func<int, LodLevel> getLod, Func<int, FighterProfile> getProfile, Func<Team, float> getMorale)
+        /// <param name="isSurvivalRetreat">F7 求生撤退态查询（撤退中则跳过走位，优先级最高）</param>
+        public void Tick(Mission mission, float dt, Func<int, LodLevel> getLod, Func<int, FighterProfile> getProfile, Func<Team, float> getMorale, Func<int, bool> isSurvivalRetreat)
         {
             _sinceTick += dt;
             if (_sinceTick < TickInterval) return;
@@ -87,6 +88,12 @@ namespace CombatBrain.Ai
 
                 LodLevel lod = getLod(agent.Index);
                 if (lod < LodLevel.L2) continue; // 剧场效应：可见区外优雅降级，交原版 AI
+
+                if (isSurvivalRetreat != null && isSurvivalRetreat(agent.Index))
+                {
+                    _cSkipped++; // F7 求生撤退中：走位不覆盖，让撤退方向保持
+                    continue;
+                }
 
                 int step = BehaviorLodScheduler.StepFor(lod, agentCount);
                 if (((agent.Index + _phase) % step) != 0) { _cSkipped++; continue; } // 跳帧决策

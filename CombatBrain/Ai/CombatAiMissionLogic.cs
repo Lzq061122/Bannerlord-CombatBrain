@@ -52,6 +52,9 @@ namespace CombatBrain.Ai
         // F6 走位/绕侧胶水：0.2s 低频周期 + LOD 剧场效应 + 跳帧聚合（见 MovementGlue.cs）
         private readonly MovementGlue _movement = new MovementGlue();
 
+        // F7 求生/重整胶水：0.3s 低频周期，濒死靠拢友军 + 编队重伤重整信号（见 SurvivalGlue.cs）
+        private readonly SurvivalGlue _survival = new SurvivalGlue();
+
         // F12 决策抖动横切：格挡决策点（L3）独立实例，避免与走位共用延迟计时
         private readonly DecisionJitterGlue _jitterBlock = new DecisionJitterGlue();
 
@@ -115,6 +118,10 @@ namespace CombatBrain.Ai
             _bench.BeginSection("movement");
             TickMovement(mission, dt);
             _bench.EndSection("movement");
+
+            _bench.BeginSection("survival");
+            TickSurvival(mission, dt);
+            _bench.EndSection("survival");
 
             _bench.BeginSection("block");
             TickBlock(mission, dt);
@@ -273,7 +280,14 @@ namespace CombatBrain.Ai
 
         private void TickMovement(Mission mission, float dt)
         {
-            _movement.Tick(mission, dt, GetLod, GetProfile, GetMorale);
+            _movement.Tick(mission, dt, GetLod, GetProfile, GetMorale, _survival.IsRetreating);
+        }
+
+        // ---------- F7 求生本能 + 重整信号 ----------
+
+        private void TickSurvival(Mission mission, float dt)
+        {
+            _survival.Tick(mission, dt, _elapsed, GetLod, GetProfile, GetMorale, _bus.Publish);
         }
 
         private LodLevel GetLod(int agentIndex)
@@ -373,6 +387,7 @@ namespace CombatBrain.Ai
                 _agentLod.Remove(affectedAgent.Index);
                 _profiles.Remove(affectedAgent.Index);
                 _movement.RemoveAgent(affectedAgent.Index);
+                _survival.Remove(affectedAgent.Index);
                 _jitterBlock.Remove(affectedAgent.Index);
             }
         }
