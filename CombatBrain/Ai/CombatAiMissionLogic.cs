@@ -55,6 +55,9 @@ namespace CombatBrain.Ai
         // F7 求生/重整胶水：0.3s 低频周期，濒死靠拢友军 + 编队重伤重整信号（见 SurvivalGlue.cs）
         private readonly SurvivalGlue _survival = new SurvivalGlue();
 
+        // F9 远程目标/弹药取舍胶水：0.3s 低频周期，远程选目标 + 弹药告罄回退（见 RangedGlue.cs）
+        private readonly RangedGlue _ranged = new RangedGlue();
+
         // F12 决策抖动横切：格挡决策点（L3）独立实例，避免与走位共用延迟计时
         private readonly DecisionJitterGlue _jitterBlock = new DecisionJitterGlue();
 
@@ -122,6 +125,10 @@ namespace CombatBrain.Ai
             _bench.BeginSection("survival");
             TickSurvival(mission, dt);
             _bench.EndSection("survival");
+
+            _bench.BeginSection("ranged");
+            TickRanged(mission, dt);
+            _bench.EndSection("ranged");
 
             _bench.BeginSection("block");
             TickBlock(mission, dt);
@@ -280,7 +287,9 @@ namespace CombatBrain.Ai
 
         private void TickMovement(Mission mission, float dt)
         {
-            _movement.Tick(mission, dt, GetLod, GetProfile, GetMorale, _survival.IsRetreating);
+            // F7 求生撤退 / F9 远程后撤中的兵跳过走位（求生/后撤优先级高于走位）
+            _movement.Tick(mission, dt, GetLod, GetProfile, GetMorale,
+                i => _survival.IsRetreating(i) || _ranged.IsFallingBack(i));
         }
 
         // ---------- F7 求生本能 + 重整信号 ----------
@@ -288,6 +297,13 @@ namespace CombatBrain.Ai
         private void TickSurvival(Mission mission, float dt)
         {
             _survival.Tick(mission, dt, _elapsed, GetLod, GetProfile, GetMorale, _bus.Publish);
+        }
+
+        // ---------- F9 远程目标/弹药取舍 ----------
+
+        private void TickRanged(Mission mission, float dt)
+        {
+            _ranged.Tick(mission, dt, GetLod, GetProfile, GetMorale, _survival.IsRetreating);
         }
 
         private LodLevel GetLod(int agentIndex)
@@ -388,6 +404,7 @@ namespace CombatBrain.Ai
                 _profiles.Remove(affectedAgent.Index);
                 _movement.RemoveAgent(affectedAgent.Index);
                 _survival.Remove(affectedAgent.Index);
+                _ranged.Remove(affectedAgent.Index);
                 _jitterBlock.Remove(affectedAgent.Index);
             }
         }
