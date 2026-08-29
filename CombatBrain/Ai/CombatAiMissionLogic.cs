@@ -49,6 +49,9 @@ namespace CombatBrain.Ai
         private float _intentTimer;
         private float _blockTimer;
 
+        // F6 走位/绕侧胶水：0.2s 低频周期 + LOD 剧场效应 + 跳帧聚合（见 MovementGlue.cs）
+        private readonly MovementGlue _movement = new MovementGlue();
+
         public override void OnBehaviorInitialize()
         {
             base.OnBehaviorInitialize();
@@ -105,6 +108,10 @@ namespace CombatBrain.Ai
             _bench.BeginSection("intent");
             TickIntent(mission, dt);
             _bench.EndSection("intent");
+
+            _bench.BeginSection("movement");
+            TickMovement(mission, dt);
+            _bench.EndSection("movement");
 
             _bench.BeginSection("block");
             TickBlock(mission, dt);
@@ -257,6 +264,19 @@ namespace CombatBrain.Ai
             if (drop <= 0f) return 0f;
             float rate = drop / Math.Max(1f, first);
             return VecMath.Clamp01(rate * 2f);
+        }
+
+        // ---------- F6 走位/绕侧 ----------
+
+        private void TickMovement(Mission mission, float dt)
+        {
+            _movement.Tick(mission, dt, GetLod, GetProfile);
+        }
+
+        private LodLevel GetLod(int agentIndex)
+        {
+            LodLevel lod;
+            return _agentLod.TryGetValue(agentIndex, out lod) ? lod : LodLevel.L0;
         }
 
         // ---------- F4 预测式格挡 ----------
