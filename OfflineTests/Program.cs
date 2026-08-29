@@ -4,6 +4,7 @@ using CombatBrain.Survival;
 using CombatBrain.Cavalry;
 using CombatBrain.Ranged;
 using CombatBrain.Compliance;
+using CombatBrain.Morale;
 
 namespace OfflineTests
 {
@@ -43,6 +44,10 @@ namespace OfflineTests
             TestRanged();
             Console.WriteLine("== F12 DecisionJitter ==");
             TestCompliance();
+            Console.WriteLine("== F11 MoralePropagation ==");
+            TestMorale();
+            Console.WriteLine("== F11 PhasedRetreat ==");
+            TestPhasedRetreat();
 
             Console.WriteLine();
             if (_failures == 0)
@@ -204,6 +209,54 @@ namespace OfflineTests
             var rng4 = new Random(999);
             var b = DecisionJitter.Apply(rng4, new ComplianceProfile { DelayBase = 0.5f, HesitateProb = 0.5f, Wobble = 0.3f });
             Check(a.Hesitate == b.Hesitate && Math.Abs(a.DelaySeconds - b.DelaySeconds) <= 1e-6f, "same seed reproducible");
+        }
+
+        private static void TestMorale()
+        {
+            CheckApprox(MoralePropagation.Propagate(0.5f, 0.8f, 0f), 0.545f, "neighbor high morale -> drag up");
+            CheckApprox(MoralePropagation.Propagate(0.5f, 0.2f, 0f), 0.455f, "neighbor low morale -> drag down");
+            CheckApprox(MoralePropagation.Propagate(0.7f, 0.7f, 1f), 0.3f, "neighbor collapse -> contagion");
+            CheckApprox(MoralePropagation.Propagate(0f, 0f, 1f), 0f, "contagion clamps at 0");
+            CheckApprox(MoralePropagation.Propagate(1f, 1f, 0f), 1f, "stable stays at 1");
+
+            Check(MoralePropagation.AtCollapse(0.2f, 0f), "low morale -> collapse");
+            Check(MoralePropagation.AtCollapse(0.5f, 0.6f), "high break rate -> collapse");
+            Check(!MoralePropagation.AtCollapse(0.5f, 0.3f), "stable -> no collapse");
+            Check(!MoralePropagation.AtCollapse(0.4f, 0f), "above threshold -> no collapse");
+
+            var w = new BreakRateWindow(5f, 10);
+            w.Record(0f);
+            w.Record(1f);
+            w.Record(2f);
+            CheckApprox(w.Rate(2f), 0.3f, "break rate = 3/10");
+
+            var sat = new BreakRateWindow(5f, 10);
+            for (int i = 0; i < 12; i++) sat.Record(i * 0.1f);
+            CheckApprox(sat.Rate(11 * 0.1f), 1f, "break rate saturates at 1");
+
+            var exp = new BreakRateWindow(5f, 10);
+            exp.Record(0f);
+            CheckApprox(exp.Rate(10f), 0f, "break events expire outside window");
+        }
+
+        private static void TestPhasedRetreat()
+        {
+            Check(PhasedRetreatFSM.Advance(RetreatState.Hold, new RetreatInput { Collapse = true }) == RetreatState.RequestRetreat,
+                "hold + collapse -> request retreat");
+            Check(PhasedRetreatFSM.Advance(RetreatState.Hold, new RetreatInput()) == RetreatState.Hold,
+                "hold stays when stable");
+
+            Check(PhasedRetreatFSM.Advance(RetreatState.RequestRetreat, new RetreatInput { Approved = true }) == RetreatState.Disengage,
+                "request + approved -> disengage");
+            Check(PhasedRetreatFSM.Advance(RetreatState.RequestRetreat, new RetreatInput { Collapse = false }) == RetreatState.Hold,
+                "crisis cleared -> back to hold");
+            Check(PhasedRetreatFSM.Advance(RetreatState.RequestRetreat, new RetreatInput { Collapse = true }) == RetreatState.RequestRetreat,
+                "not approved yet -> keep requesting");
+
+            Check(PhasedRetreatFSM.Advance(RetreatState.Disengage, new RetreatInput { DisengageDone = true }) == RetreatState.Reform,
+                "disengage done -> reform");
+            Check(PhasedRetreatFSM.Advance(RetreatState.Reform, new RetreatInput { ReformDone = true }) == RetreatState.Hold,
+                "reform done -> hold (loop closes)");
         }
     }
 }

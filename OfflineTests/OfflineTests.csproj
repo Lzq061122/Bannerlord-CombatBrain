@@ -13,6 +13,8 @@
     <Compile Include="..\CombatBrain\Cavalry\CavalryWaveFSM.cs" Link="Cavalry\CavalryWaveFSM.cs" />
     <Compile Include="..\CombatBrain\Ranged\RangedBrain.cs" Link="Ranged\RangedBrain.cs" />
     <Compile Include="..\CombatBrain\Compliance\DecisionJitter.cs" Link="Compliance\DecisionJitter.cs" />
+    <Compile Include="..\CombatBrain\Morale\MoralePropagation.cs" Link="Morale\MoralePropagation.cs" />
+    <Compile Include="..\CombatBrain\Morale\PhasedRetreat.cs" Link="Morale\PhasedRetreat.cs" />
   </ItemGroup>
 
 </Project>
