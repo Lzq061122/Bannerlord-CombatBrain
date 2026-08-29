@@ -64,6 +64,9 @@ namespace CombatBrain.Ai
         // F11 士气传导/分阶段撤退胶水：0.5s 编队级周期，邻队崩盘传染 + 请求→批准→脱离（见 MoraleGlue.cs）
         private readonly MoraleGlue _morale = new MoraleGlue();
 
+        // F10 反制矩阵/套路记忆胶水：纯事件驱动（IntentSwitched 反制换招 + 跨战役套路落盘，见 ExperienceGlue.cs）
+        private readonly ExperienceGlue _experience = new ExperienceGlue();
+
         // F12 决策抖动横切：格挡决策点（L3）独立实例，避免与走位共用延迟计时
         private readonly DecisionJitterGlue _jitterBlock = new DecisionJitterGlue();
 
@@ -90,6 +93,11 @@ namespace CombatBrain.Ai
                 state.Perception = new PerceptionPipeline(state.View, 60f, 1.0f);
                 _states[team.TeamIndex] = state;
             }
+
+            // F10 事件驱动接入：订阅意图切换事件 + 载入跨战役套路记忆（一次 IO）
+            _experience.Attach(_bus,
+                mission.PlayerTeam != null ? mission.PlayerTeam.TeamIndex : -1,
+                GetEnemyAliveCount);
 
             CombatLog.Log("CombatBrain 战斗AI已初始化, teams=" + _states.Count);
         }
@@ -225,6 +233,16 @@ namespace CombatBrain.Ai
                 IntentType newIntent;
                 if (state.Engine.Evaluate(v, 0.5f, out newIntent))
                 {
+                    // F10 反制换招：被冷宫意图 → PickBest 换招；开局预判（仅一次、非玩家队）
+                    int adjusted = _experience.AdjustIntent(own.TeamIndex, (int)newIntent);
+                    int opening;
+                    if ((mission.PlayerTeam == null || own != mission.PlayerTeam)
+                        && _experience.TryGetOpening(own.TeamIndex, out opening))
+                    {
+                        adjusted = opening;
+                    }
+                    newIntent = (IntentType)adjusted;
+
                     state.LastIntent = newIntent;
                     _bus.Publish(new CombatEvent
                     {
@@ -450,6 +468,20 @@ namespace CombatBrain.Ai
             }
         }
 
+        // F10 跨战役套路记忆落盘（战役结束一次 IO，不做每帧 IO）
+        // v1.4.8 无 OnMissionEnded；OnMissionStateFinalized 为战役收尾标准钩子，OnClearScene 兜底（幂等）
+        public override void OnMissionStateFinalized()
+        {
+            base.OnMissionStateFinalized();
+            _experience.OnMissionEnd();
+        }
+
+        public override void OnClearScene()
+        {
+            base.OnClearScene();
+            _experience.OnMissionEnd();
+        }
+
         // ---------- helpers ----------
 
         private Team GetEnemyTeam(Team own)
@@ -459,6 +491,18 @@ namespace CombatBrain.Ai
                 if (state.Team != own) return state.Team;
             }
             return null;
+        }
+
+        // F10 输入：给定队索引 → 其敌队存活数（意图反制判定）
+        private int GetEnemyAliveCount(int teamIndex)
+        {
+            foreach (TeamState state in _states.Values)
+            {
+                if (state.Team.TeamIndex != teamIndex) continue;
+                Team enemy = GetEnemyTeam(state.Team);
+                return enemy != null ? enemy.ActiveAgents.Count : 0;
+            }
+            return 0;
         }
 
         private List<Vec2> CollectEnemyCenters(Team own)
