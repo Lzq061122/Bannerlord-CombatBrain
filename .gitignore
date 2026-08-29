@@ -1,0 +1,15 @@
+# 构建产物
+bin/
+obj/
+
+# IDE / 工具
+.vs/
+.vscode/
+*.user
+*.suo
+*.userosscache
+*.sln.docstates
+
+# 系统杂项
+Thumbs.db
+.DS_Store

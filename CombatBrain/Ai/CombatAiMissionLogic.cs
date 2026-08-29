@@ -1,0 +1,474 @@
+using System;
+using System.Collections.Generic;
+using TaleWorlds.Core;
+using TaleWorlds.Library;
+using TaleWorlds.MountAndBlade;
+using CombatBrain;
+using CombatBrain.Bench;
+using CombatBrain.Combat;
+using CombatBrain.Events;
+using CombatBrain.Intent;
+using CombatBrain.Lod;
+using CombatBrain.Perception;
+
+namespace CombatBrain.Ai
+{
+    // 战斗AI系统本体 —— 一号项目的使命逻辑胶水层。
+    // 把游戏对象喂给各子系统，驱动感知管线 / LOD / 意图引擎 / 预测格挡 / 基准。
+    public sealed class CombatAiMissionLogic : MissionBehavior
+    {
+        public override MissionBehaviorType BehaviorType { get { return MissionBehaviorType.Other; } }
+
+        private sealed class TeamState
+        {
+            public Team Team;
+            public PerceptionPipeline Perception;
+            public readonly KnowledgeView View = new KnowledgeView(25f, 0.08f, 0.15f);
+            public readonly IntentEngine Engine = new IntentEngine(TacticManual.BuildMatrix());
+            public SituationVector LastVector;
+            public IntentType LastIntent = IntentType.Defend;
+            public float InitialCount = -1f;
+            public readonly Queue<float> EnemyCountHistory = new Queue<float>();
+        }
+
+        private bool _initialized;
+        private float _elapsed;
+
+        private readonly Dictionary<int, TeamState> _states = new Dictionary<int, TeamState>();
+        private readonly Dictionary<int, LodLevel> _agentLod = new Dictionary<int, LodLevel>();
+        private readonly Dictionary<int, FighterProfile> _profiles = new Dictionary<int, FighterProfile>();
+        private readonly Dictionary<int, AttackStats> _attackStats = new Dictionary<int, AttackStats>();
+
+        private readonly CombatEventBus _bus = new CombatEventBus();
+        private ReplayRecorder _replay;
+        private readonly BattleBenchmark _bench = new BattleBenchmark();
+
+        private float _lodTimer;
+        private float _intentTimer;
+        private float _blockTimer;
+
+        public override void OnBehaviorInitialize()
+        {
+            base.OnBehaviorInitialize();
+            Init();
+        }
+
+        private void Init()
+        {
+            if (_initialized) return;
+            _initialized = true;
+
+            _replay = new ReplayRecorder(_bus);
+
+            var mission = Mission;
+            if (mission == null) return;
+
+            foreach (Team team in mission.Teams)
+            {
+                if (team == null) continue;
+                var state = new TeamState { Team = team };
+                state.Perception = new PerceptionPipeline(state.View, 60f, 1.0f);
+                _states[team.TeamIndex] = state;
+            }
+
+            CombatLog.Log("CombatBrain 战斗AI已初始化, teams=" + _states.Count);
+        }
+
+        public override void OnMissionTick(float dt)
+        {
+            base.OnMissionTick(dt);
+
+            _bench.BeginFrame();
+
+            if (!_initialized) Init();
+
+            var mission = Mission;
+            if (mission == null || !mission.IsLoadingFinished)
+            {
+                _bench.EndFrame(dt, 0);
+                return;
+            }
+
+            _elapsed += dt;
+            int agentCount = mission.Agents.Count;
+
+            _bench.BeginSection("perception");
+            TickPerception(mission);
+            _bench.EndSection("perception");
+
+            _bench.BeginSection("lod");
+            TickLod(mission, dt);
+            _bench.EndSection("lod");
+
+            _bench.BeginSection("intent");
+            TickIntent(mission, dt);
+            _bench.EndSection("intent");
+
+            _bench.BeginSection("block");
+            TickBlock(mission, dt);
+            _bench.EndSection("block");
+
+            _bench.EndFrame(dt, agentCount);
+        }
+
+        // ---------- F1 感知 ----------
+
+        private void TickPerception(Mission mission)
+        {
+            float now = _elapsed;
+            foreach (TeamState state in _states.Values)
+            {
+                state.Perception.Update(now, GetTeamCenter(state.Team), mission.Agents);
+                state.View.Tick(now);
+            }
+        }
+
+        // ---------- F3 行为 LOD ----------
+
+        private void TickLod(Mission mission, float dt)
+        {
+            _lodTimer -= dt;
+            if (_lodTimer > 0f) return;
+            _lodTimer = 0.5f;
+
+            Team playerTeam = mission.PlayerTeam;
+            Vec2 playerCenter = playerTeam != null ? GetTeamCenter(playerTeam) : Vec2.Zero;
+
+            var enemyCenters = new Dictionary<int, List<Vec2>>();
+            foreach (TeamState state in _states.Values)
+            {
+                enemyCenters[state.Team.TeamIndex] = CollectEnemyCenters(state.Team);
+            }
+
+            foreach (Agent agent in mission.Agents)
+            {
+                if (agent == null || !agent.IsActive()) continue;
+                Team t = agent.Team;
+                if (t == null) continue;
+
+                List<Vec2> enemies;
+                if (!enemyCenters.TryGetValue(t.TeamIndex, out enemies)) enemies = null;
+
+                float dp = VecMath.Dist(agent.Position.x, agent.Position.y, playerCenter.x, playerCenter.y);
+                float de = NearestDistance(agent.Position.x, agent.Position.y, enemies);
+                _agentLod[agent.Index] = BehaviorLodScheduler.Evaluate(dp, de);
+            }
+        }
+
+        // ---------- F2 态势向量 + 意图引擎 ----------
+
+        private void TickIntent(Mission mission, float dt)
+        {
+            _intentTimer -= dt;
+            if (_intentTimer > 0f) return;
+            _intentTimer = 0.5f;
+
+            foreach (TeamState state in _states.Values)
+            {
+                Team own = state.Team;
+                Team enemy = GetEnemyTeam(own);
+                if (enemy == null) continue;
+
+                int aliveSelf = own.ActiveAgents.Count;
+                int aliveEnemy = enemy.ActiveAgents.Count;
+
+                if (state.InitialCount < 0f) state.InitialCount = aliveSelf;
+
+                // PenB 历史窗口：5 秒 @0.5s = 10 样本
+                state.EnemyCountHistory.Enqueue(aliveEnemy);
+                while (state.EnemyCountHistory.Count > 10) state.EnemyCountHistory.Dequeue();
+
+                SituationVector v;
+                ComposeVector(state, own, enemy, aliveSelf, aliveEnemy, out v);
+                state.LastVector = v;
+
+                IntentType newIntent;
+                if (state.Engine.Evaluate(v, 0.5f, out newIntent))
+                {
+                    state.LastIntent = newIntent;
+                    _bus.Publish(new CombatEvent
+                    {
+                        Kind = CombatEventKind.IntentSwitched,
+                        Time = _elapsed,
+                        Id = own.TeamIndex,
+                        IntValue = (int)newIntent
+                    });
+                    CombatLog.Log(string.Format(
+                        "Team {0} 意图切换 → {1}  [{2}]",
+                        own.TeamIndex, newIntent, v.ToString()));
+                }
+            }
+        }
+
+        private static void ComposeVector(
+            TeamState state, Team own, Team enemy,
+            int aliveSelf, int aliveEnemy, out SituationVector v)
+        {
+            v = new SituationVector();
+
+            int total = aliveSelf + aliveEnemy;
+            float ratio = total > 0 ? (float)aliveSelf / (float)total : 0.5f;
+            v.Power = VecMath.LogMapRatio(ratio);
+
+            Vec2 oc = GetTeamCenter(own);
+            Vec2 ec = GetTeamCenter(enemy);
+
+            // Dist: 0 = 贴身, 1 = 很远
+            v.Dist = VecMath.Clamp01(VecMath.Dist(oc.x, oc.y, ec.x, ec.y) / 80f);
+
+            // Height: 地形优劣 = 己方中心相对敌方中心的高度优势
+            float hDiff = TerrainStub.Height(oc.x, oc.y) - TerrainStub.Height(ec.x, ec.y);
+            v.Height = VecMath.Clamp01(0.5f + hDiff * 0.15f);
+
+            // Line: 阵线宽度对比——己方是否被拉散（编队离散度 vs 敌方）
+            float ownSpread = FormationSpread(own);
+            float enemySpread = FormationSpread(enemy);
+            float spreadSum = ownSpread + enemySpread;
+            v.Line = spreadSum > 1e-4f ? 1f - VecMath.Clamp01(ownSpread / spreadSum) : 0.5f;
+
+            // Moral: 存活率衰减（士气代理）
+            float survival = state.InitialCount > 0f ? aliveSelf / state.InitialCount : 1f;
+            v.Moral = VecMath.Clamp01(survival);
+
+            // PenB: 敌方虚弱度 = 过去 5 秒敌方兵力下降斜率
+            v.PenB = ComputePenB(state);
+
+            // Cav / Arc: 骨架阶段为校准占位值
+            // TODO: 用 Formation.QuerySystem 编队兵种聚合（骑兵占比 / 有效射手×弹药余量）
+            v.Cav = 0.5f;
+            v.Arc = 0.5f;
+        }
+
+        private static float ComputePenB(TeamState state)
+        {
+            if (state.EnemyCountHistory.Count < 2) return 0f;
+            float first = 0f;
+            float last = 0f;
+            int i = 0;
+            foreach (float f in state.EnemyCountHistory)
+            {
+                if (i == 0) first = f;
+                last = f;
+                i++;
+            }
+            float drop = first - last;
+            if (drop <= 0f) return 0f;
+            float rate = drop / Math.Max(1f, first);
+            return VecMath.Clamp01(rate * 2f);
+        }
+
+        // ---------- F4 预测式格挡 ----------
+
+        private void TickBlock(Mission mission, float dt)
+        {
+            _blockTimer -= dt;
+            if (_blockTimer > 0f) return;
+            _blockTimer = 0.1f;
+
+            var l3 = new List<Agent>();
+            foreach (Agent agent in mission.Agents)
+            {
+                if (agent == null || !agent.IsActive()) continue;
+                LodLevel lod;
+                if (_agentLod.TryGetValue(agent.Index, out lod) && lod == LodLevel.L3)
+                    l3.Add(agent);
+            }
+
+            for (int i = 0; i < l3.Count; i++)
+            {
+                Agent defender = l3[i];
+                Agent attacker = FindNearestEnemyAgent(defender, l3);
+                if (attacker == null) continue;
+
+                AttackStats stats = GetAttackStats(attacker.Index);
+                FighterProfile defenderProfile = GetProfile(defender.Index);
+                FighterProfile attackerProfile = GetProfile(attacker.Index);
+
+                AttackDir predicted;
+                float confidence;
+                if (PredictiveBlock.TryPredict(stats, defenderProfile, attackerProfile.FeintRate, out predicted, out confidence))
+                {
+                    defender.EnforceShieldUsage(ToUsageDefend(predicted));
+                }
+            }
+        }
+
+        public override void OnAgentHit(
+            Agent affectedAgent, Agent affectorAgent,
+            in MissionWeapon affectorWeapon, in Blow blow, in AttackCollisionData attackCollisionData)
+        {
+            base.OnAgentHit(affectedAgent, affectorAgent, affectorWeapon, blow, attackCollisionData);
+
+            if (affectorAgent == null || affectedAgent == null) return;
+
+            AttackDir dir = MapAttackDir(affectorAgent.AttackDirection);
+            if (dir == AttackDir.None) return;
+
+            GetAttackStats(affectorAgent.Index).Record(dir);
+            _bus.Publish(new CombatEvent
+            {
+                Kind = CombatEventKind.AttackObserved,
+                Time = _elapsed,
+                Id = affectorAgent.Index,
+                Id2 = affectedAgent.Index,
+                IntValue = (int)dir
+            });
+        }
+
+        public override void OnAgentRemoved(Agent affectedAgent, Agent affectorAgent, AgentState agentState, KillingBlow killingBlow)
+        {
+            base.OnAgentRemoved(affectedAgent, affectorAgent, agentState, killingBlow);
+
+            if (affectedAgent != null)
+            {
+                _bus.Publish(new CombatEvent
+                {
+                    Kind = CombatEventKind.AgentDown,
+                    Time = _elapsed,
+                    Id = affectedAgent.Index,
+                    Id2 = affectorAgent != null ? affectorAgent.Index : -1
+                });
+                _agentLod.Remove(affectedAgent.Index);
+                _profiles.Remove(affectedAgent.Index);
+            }
+        }
+
+        // ---------- helpers ----------
+
+        private Team GetEnemyTeam(Team own)
+        {
+            foreach (TeamState state in _states.Values)
+            {
+                if (state.Team != own) return state.Team;
+            }
+            return null;
+        }
+
+        private List<Vec2> CollectEnemyCenters(Team own)
+        {
+            var list = new List<Vec2>();
+            foreach (TeamState state in _states.Values)
+            {
+                if (state.Team == own) continue;
+                foreach (Formation f in state.Team.FormationsIncludingEmpty)
+                {
+                    if (f == null || f.CountOfUnits == 0) continue;
+                    list.Add(f.SmoothedAverageUnitPosition);
+                }
+            }
+            return list;
+        }
+
+        private static Vec2 GetTeamCenter(Team team)
+        {
+            float sx = 0f;
+            float sy = 0f;
+            int n = 0;
+            foreach (Formation f in team.FormationsIncludingEmpty)
+            {
+                if (f == null || f.CountOfUnits == 0) continue;
+                Vec2 p = f.SmoothedAverageUnitPosition;
+                sx += p.x;
+                sy += p.y;
+                n++;
+            }
+            if (n == 0) return Vec2.Zero;
+            var result = Vec2.Zero;
+            result.x = sx / n;
+            result.y = sy / n;
+            return result;
+        }
+
+        private static float FormationSpread(Team team)
+        {
+            Vec2 c = GetTeamCenter(team);
+            float sum = 0f;
+            int n = 0;
+            foreach (Formation f in team.FormationsIncludingEmpty)
+            {
+                if (f == null || f.CountOfUnits == 0) continue;
+                Vec2 p = f.SmoothedAverageUnitPosition;
+                sum += VecMath.Dist(p.x, p.y, c.x, c.y);
+                n++;
+            }
+            if (n == 0) return 0f;
+            return sum / n;
+        }
+
+        private static float NearestDistance(float x, float y, List<Vec2> points)
+        {
+            if (points == null || points.Count == 0) return 1000f;
+            float best = float.MaxValue;
+            foreach (Vec2 p in points)
+            {
+                float d = VecMath.Dist(x, y, p.x, p.y);
+                if (d < best) best = d;
+            }
+            return best;
+        }
+
+        private static Agent FindNearestEnemyAgent(Agent a, List<Agent> candidates)
+        {
+            Agent best = null;
+            float bestD = BehaviorLodScheduler.L3MeleeRadius;
+            Team at = a.Team;
+            foreach (Agent c in candidates)
+            {
+                if (c == a || c.Team == at || !c.IsActive()) continue;
+                float d = VecMath.Dist(a.Position.x, a.Position.y, c.Position.x, c.Position.y);
+                if (d <= bestD)
+                {
+                    bestD = d;
+                    best = c;
+                }
+            }
+            return best;
+        }
+
+        private FighterProfile GetProfile(int agentIndex)
+        {
+            FighterProfile p;
+            if (!_profiles.TryGetValue(agentIndex, out p))
+            {
+                p = FighterProfileFactory.Create(FighterProfileFactory.Classify(agentIndex));
+                _profiles[agentIndex] = p;
+            }
+            return p;
+        }
+
+        private AttackStats GetAttackStats(int agentIndex)
+        {
+            AttackStats s;
+            if (!_attackStats.TryGetValue(agentIndex, out s))
+            {
+                s = new AttackStats(8);
+                _attackStats[agentIndex] = s;
+            }
+            return s;
+        }
+
+        private static AttackDir MapAttackDir(Agent.UsageDirection u)
+        {
+            switch (u)
+            {
+                case Agent.UsageDirection.AttackUp: return AttackDir.Up;
+                case Agent.UsageDirection.AttackDown: return AttackDir.Down;
+                case Agent.UsageDirection.AttackLeft: return AttackDir.Left;
+                case Agent.UsageDirection.AttackRight: return AttackDir.Right;
+            }
+            return AttackDir.None;
+        }
+
+        private static Agent.UsageDirection ToUsageDefend(AttackDir d)
+        {
+            switch (d)
+            {
+                case AttackDir.Up: return Agent.UsageDirection.DefendUp;
+                case AttackDir.Down: return Agent.UsageDirection.DefendDown;
+                case AttackDir.Left: return Agent.UsageDirection.DefendLeft;
+                case AttackDir.Right: return Agent.UsageDirection.DefendRight;
+            }
+            return Agent.UsageDirection.DefendAny;
+        }
+    }
+}

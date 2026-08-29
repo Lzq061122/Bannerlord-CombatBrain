@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Module>
+  <Name value="战斗AI系统 (Combat Brain)"/>
+  <Id value="CombatBrain"/>
+  <Version value="v0.1.0"/>
+  <ModuleType value="Community"/>
+
+  <DependedModules/>
+
+  <!-- 让游戏官方模块先于本模组加载，保证基准/战场对象可用 -->
+  <DependedModuleMetadata id="Native" order="LoadBeforeThis" version="v1.0.0.*" optional="true"/>
+  <DependedModuleMetadata id="SandBoxCore" order="LoadBeforeThis" version="v1.0.0.*" optional="true"/>
+  <DependedModuleMetadata id="Sandbox" order="LoadBeforeThis" version="v1.0.0.*" optional="true"/>
+  <DependedModuleMetadata id="StoryMode" order="LoadBeforeThis" version="v1.0.0.*" optional="true"/>
+  <DependedModuleMetadata id="CustomBattle" order="LoadBeforeThis" version="v1.0.0.*" optional="true"/>
+
+  <SubModules>
+    <SubModule>
+      <Name value="CombatBrainSubModule"/>
+      <DLLName value="CombatBrain.dll"/>
+      <SubModuleClassType value="CombatBrain.SubModule"/>
+      <Tags>
+        <Tag key="DedicatedServerType" value="none"/>
+        <Tag key="IsNoRenderModeElement" value="false"/>
+      </Tags>
+    </SubModule>
+  </SubModules>
+</Module>
