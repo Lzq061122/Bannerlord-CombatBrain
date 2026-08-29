@@ -52,6 +52,9 @@ namespace CombatBrain.Ai
         // F6 走位/绕侧胶水：0.2s 低频周期 + LOD 剧场效应 + 跳帧聚合（见 MovementGlue.cs）
         private readonly MovementGlue _movement = new MovementGlue();
 
+        // F12 决策抖动横切：格挡决策点（L3）独立实例，避免与走位共用延迟计时
+        private readonly DecisionJitterGlue _jitterBlock = new DecisionJitterGlue();
+
         public override void OnBehaviorInitialize()
         {
             base.OnBehaviorInitialize();
@@ -270,13 +273,22 @@ namespace CombatBrain.Ai
 
         private void TickMovement(Mission mission, float dt)
         {
-            _movement.Tick(mission, dt, GetLod, GetProfile);
+            _movement.Tick(mission, dt, GetLod, GetProfile, GetMorale);
         }
 
         private LodLevel GetLod(int agentIndex)
         {
             LodLevel lod;
             return _agentLod.TryGetValue(agentIndex, out lod) ? lod : LodLevel.L0;
+        }
+
+        // F12 输入：队士气（意图引擎 0.5s 一刷的 LastVector.Moral，非逐帧重算）
+        private float GetMorale(Team team)
+        {
+            TeamState state;
+            if (team != null && _states.TryGetValue(team.TeamIndex, out state))
+                return state.LastVector.Moral;
+            return 0.5f;
         }
 
         // ---------- F4 预测式格挡 ----------
@@ -310,7 +322,15 @@ namespace CombatBrain.Ai
                 float confidence;
                 if (PredictiveBlock.TryPredict(stats, defenderProfile, attackerProfile.FeintRate, out predicted, out confidence))
                 {
-                    defender.EnforceShieldUsage(ToUsageDefend(predicted));
+                    // F12 横切：犹豫/延迟维持期跳过本轮举盾（拟人化反应迟滞，不侵入纯逻辑）
+                    float signedWobble;
+                    if (_jitterBlock.ShouldAct(
+                        defender.Index, dt,
+                        DecisionJitterGlue.DisciplineFrom(defenderProfile),
+                        GetMorale(defender.Team), out signedWobble))
+                    {
+                        defender.EnforceShieldUsage(ToUsageDefend(predicted));
+                    }
                 }
             }
         }
@@ -352,6 +372,8 @@ namespace CombatBrain.Ai
                 });
                 _agentLod.Remove(affectedAgent.Index);
                 _profiles.Remove(affectedAgent.Index);
+                _movement.RemoveAgent(affectedAgent.Index);
+                _jitterBlock.Remove(affectedAgent.Index);
             }
         }
 

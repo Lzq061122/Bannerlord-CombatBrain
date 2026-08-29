@@ -48,6 +48,9 @@ namespace CombatBrain.Ai
         private readonly MBList<Agent> _enemyBuffer = new MBList<Agent>();
         private readonly MBList<Agent> _allyBuffer = new MBList<Agent>();
 
+        // F12 决策抖动&服从度横切包装（走位决策前调用，详见 DecisionJitterGlue.cs）
+        private readonly DecisionJitterGlue _jitter = new DecisionJitterGlue();
+
         // 决策直方图（仅日志观测，10s 一报）
         private int _cAdvance;
         private int _cStepBack;
@@ -55,6 +58,7 @@ namespace CombatBrain.Ai
         private int _cRetreat;
         private int _cHold;
         private int _cSkipped;
+        private int _cJitter; // F12 犹豫/维持期跳过的决策数
 
         /// <summary>
         /// 低频驱动入口：由 CombatAiMissionLogic.OnMissionTick 每帧调用，内部按 TickInterval 节流。
@@ -63,7 +67,8 @@ namespace CombatBrain.Ai
         /// <param name="dt">帧时间</param>
         /// <param name="getLod">agent 的 LOD 查询（剧场上限）</param>
         /// <param name="getProfile">agent 的 FighterProfile 查询（绕侧意识）</param>
-        public void Tick(Mission mission, float dt, Func<int, LodLevel> getLod, Func<int, FighterProfile> getProfile)
+        /// <param name="getMorale">agent 所属队士气查询（F12 输入，0..1）</param>
+        public void Tick(Mission mission, float dt, Func<int, LodLevel> getLod, Func<int, FighterProfile> getProfile, Func<Team, float> getMorale)
         {
             _sinceTick += dt;
             if (_sinceTick < TickInterval) return;
@@ -86,7 +91,7 @@ namespace CombatBrain.Ai
                 int step = BehaviorLodScheduler.StepFor(lod, agentCount);
                 if (((agent.Index + _phase) % step) != 0) { _cSkipped++; continue; } // 跳帧决策
 
-                ApplyDecision(mission, agent, team, getProfile(agent.Index));
+                ApplyDecision(mission, agent, team, getProfile(agent.Index), dt, getMorale(team));
             }
 
             _sinceReport += dt;
@@ -97,7 +102,7 @@ namespace CombatBrain.Ai
             }
         }
 
-        private void ApplyDecision(Mission mission, Agent agent, Team team, FighterProfile profile)
+        private void ApplyDecision(Mission mission, Agent agent, Team team, FighterProfile profile, float dt, float morale)
         {
             Vec2 pos = agent.Position.AsVec2;
 
@@ -150,9 +155,22 @@ namespace CombatBrain.Ai
 
             MovementDecision d2 = MovementController.Decide(ctx);
 
-            // 引擎级移动方向输入（in Vec2）
-            agent.SetMovementDirection(new Vec2(d2.MoveX, d2.MoveY));
-            CountAction(d2.Action);
+            // F12 横切：犹豫/延迟维持期跳过本轮；走形扰动移动方向（拟人化，不侵入纯逻辑）
+            float signedWobble;
+            if (_jitter.ShouldAct(agent.Index, dt, DecisionJitterGlue.DisciplineFrom(profile), morale, out signedWobble))
+            {
+                Vec2 dir = new Vec2(d2.MoveX, d2.MoveY);
+                if (dir.LengthSquared > 1e-6f && Math.Abs(signedWobble) > 0.01f)
+                    dir = DecisionJitterGlue.ApplyWobble(dir, signedWobble);
+
+                // 引擎级移动方向输入（in Vec2）
+                agent.SetMovementDirection(dir);
+                CountAction(d2.Action);
+            }
+            else
+            {
+                _cJitter++; // F12 犹豫/维持期：本轮不覆盖移动
+            }
         }
 
         // 武器有效距离：主手武器实时长度；空手/装备切换瞬间兜底默认值
@@ -250,6 +268,12 @@ namespace CombatBrain.Ai
             return new Vec2(pos.x + dx * RetreatFallbackDist, pos.y + dy * RetreatFallbackDist);
         }
 
+        // agent 阵亡时清理抖动状态（由 CombatAiMissionLogic.OnAgentRemoved 调用）
+        public void RemoveAgent(int agentIndex)
+        {
+            _jitter.Remove(agentIndex);
+        }
+
         private void CountAction(MoveAction action)
         {
             switch (action)
@@ -266,14 +290,15 @@ namespace CombatBrain.Ai
         private void Report()
         {
             CombatLog.Log(string.Format(
-                "[F6] 走位决策 adv={0} back={1} strafe={2} retreat={3} hold={4} skip={5}",
-                _cAdvance, _cStepBack, _cStrafe, _cRetreat, _cHold, _cSkipped));
+                "[F6] 走位决策 adv={0} back={1} strafe={2} retreat={3} hold={4} skip={5} jitter={6}",
+                _cAdvance, _cStepBack, _cStrafe, _cRetreat, _cHold, _cSkipped, _cJitter));
             _cAdvance = 0;
             _cStepBack = 0;
             _cStrafe = 0;
             _cRetreat = 0;
             _cHold = 0;
             _cSkipped = 0;
+            _cJitter = 0;
         }
     }
 }
