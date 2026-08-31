@@ -24,7 +24,8 @@ namespace CombatBrain.Ai
             public Team Team;
             public PerceptionPipeline Perception;
             public readonly KnowledgeView View = new KnowledgeView(25f, 0.08f, 0.15f);
-            public readonly IntentEngine Engine = new IntentEngine(TacticManual.BuildMatrix());
+            // F2：信念增强引擎（score = ΣV·W + ΣB·C；belief==null 时退化为 F1 纯反应式）
+            public readonly BeliefIntentEngine Engine = new BeliefIntentEngine(TacticManual.BuildMatrix(), TacticManual.BuildCounter());
             public SituationVector LastVector;
             public IntentType LastIntent = IntentType.Defend;
             public float InitialCount = -1f;
@@ -69,6 +70,10 @@ namespace CombatBrain.Ai
 
         // F12 决策抖动横切：格挡决策点（L3）独立实例，避免与走位共用延迟计时
         private readonly DecisionJitterGlue _jitterBlock = new DecisionJitterGlue();
+
+        // F2 对手建模胶水：0.5s 编队级事件聚合（8 信号 → 敌方意图信念）+ 新 4 维填充
+        // （EnemCav/FlankEx/Gap/Skirm，t11 A1）；读不懂 → belief=null 不注入（见 OpponentModelGlue.cs）
+        private readonly OpponentModelGlue _opponent = new OpponentModelGlue();
 
         public override void OnBehaviorInitialize()
         {
@@ -228,10 +233,15 @@ namespace CombatBrain.Ai
 
                 SituationVector v;
                 ComposeVector(state, own, enemy, aliveSelf, aliveEnemy, out v);
+
+                // F2：对手建模事件聚合（8 信号 → 信念）+ 填充新 4 维（EnemCav/FlankEx/Gap/Skirm）。
+                // 读不懂（置信<0.5 或 熵>1.8）→ belief=null，不注入信念（t16 §2.1）
+                float[] belief;
+                _opponent.Update(own, enemy, _elapsed, ref v, out belief);
                 state.LastVector = v;
 
                 IntentType newIntent;
-                if (state.Engine.Evaluate(v, 0.5f, out newIntent))
+                if (state.Engine.Evaluate(v, belief, 0.5f, out newIntent))
                 {
                     // F10 反制换招：被冷宫意图 → PickBest 换招；开局预判（仅一次、非玩家队）
                     int adjusted = _experience.AdjustIntent(own.TeamIndex, (int)newIntent);

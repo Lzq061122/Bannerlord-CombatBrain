@@ -22,6 +22,8 @@
     <Compile Include="..\CombatBrain\Intent\SituationVector.cs" Link="Intent\SituationVector.cs" />
     <Compile Include="..\CombatBrain\Intent\TacticManual.cs" Link="Intent\TacticManual.cs" />
     <Compile Include="..\CombatBrain\Intent\IntentEngine.cs" Link="Intent\IntentEngine.cs" />
+    <Compile Include="..\CombatBrain\Intent\OpponentModel.cs" Link="Intent\OpponentModel.cs" />
+    <Compile Include="..\CombatBrain\Intent\BeliefIntentEngine.cs" Link="Intent\BeliefIntentEngine.cs" />
   </ItemGroup>
 
 </Project>

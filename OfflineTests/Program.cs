@@ -60,6 +60,8 @@ namespace OfflineTests
             TestCampaignHabits();
             Console.WriteLine("== F1 TacticManual/SituationVector ==");
             TestTacticManual();
+            Console.WriteLine("== F2 OpponentModel/BeliefEngine ==");
+            TestOpponentModel();
 
             Console.WriteLine();
             if (_failures == 0)
@@ -427,6 +429,122 @@ namespace OfflineTests
             var fast = new IntentEngine(TacticManual.BuildMatrix(), holdTime: 0f);
             fast.Evaluate(vec, 0.5f, out chosen);
             Check(chosen == IntentType.ProtectArcher, "high Arc+EnemCav+FlankEx -> ProtectArcher");
+        }
+
+        // F2 OpponentModel / BeliefIntentEngine（t16 §2.1 信号先验表 + t11 B1/B2 + t11 L164 封顶）
+        private static void TestOpponentModel()
+        {
+            // ---- 先验常量表（t16 §2.1）----
+            PriorTable t = PriorTable.BuildDefault();
+            Check(t != null && t.Signals.Length == PriorTable.SignalCount, "default table 9 signals");
+            CheckApprox(t.Signals[(int)SignalKind.SkeinCharge].Priors[(int)EnemyIntent.FrontalAttack], 0.80f, "SkeinCharge Front 0.80");
+            CheckApprox(t.Signals[(int)SignalKind.ShieldWallHold].Priors[(int)EnemyIntent.FrontalAttack], -0.20f, "ShieldWall Front -0.20");
+            CheckApprox(t.Signals[(int)SignalKind.ShieldWallHold].Priors[(int)EnemyIntent.Reform], 0.30f, "ShieldWall Reform +0.30");
+            CheckApprox(t.Signals[(int)SignalKind.CavalryFlankGather].Priors[(int)EnemyIntent.Flank], 0.85f, "CavGather Flank 0.85");
+            CheckApprox(t.Signals[(int)SignalKind.HorseArcherHarass].Priors[(int)EnemyIntent.Skirmish], 0.60f, "HAH Skirm 0.60");
+            CheckApprox(t.Signals[(int)SignalKind.FeignedRetreat].Priors[(int)EnemyIntent.FeignRetreat], 0.50f, "Feign FeignRetreat 0.50");
+            CheckApprox(t.Signals[(int)SignalKind.CeaseFire].FrontalCap, 0.40f, "CeaseFire cap 0.40 (t11 L164)");
+
+            // ---- JSON 配置化（CL 教训）+ 兜底 ----
+            string json = "{ \"signals\": [ { \"name\": \"SkeinCharge\", \"priors\": [0.8,0,0,0,0,0] }, " +
+                "{ \"name\": \"CeaseFire\", \"priors\": [0,0,0,0,0,0], \"frontalCap\": 0.4 } ] }";
+            PriorTable jt = PriorTable.ParseJson(json);
+            Check(jt != null, "ParseJson valid");
+            CheckApprox(jt.Signals[(int)SignalKind.SkeinCharge].Priors[0], 0.80f, "json SkeinCharge 0.80");
+            CheckApprox(jt.Signals[(int)SignalKind.CeaseFire].FrontalCap, 0.40f, "json CeaseFire cap 0.40");
+            Check(jt.Signals[(int)SignalKind.HeavyCharge] == null, "json missing signal -> null slot");
+            Check(PriorTable.ParseJson("{ bad") == null, "ParseJson malformed -> null");
+            Check(PriorTable.ParseJson("{ \"signals\": [ { \"name\": \"SkeinCharge\" } ] }") == null, "ParseJson missing priors -> null");
+            Check(PriorTable.ParseJson("{ \"signals\": [ { \"name\": \"Nope\", \"priors\": [0,0,0,0,0,0] } ] }") == null, "ParseJson unknown name -> null");
+            var jm = new OpponentModel(jt);
+            jm.ApplySignal(SignalKind.HeavyCharge, 1f, 0f);
+            float jsum = 0f;
+            foreach (float x in jm.BeliefRaw()) jsum += x;
+            CheckApprox(jsum, 0f, "unconfigured signal ignored");
+
+            // ---- 信念更新 / 冷却 / 距离折扣入口 / 衰减 / 负钳位 ----
+            var m1 = new OpponentModel(t);
+            m1.Tick(0f); // 基线
+            m1.ApplySignal(SignalKind.SkeinCharge, 1f, 0f);
+            CheckApprox(m1.BeliefRaw()[(int)EnemyIntent.FrontalAttack], 0.80f, "single signal raw 0.80");
+            float n1sum = 0f;
+            foreach (float x in m1.SnapshotBelief()) n1sum += x;
+            CheckApprox(n1sum, 1f, "belief normalized sum 1");
+            EnemyIntent dom; float conf;
+            Check(m1.TryReadDominant(out dom, out conf) && dom == EnemyIntent.FrontalAttack && Math.Abs(conf - 1f) < 1e-4f, "dominant FrontalAttack conf 1");
+            m1.ApplySignal(SignalKind.SkeinCharge, 1f, 0.5f);
+            CheckApprox(m1.BeliefRaw()[(int)EnemyIntent.FrontalAttack], 0.80f, "cooldown blocks same signal <3s");
+            m1.ApplySignal(SignalKind.SkeinCharge, 1f, 4f);
+            CheckApprox(m1.BeliefRaw()[(int)EnemyIntent.FrontalAttack], 1.60f, "cooldown passed -> +0.80");
+            m1.ApplySignal(SignalKind.SkeinCharge, 0.5f, 8f);
+            CheckApprox(m1.BeliefRaw()[(int)EnemyIntent.FrontalAttack], 2.00f, "weight 0.5 -> +0.40 (distance discount entry)");
+            m1.Tick(24f);
+            CheckApprox(m1.BeliefRaw()[(int)EnemyIntent.FrontalAttack], 0.25f, "3 half-lives -> 0.25 (8s half-life decay)");
+            m1.ApplySignal(SignalKind.ShieldWallHold, 1f, 25f);
+            m1.ApplySignal(SignalKind.ShieldWallHold, 3f, 29f);
+            CheckApprox(m1.BeliefRaw()[(int)EnemyIntent.FrontalAttack], 0f, "negative raw clamped 0");
+            CheckApprox(m1.BeliefRaw()[(int)EnemyIntent.Reform], 1.20f, "Reform accumulated 1.20");
+
+            // ---- 降级：置信 <0.5 → 读不懂（不注入信念）----
+            var m2 = new OpponentModel(t);
+            m2.ApplySignal(SignalKind.SkeinCharge, 0.5f, 0f);
+            m2.ApplySignal(SignalKind.HorseArcherHarass, 0.5f, 4f);
+            m2.ApplySignal(SignalKind.ShieldWallHold, 0.5f, 8f);
+            Check(!m2.TryReadDominant(out dom, out conf), "conf<0.5 -> unreadable (no belief injection)");
+
+            // ---- 降级：熵 >1.8 → 读不懂（矛盾信号）----
+            var m3 = new OpponentModel(t);
+            m3.ApplySignal(SignalKind.SkeinCharge, 0.5f, 0f);
+            m3.ApplySignal(SignalKind.ReserveMove, 0.5f, 4f);
+            m3.ApplySignal(SignalKind.HorseArcherHarass, 0.5f, 8f);
+            m3.ApplySignal(SignalKind.FeignedRetreat, 0.5f, 12f);
+            m3.ApplySignal(SignalKind.ShieldWallHold, 0.5f, 16f);
+            float ent;
+            Check(!m3.TryReadDominant(out dom, out conf, out ent) && ent > 1.8f, "entropy>1.8 -> unreadable (degradation)");
+
+            // ---- CeaseFire 封顶（t11 L164）----
+            var m4 = new OpponentModel(t);
+            m4.ApplySignal(SignalKind.SkeinCharge, 1f, 0f);
+            m4.ApplySignal(SignalKind.CeaseFire, 1f, 4f);
+            CheckApprox(m4.BeliefRaw()[(int)EnemyIntent.FrontalAttack], 0.40f, "CeaseFire caps FrontalAttack 0.40");
+
+            // ---- TacticManual 评分接入（score = ΣV·W + ΣB·C）----
+            Check(TacticManual.EnemyIntentCount == 6, "EnemyIntentCount 6");
+            int idxDef = idxDefend();
+            int idxAtk = Array.IndexOf(TacticManual.Order, IntentType.Attack);
+            int idxBrace = Array.IndexOf(TacticManual.Order, IntentType.BraceFormation);
+            CheckApprox(TacticManual.BeliefScore(null, idxDef), 0f, "BeliefScore null -> 0");
+            CheckApprox(TacticManual.BeliefScore(new float[3], idxDef), 0f, "BeliefScore short -> 0");
+            var bFront = new float[] { 1f, 0f, 0f, 0f, 0f, 0f };
+            CheckApprox(TacticManual.BeliefScore(bFront, idxDef), 0.20f, "BeliefScore Defend x Frontal 0.20");
+            CheckApprox(TacticManual.BeliefScore(bFront, idxBrace), 0.40f, "BeliefScore Brace x Frontal 0.40");
+            var vp = new SituationVector { Power = 0.3f, Dist = 0.9f };
+            CheckApprox(TacticManual.Score(vp, idxAtk), -0.27f, "Score Attack(Power .3, Dist .9) -0.27");
+            CheckApprox(TacticManual.Score(vp, idxDef), 0.15f, "Score Defend(Power .3, Dist .9) 0.15");
+            CheckApprox(TacticManual.CombinedScore(new SituationVector(), bFront, idxDef), 0.20f, "CombinedScore zero-vec == BeliefScore");
+
+            // ---- BeliefIntentEngine：belief==null 与 F1 等价 + 信念注入 + 防抖 ----
+            var vHigh = new SituationVector { Arc = 0.9f, EnemCav = 0.8f, FlankEx = 0.7f };
+            var ie = new IntentEngine(TacticManual.BuildMatrix(), holdTime: 0f);
+            var be = new BeliefIntentEngine(TacticManual.BuildMatrix(), TacticManual.BuildCounter(), holdTime: 0f);
+            IntentType a, b;
+            ie.Evaluate(vHigh, 0.5f, out a);
+            be.Evaluate(vHigh, null, 0.5f, out b);
+            Check(a == b && b == IntentType.ProtectArcher, "belief null == reactionary (F1 semantics)");
+
+            var bi = new BeliefIntentEngine(TacticManual.BuildMatrix(), TacticManual.BuildCounter(), holdTime: 0f);
+            var bFrontWk = new float[] { 0.9f, 0f, 0f, 0f, 0f, 0.1f };
+            IntentType chosen;
+            bi.Evaluate(new SituationVector(), bFrontWk, 0.5f, out chosen);
+            Check(chosen == IntentType.BraceFormation, "high-Frontal belief -> BraceFormation (C anchor)");
+
+            var de = new BeliefIntentEngine(TacticManual.BuildMatrix(), TacticManual.BuildCounter());
+            IntentType tmp;
+            Check(!de.Evaluate(new SituationVector(), null, 0.5f, out tmp) && de.Current == IntentType.Defend, "debounce baseline Defend");
+            bool switched = false;
+            for (int k = 0; k < 11; k++) switched |= de.Evaluate(vHigh, null, 0.5f, out tmp);
+            Check(!switched && de.Current == IntentType.Defend, "11 evals no switch (hold 6s)");
+            Check(de.Evaluate(vHigh, null, 0.5f, out tmp) && tmp == IntentType.ProtectArcher && de.Current == IntentType.ProtectArcher, "12th eval switches to ProtectArcher");
         }
 
         private static int idxDefend()

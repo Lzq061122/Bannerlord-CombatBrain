@@ -1,3 +1,5 @@
+using System;
+
 namespace CombatBrain.Intent
 {
     // 敌方意图枚举（t11 B1：OpponentModel 信念向量维度；F1 用于 C 反制矩阵列）。
@@ -20,6 +22,8 @@ namespace CombatBrain.Intent
     {
         public const int IntentCount = 9;
         public const int DimensionCount = 12;
+        // F2：敌方意图信念维数（t11 B1；= Counter 列数；OpponentModel 信念向量长度）
+        public const int EnemyIntentCount = 6;
 
         public static readonly IntentType[] Order =
         {
@@ -72,6 +76,38 @@ namespace CombatBrain.Intent
         public static float[][] BuildCounter()
         {
             return Counter;
+        }
+
+        // F2 综合评分：score(i) = ΣV·W + ΣB·C（t11 B1/B2）。
+        // 反应式部分 = ΣV·W（纯态势，不注入信念）；
+        // 信念项 = ΣB·C（B 为 6 维归一化敌方意图信念，来自 OpponentModel；
+        //           null/长度不足 → 按 0 处理，即不注入信念 → 向后兼容 F1 纯反应式）。
+
+        /// <summary>反应式评分 score(i) = ΣV·W。</summary>
+        public static float Score(SituationVector v, int intentIndex)
+        {
+            if (intentIndex < 0 || intentIndex >= IntentCount) return 0f;
+            float[] w = Matrix[intentIndex];
+            float s = 0f;
+            for (int d = 0; d < DimensionCount; d++) s += v[d] * w[d];
+            return s;
+        }
+
+        /// <summary>信念修正项 beliefScore(i) = ΣB·C；belief 为 null/长度不足 → 0。</summary>
+        public static float BeliefScore(float[] belief, int intentIndex)
+        {
+            if (belief == null || intentIndex < 0 || intentIndex >= IntentCount) return 0f;
+            float[] c = Counter[intentIndex];
+            int n = Math.Min(c.Length, Math.Min(belief.Length, EnemyIntentCount));
+            float s = 0f;
+            for (int i = 0; i < n; i++) s += belief[i] * c[i];
+            return s;
+        }
+
+        /// <summary>综合分 = ΣV·W + ΣB·C（belief == null → 纯反应式，与 F1 IntentEngine 语义一致）。</summary>
+        public static float CombinedScore(SituationVector v, float[] belief, int intentIndex)
+        {
+            return Score(v, intentIndex) + BeliefScore(belief, intentIndex);
         }
     }
 }

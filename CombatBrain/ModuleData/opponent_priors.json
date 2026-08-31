@@ -1,0 +1,13 @@
+{
+  "signals": [
+    { "name": "SkeinCharge", "priors": [0.80, 0.00, 0.00, 0.00, 0.00, 0.00] },
+    { "name": "ShieldWallHold", "priors": [-0.20, 0.00, 0.00, 0.00, 0.00, 0.30] },
+    { "name": "SkirmisherClose", "priors": [0.75, 0.00, 0.00, 0.00, 0.00, 0.00] },
+    { "name": "ReserveMove", "priors": [0.00, 0.70, 0.00, 0.00, 0.00, 0.00] },
+    { "name": "CavalryFlankGather", "priors": [0.00, 0.85, 0.00, 0.00, 0.00, 0.00] },
+    { "name": "HeavyCharge", "priors": [0.80, 0.00, 0.00, 0.00, 0.00, 0.00] },
+    { "name": "HorseArcherHarass", "priors": [0.00, 0.00, 0.00, 0.60, 0.00, 0.00] },
+    { "name": "FeignedRetreat", "priors": [0.00, 0.00, 0.00, 0.00, 0.50, 0.00] },
+    { "name": "CeaseFire", "priors": [0.00, 0.00, 0.00, 0.00, 0.00, 0.00], "frontalCap": 0.4 }
+  ]
+}
