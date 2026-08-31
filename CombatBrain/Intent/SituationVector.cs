@@ -1,10 +1,14 @@
 namespace CombatBrain.Intent
 {
-    // 态势向量 8 维（全部归一化到 [0,1]）。
-    // 索引顺序与 Labels 对齐：0 Power, 1 Line, 2 Cav, 3 Height, 4 Moral, 5 Arc, 6 PenB, 7 Dist
+    // 态势向量 12 维（全部归一化到 [0,1]）。
+    // 索引顺序与 Labels 对齐：0 Power, 1 Line, 2 Cav, 3 Height, 4 Moral, 5 Arc, 6 PenB, 7 Dist,
+    //                         8 EnemCav, 9 FlankEx, 10 Gap, 11 Skirm
+    // 后 4 维为 t11 A1 敌方动向维度（EnemCav 敌方骑兵集结度 / FlankEx 我方侧翼暴露度 /
+    // Gap 阵线完整性 / Skirm 敌方散兵前出度）；旧 8 维索引不变，向后兼容。
+    // 数据来源约束（反作弊闸）：只读编队级运动学/阵型/事件聚合，禁读敌编队内部状态（t12 行 19）。
     public struct SituationVector
     {
-        public const int DimensionCount = 8;
+        public const int DimensionCount = 12;
 
         public float Power;
         public float Line;
@@ -14,6 +18,10 @@ namespace CombatBrain.Intent
         public float Arc;
         public float PenB;
         public float Dist;
+        public float EnemCav;   // 敌方骑兵集结度（F2 事件采集填充，F1 阶段默认 0）
+        public float FlankEx;   // 我方侧翼暴露度（F2 填充，F1 默认 0）
+        public float Gap;       // 阵线完整性（F2 填充，F1 默认 0）
+        public float Skirm;     // 敌方散兵前出度（F2 填充，F1 默认 0）
 
         public float this[int index]
         {
@@ -29,6 +37,10 @@ namespace CombatBrain.Intent
                     case 5: return Arc;
                     case 6: return PenB;
                     case 7: return Dist;
+                    case 8: return EnemCav;
+                    case 9: return FlankEx;
+                    case 10: return Gap;
+                    case 11: return Skirm;
                 }
                 return 0f;
             }
@@ -44,20 +56,26 @@ namespace CombatBrain.Intent
                     case 5: Arc = value; break;
                     case 6: PenB = value; break;
                     case 7: Dist = value; break;
+                    case 8: EnemCav = value; break;
+                    case 9: FlankEx = value; break;
+                    case 10: Gap = value; break;
+                    case 11: Skirm = value; break;
                 }
             }
         }
 
         public static readonly string[] Labels =
         {
-            "Power", "Line", "Cav", "Height", "Moral", "Arc", "PenB", "Dist"
+            "Power", "Line", "Cav", "Height", "Moral", "Arc", "PenB", "Dist",
+            "EnemCav", "FlankEx", "Gap", "Skirm"
         };
 
         public override string ToString()
         {
             return string.Format(
-                "Power={0:F2} Line={1:F2} Cav={2:F2} Height={3:F2} Moral={4:F2} Arc={5:F2} PenB={6:F2} Dist={7:F2}",
-                Power, Line, Cav, Height, Moral, Arc, PenB, Dist);
+                "Power={0:F2} Line={1:F2} Cav={2:F2} Height={3:F2} Moral={4:F2} Arc={5:F2} PenB={6:F2} Dist={7:F2} EnemCav={8:F2} FlankEx={9:F2} Gap={10:F2} Skirm={11:F2}",
+                Power, Line, Cav, Height, Moral, Arc, PenB, Dist,
+                EnemCav, FlankEx, Gap, Skirm);
         }
     }
 }

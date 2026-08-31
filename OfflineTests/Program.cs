@@ -8,6 +8,7 @@ using CombatBrain.Ranged;
 using CombatBrain.Compliance;
 using CombatBrain.Morale;
 using CombatBrain.Experience;
+using CombatBrain.Intent;
 
 namespace OfflineTests
 {
@@ -57,6 +58,8 @@ namespace OfflineTests
             TestCounterMatrix();
             Console.WriteLine("== F10 CampaignHabits ==");
             TestCampaignHabits();
+            Console.WriteLine("== F1 TacticManual/SituationVector ==");
+            TestTacticManual();
 
             Console.WriteLine();
             if (_failures == 0)
@@ -357,6 +360,78 @@ namespace OfflineTests
 
             h.Clear();
             Check(h.Predict() == -1, "clear empties memory");
+        }
+
+        private static void TestTacticManual()
+        {
+            // 维度与意图数
+            Check(SituationVector.DimensionCount == 12, "SituationVector 12 dims");
+            Check(TacticManual.IntentCount == 9, "TacticManual 9 intents");
+            Check(TacticManual.DimensionCount == 12, "TacticManual 12 dims");
+            Check(SituationVector.Labels.Length == 12, "labels 12 entries");
+
+            // 旧 8 维索引不动 + 新 4 维读写（向后兼容）
+            var v = new SituationVector();
+            v[0] = 0.3f; v[7] = 0.9f;
+            CheckApprox(v.Power, 0.3f, "index 0 -> Power");
+            CheckApprox(v.Dist, 0.9f, "index 7 -> Dist");
+            v[8] = 0.4f; v[9] = 0.5f; v[10] = 0.6f; v[11] = 0.7f;
+            CheckApprox(v.EnemCav, 0.4f, "index 8 -> EnemCav");
+            CheckApprox(v.FlankEx, 0.5f, "index 9 -> FlankEx");
+            CheckApprox(v.Gap, 0.6f, "index 10 -> Gap");
+            CheckApprox(v.Skirm, 0.7f, "index 11 -> Skirm");
+
+            // 12 维归一化：全部维在 [0,1] 内评分不发散
+            float[][] m = TacticManual.BuildMatrix();
+            Check(m.Length == 9, "matrix 9 rows");
+            bool rows12 = true;
+            for (int i = 0; i < m.Length; i++) if (m[i].Length != 12) rows12 = false;
+            Check(rows12, "each row 12 cols");
+            bool inBounds = true;
+            for (int i = 0; i < m.Length; i++)
+                for (int d = 0; d < 12; d++)
+                    if (m[i][d] < -1f || m[i][d] > 1f) inBounds = false;
+            Check(inBounds, "all weights within [-1,1]");
+
+            // 新意图权重存在且关键维符合 t16 §1.2 建议值
+            int idxProtect = Array.IndexOf(TacticManual.Order, IntentType.ProtectArcher);
+            int idxBrace = Array.IndexOf(TacticManual.Order, IntentType.BraceFormation);
+            Check(idxProtect == 7 && idxBrace == 8, "new intents appended at index 7/8");
+            CheckApprox(m[idxProtect][5], 0.40f, "ProtectArcher Arc 0.40");
+            CheckApprox(m[idxProtect][8], 0.35f, "ProtectArcher EnemCav 0.35");
+            CheckApprox(m[idxProtect][9], 0.30f, "ProtectArcher FlankEx 0.30");
+            CheckApprox(m[idxBrace][7], 0.30f, "BraceFormation Dist 0.30");
+            CheckApprox(m[idxBrace][8], 0.50f, "BraceFormation EnemCav 0.50");
+
+            // C 矩阵：9×6 边界 + 方向正确（t11 B2 锚点 + t16 §1.3 新行）
+            float[][] c = TacticManual.BuildCounter();
+            Check(c.Length == 9, "C matrix 9 rows");
+            bool c6 = true;
+            for (int i = 0; i < c.Length; i++) if (c[i].Length != 6) c6 = false;
+            Check(c6, "C matrix each row 6 cols");
+            bool cInBounds = true;
+            for (int i = 0; i < c.Length; i++)
+                for (int d = 0; d < 6; d++)
+                    if (c[i][d] < -1f || c[i][d] > 1f) cInBounds = false;
+            Check(cInBounds, "C matrix weights within [-1,1]");
+            Check(c[idxDefend()][(int)EnemyIntent.Flank] > 0f, "C Defend x Flank > 0 (t11)");
+            Check(c[idxBrace][(int)EnemyIntent.FrontalAttack] > 0f, "C Brace x Frontal > 0 (t16)");
+            Check(c[idxBrace][(int)EnemyIntent.Flank] < 0f, "C Brace x Flank < 0 (t16)");
+            Check(c[idxProtect][(int)EnemyIntent.Flank] > 0f, "C Protect x Flank > 0 (t16)");
+            Check(c[idxProtect][(int)EnemyIntent.FeignRetreat] < 0f, "C Protect x Feign < 0 (t16)");
+
+            // 意图引擎兼容 9×12：高 Arc+EnemCav+FlankEx 态势 → ProtectArcher 胜出
+            var vec = new SituationVector { Arc = 0.9f, EnemCav = 0.8f, FlankEx = 0.7f };
+            IntentType chosen;
+            // 首帧需连续 Evaluate 数次越过 holdTime 才切换；用 holdTime=0 的引擎验证方向
+            var fast = new IntentEngine(TacticManual.BuildMatrix(), holdTime: 0f);
+            fast.Evaluate(vec, 0.5f, out chosen);
+            Check(chosen == IntentType.ProtectArcher, "high Arc+EnemCav+FlankEx -> ProtectArcher");
+        }
+
+        private static int idxDefend()
+        {
+            return Array.IndexOf(TacticManual.Order, IntentType.Defend);
         }
     }
 }

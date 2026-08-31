@@ -8,7 +8,12 @@ namespace CombatBrain
         Flank,
         Harass,
         Reform,
-        Pursue
+        Pursue,
+
+        // F1 枚举层扩展（H1）：追加于末尾，索引 7/8；旧 0-6 映射不变，向后兼容。
+        // 设计来源：combatbrain_historical_tactics_design.md §1.2（ProtectArcher/BraceFormation）。
+        ProtectArcher,
+        BraceFormation
     }
 
     public enum LodLevel

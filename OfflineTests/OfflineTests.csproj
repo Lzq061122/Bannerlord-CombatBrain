@@ -19,6 +19,9 @@
     <Compile Include="..\CombatBrain\Morale\PhasedRetreat.cs" Link="Morale\PhasedRetreat.cs" />
     <Compile Include="..\CombatBrain\Experience\CounterMatrix.cs" Link="Experience\CounterMatrix.cs" />
     <Compile Include="..\CombatBrain\Experience\CampaignHabits.cs" Link="Experience\CampaignHabits.cs" />
+    <Compile Include="..\CombatBrain\Intent\SituationVector.cs" Link="Intent\SituationVector.cs" />
+    <Compile Include="..\CombatBrain\Intent\TacticManual.cs" Link="Intent\TacticManual.cs" />
+    <Compile Include="..\CombatBrain\Intent\IntentEngine.cs" Link="Intent\IntentEngine.cs" />
   </ItemGroup>
 
 </Project>
