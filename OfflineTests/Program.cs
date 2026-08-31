@@ -62,6 +62,8 @@ namespace OfflineTests
             TestTacticManual();
             Console.WriteLine("== F2 OpponentModel/BeliefEngine ==");
             TestOpponentModel();
+            Console.WriteLine("== F3 ProtectPlan ==");
+            TestProtectPlan();
 
             Console.WriteLine();
             if (_failures == 0)
@@ -545,6 +547,54 @@ namespace OfflineTests
             for (int k = 0; k < 11; k++) switched |= de.Evaluate(vHigh, null, 0.5f, out tmp);
             Check(!switched && de.Current == IntentType.Defend, "11 evals no switch (hold 6s)");
             Check(de.Evaluate(vHigh, null, 0.5f, out tmp) && tmp == IntentType.ProtectArcher && de.Current == IntentType.ProtectArcher, "12th eval switches to ProtectArcher");
+        }
+
+        // F3 ProtectPlan 保护计划（pipeline §三 F3：退后目标选择/殿后档/回援阈值）
+        private static void TestProtectPlan()
+        {
+            // ---- 退后目标选择：步兵阵后方射击位（退后≠溃逃）----
+            float tx, ty;
+            ProtectPlan.ChooseRetreatTarget(0f, 0f, 0f, 50f, 13f, out tx, out ty); // 敌(0,0) 步(0,50) 间隙13
+            CheckApprox(tx, 0f, "retreat target x on axis");
+            CheckApprox(ty, 63f, "retreat target behind infantry (50+13)");
+            Check(ty > 50f, "retreat target is behind infantry line");
+
+            // 退化：敌/步重合 → 无 NaN，向上退避
+            ProtectPlan.ChooseRetreatTarget(5f, 5f, 5f, 5f, 13f, out tx, out ty);
+            Check(!float.IsNaN(tx) && !float.IsNaN(ty) && Math.Abs(ty - 18f) < 1e-4f, "retreat degenerate no NaN");
+
+            // ---- 退后间隙：阵半宽 + 裕量 ----
+            CheckApprox(ProtectPlan.RetreatClearance(10f), 13f, "clearance spread10 -> 13");
+            CheckApprox(ProtectPlan.RetreatClearance(0f), 8f, "clearance spread0 -> 8 (margin only)");
+
+            // ---- 殿后档目标：敌→弓连线 60% 处 ----
+            ProtectPlan.ChooseScreenTarget(0f, 0f, 0f, 80f, out tx, out ty);
+            CheckApprox(ty, 48f, "screen target 60% along enemy->ranged (80*0.6)");
+            Check(tx < 0.001f && ty > 0f && ty < 80f, "screen target between enemy and ranged");
+
+            // 下限夹取：距敌 <15m → 提升到 15m
+            ProtectPlan.ChooseScreenTarget(0f, 0f, 0f, 20f, out tx, out ty);
+            CheckApprox(ty, 15f, "screen target clamped to min 15m");
+
+            // 不越过弓手：敌弓距离 < 下限 → 停在弓手处
+            ProtectPlan.ChooseScreenTarget(0f, 0f, 0f, 10f, out tx, out ty);
+            CheckApprox(ty, 10f, "screen target never past ranged");
+
+            // ---- 骑兵回援阈值 ----
+            Check(ProtectPlan.ShouldReturnCavalry(30f), "cavalry returns at 30m");
+            Check(ProtectPlan.ShouldReturnCavalry(40f), "cavalry returns at threshold 40m");
+            Check(!ProtectPlan.ShouldReturnCavalry(41f), "cavalry no return beyond 40m");
+            Check(!ProtectPlan.ShouldReturnCavalry(-5f), "negative distance no return");
+
+            // ---- 弓手受压判定 ----
+            Check(ProtectPlan.IsUnderPressure(45f), "ranged pressed at 45m");
+            Check(!ProtectPlan.IsUnderPressure(45.01f), "ranged not pressed beyond 45m");
+            Check(!ProtectPlan.IsUnderPressure(-1f), "negative distance not pressed");
+
+            // ---- 下令防抖：>3m 才重新下令（防命令风暴）----
+            Check(ProtectPlan.ShouldIssueOrder(3.01f), "reissue beyond 3m hysteresis");
+            Check(!ProtectPlan.ShouldIssueOrder(3f), "no reissue at 3m");
+            Check(!ProtectPlan.ShouldIssueOrder(0f), "no reissue at 0m");
         }
 
         private static int idxDefend()

@@ -75,6 +75,10 @@ namespace CombatBrain.Ai
         // （EnemCav/FlankEx/Gap/Skirm，t11 A1）；读不懂 → belief=null 不注入（见 OpponentModelGlue.cs）
         private readonly OpponentModelGlue _opponent = new OpponentModelGlue();
 
+        // F3 保护核心输出胶水：ProtectArcher 意图执行层——远程退向步兵阵后 + 步兵殿后档 + 骑兵回援
+        // （0.5s 编队级低频下令，见 ProtectGlue.cs）
+        private readonly ProtectGlue _protect = new ProtectGlue();
+
         public override void OnBehaviorInitialize()
         {
             base.OnBehaviorInitialize();
@@ -156,6 +160,10 @@ namespace CombatBrain.Ai
             _bench.BeginSection("morale");
             TickMorale(mission, dt);
             _bench.EndSection("morale");
+
+            _bench.BeginSection("protect");
+            TickProtect(mission, dt);
+            _bench.EndSection("protect");
 
             _bench.BeginSection("block");
             TickBlock(mission, dt);
@@ -391,6 +399,15 @@ namespace CombatBrain.Ai
             Team playerTeam = mission.PlayerTeam;
             Vec2 playerCenter = playerTeam != null ? GetTeamCenter(playerTeam) : Vec2.Zero;
             _morale.Tick(mission, dt, _elapsed, playerCenter, GetTeamIntent, GetMorale);
+        }
+
+        // ---------- F3 保护核心输出（ProtectArcher 执行层，编队级） ----------
+
+        private void TickProtect(Mission mission, float dt)
+        {
+            Team playerTeam = mission.PlayerTeam;
+            Vec2 playerCenter = playerTeam != null ? GetTeamCenter(playerTeam) : Vec2.Zero;
+            _protect.Tick(mission, dt, _elapsed, playerCenter, GetTeamIntent);
         }
 
         private IntentType GetTeamIntent(Team team)
