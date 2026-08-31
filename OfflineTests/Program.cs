@@ -64,6 +64,8 @@ namespace OfflineTests
             TestOpponentModel();
             Console.WriteLine("== F3 ProtectPlan ==");
             TestProtectPlan();
+            Console.WriteLine("== F4 BracePlan ==");
+            TestBracePlan();
 
             Console.WriteLine();
             if (_failures == 0)
@@ -595,6 +597,35 @@ namespace OfflineTests
             Check(ProtectPlan.ShouldIssueOrder(3.01f), "reissue beyond 3m hysteresis");
             Check(!ProtectPlan.ShouldIssueOrder(3f), "no reissue at 3m");
             Check(!ProtectPlan.ShouldIssueOrder(0f), "no reissue at 0m");
+        }
+
+        // F4 BracePlan 架枪反骑计划（pipeline §三 F4：触发阈值/架枪优先/无长杆降级）
+        private static void TestBracePlan()
+        {
+            // ---- 触发阈值：敌骑 ≤55m 且净接近（≥1m/s）；接战(<8m)不触发 ----
+            Check(BracePlan.ShouldBrace(55f, 56f), "brace triggers at range 55m closing");
+            Check(!BracePlan.ShouldBrace(55.1f, 56.1f), "beyond 55m no trigger");
+            Check(!BracePlan.ShouldBrace(8f, 9f), "in melee (<=8m) no brace");
+            Check(!BracePlan.ShouldBrace(30f, 30f), "no closing (delta 0) no trigger");
+            Check(BracePlan.ShouldBrace(30f, 31.5f), "closing 1.5m/s triggers");
+            Check(BracePlan.ShouldBrace(30f, -1f), "first observation arms immediately");
+            Check(!BracePlan.ShouldBrace(float.NaN, 0f), "NaN distance no trigger");
+
+            // ---- 退出：>70m 或无敌骑 ----
+            Check(BracePlan.ShouldRelease(71f), "release beyond 70m");
+            Check(!BracePlan.ShouldRelease(55f), "hold within 70m");
+            Check(BracePlan.ShouldRelease(-1f), "release when no cavalry");
+
+            // ---- 无长杆降级：架枪占比 <30% 不架枪 ----
+            Check(BracePlan.HasEnoughBraceUnits(4, 12), "4/12 >= 30% braced");
+            Check(!BracePlan.HasEnoughBraceUnits(3, 12), "3/12 < 30% degraded");
+            Check(!BracePlan.HasEnoughBraceUnits(0, 0), "no sample -> degraded");
+
+            // ---- 架枪优先：剧集中且达标且未被求生接管 → 站定 ----
+            Check(BracePlan.ShouldIssueBraceOrder(true, true, false), "brace priority: stand");
+            Check(!BracePlan.ShouldIssueBraceOrder(false, true, false), "no episode -> no stand");
+            Check(!BracePlan.ShouldIssueBraceOrder(true, false, false), "degraded -> no stand");
+            Check(!BracePlan.ShouldIssueBraceOrder(true, true, true), "survival retreat takes over");
         }
 
         private static int idxDefend()

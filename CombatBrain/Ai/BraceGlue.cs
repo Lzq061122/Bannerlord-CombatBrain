@@ -1,0 +1,166 @@
+using System;
+using System.Collections.Generic;
+using TaleWorlds.Library;
+using TaleWorlds.MountAndBlade;
+using CombatBrain;
+using CombatBrain.Intent;
+
+namespace CombatBrain.Ai
+{
+    // F4 BraceGlue 架枪反骑阵地（H3，P3 级）——BraceFormation 意图执行层（pipeline §三 F4）。
+    // 目标：敌骑逼近时步兵架枪站定。
+    // 触发：本队意图 == BraceFormation（F1/F2 目标识别）或敌骑编队 ≤55m 且净接近
+    //   （编队级可观察运动学，防御自保）；剧集内站定（MovementOrderStop），退出（>70m/无敌骑）后交回正常 AI。
+    // 动作：
+    //   * 步兵编队 → 剧集武装沿统计架枪可用占比（多数兵零扫描：GetCountOfUnitsWithCondition 一次）
+    //     达标 → 每拍站定（Stop）；引擎对静止持枪兵自动架枪（架枪是武器 usage 引擎行为，非 AI 命令）。
+    //   * 无长杆降级：架枪可用占比 <30% → 不站定（交回正常防御 AI）。
+    //   * 架枪优先：本段在 protect 之后运行（OnMissionTick 顺序 protect→brace→block），后写者胜，
+    //     站定命令覆盖同拍保护机动（殿后档/回援），步兵就地架枪而非移动。
+    // 反作弊闸（t12 行19 / t16 附 L131）：只读 己方编队位置(CachedMedianPosition)、敌编队位置
+    //   （编队位置聚合，O(敌编队数)）、己方意图(F2)、己方兵装备架枪可用性(CanPerformBraceCached)；
+    //   禁读：敌编队 MovementOrder/行为权重/士气值/血量/意图状态（proposal L166）。
+    // 性能：0.5s 低频；敌骑扫描 O(敌编队数)；逐兵统计仅在剧集武装沿（多数兵零扫描，一次/编队/剧集）；
+    //       复用列表零每拍分配。
+    // API 核实（BannerlordSage，游戏 v1.4.8 精确匹配）：
+    //   Agent.CanPerformBraceCached @ Agent.cs L506（public bool，引擎缓存架枪能力）；
+    //     注意：Agent.CheckIfCanBrace 在本版本不存在——RBM 用 Utilities.CheckIfCanBrace(Agent) 重实现
+    //     （遍历武器槽，WeaponDescriptionId 含 "bracing" 即架枪可用，@ RBM Utilities.cs:1406；调用点 OverrideAgent.cs:83）
+    //   MovementOrder.MovementOrderStop（static readonly 字段）@ MovementOrder.cs（MoraleGlue.cs:179 已用）
+    //   Formation.SetMovementOrder(MovementOrder) @ Formation.cs L383（sage read_csharp_type；CavalryGlue.cs:23 已用）
+    //   Formation.GetCountOfUnitsWithCondition(Func<Agent,bool>) @ Formation.cs L438（sage）
+    //   FormationQuerySystem.IsInfantryFormation @ RBM OverrideBehaviorAdvance.cs:149；IsCavalryFormation @ Utilities.cs:792；
+    //   IsRangedCavalryFormation @ Utilities.cs:1035；Formation.CachedMedianPosition @ CavalryGlue.cs:68（F8 已用）
+    //   已核实但本层不需要：Agent.TryToWieldWeaponInSlot（Agent.cs L4121，F9）、GetLookDirection（L1453，F6）、
+    //   SetMovementDirection（L2402，F6）——站定为编队级 Stop 命令，换武器/朝向由引擎架枪动画自理。
+    public sealed class BraceGlue
+    {
+        public const float TickInterval = 0.5f;
+        private const float DriveRadius = 70f; // 剧场上限（与 MoraleGlue/ProtectGlue 对齐）
+
+        private float _sinceTick;
+        private readonly Dictionary<int, float> _prevCavDist = new Dictionary<int, float>(); // 队 → 上拍最近敌骑距离(-1=未知)
+        private readonly Dictionary<int, bool> _episode = new Dictionary<int, bool>();       // 队 → 架枪剧集中
+        private readonly Dictionary<Formation, bool> _armed = new Dictionary<Formation, bool>(); // 编队 → 本剧集已评估（达标=已站定）
+        private readonly List<Formation> _infantry = new List<Formation>(); // 复用列表（零分配）
+
+        /// <summary>架枪状态查询（诊断/测试用）。</summary>
+        public bool IsBracing(int teamIndex)
+        {
+            bool v;
+            return _episode.TryGetValue(teamIndex, out v) && v;
+        }
+
+        /// <summary>低频驱动：CombatAiMissionLogic.OnMissionTick 调用，内部按 TickInterval 节流。</summary>
+        public void Tick(Mission mission, float dt, float now, Vec2 playerCenter, Func<Team, IntentType> getIntent)
+        {
+            _sinceTick += dt;
+            if (_sinceTick < TickInterval) return;
+            _sinceTick = 0f;
+
+            foreach (Team team in mission.Teams)
+            {
+                if (team == null) continue;
+                IntentType intent = getIntent != null ? getIntent(team) : IntentType.Attack;
+                Vec2 tc = TeamCenter(team);
+                if (VecMath.Dist(playerCenter.x, playerCenter.y, tc.x, tc.y) > DriveRadius) continue; // 剧场效应
+
+                float d;
+                bool hasCav = TryNearestEnemyCavDist(team, tc, mission, out d);
+                float prev = -1f;
+                _prevCavDist.TryGetValue(team.TeamIndex, out prev);
+                _prevCavDist[team.TeamIndex] = hasCav ? d : -1f;
+
+                bool ep = IsBracing(team.TeamIndex);
+                if (intent == IntentType.BraceFormation)
+                {
+                    _episode[team.TeamIndex] = true; // 意图驱动：直接架枪
+                    Execute(team, mission);
+                }
+                else if (hasCav && (ep ? !BracePlan.ShouldRelease(d) : BracePlan.ShouldBrace(d, prev)))
+                {
+                    _episode[team.TeamIndex] = true; // 威胁驱动：武装或维持剧集
+                    Execute(team, mission);
+                }
+                else
+                {
+                    _episode[team.TeamIndex] = false; // 释放，交回正常 AI
+                    Release(team);
+                }
+            }
+        }
+
+        // 步兵编队站定：占比达标 → Stop（架枪优先；F7 个体撤退不受编队命令影响）
+        private void Execute(Team team, Mission mission)
+        {
+            _infantry.Clear();
+            foreach (Formation f in team.FormationsIncludingEmpty)
+            {
+                if (f == null || f.CountOfUnits == 0 || f.QuerySystem == null) continue;
+                if (!f.QuerySystem.IsInfantryFormation) continue;
+                _infantry.Add(f);
+            }
+            if (_infantry.Count == 0) return;
+
+            foreach (Formation inf in _infantry)
+            {
+                bool armed;
+                if (!_armed.TryGetValue(inf, out armed))
+                {
+                    // 无长杆降级（多数兵零扫描：仅剧集武装沿做一次全阵统计）
+                    int capable = inf.GetCountOfUnitsWithCondition(a => a != null && a.CanPerformBraceCached);
+                    armed = BracePlan.HasEnoughBraceUnits(capable, inf.CountOfUnits);
+                    _armed[inf] = armed;
+                }
+                if (!BracePlan.ShouldIssueBraceOrder(true, armed, false)) continue; // 降级：交回正常防御 AI
+                inf.SetMovementOrder(MovementOrder.MovementOrderStop); // 站定（引擎对静止持枪兵自动架枪）
+            }
+        }
+
+        // 剧集结束：清空本队编队评估缓存
+        private void Release(Team team)
+        {
+            foreach (Formation f in team.FormationsIncludingEmpty)
+            {
+                if (f != null) _armed.Remove(f);
+            }
+        }
+
+        // 最近敌骑距离：遍历敌编队（O(敌编队数)，只读 CachedMedianPosition），仅骑兵/骑射编队。
+        private static bool TryNearestEnemyCavDist(Team own, Vec2 ownCenter, Mission mission, out float d)
+        {
+            d = -1f;
+            bool found = false;
+            foreach (Team team in mission.Teams)
+            {
+                if (team == null || team == own) continue;
+                foreach (Formation f in team.FormationsIncludingEmpty)
+                {
+                    if (f == null || f.CountOfUnits == 0 || f.QuerySystem == null) continue;
+                    if (!f.QuerySystem.IsCavalryFormation && !f.QuerySystem.IsRangedCavalryFormation) continue;
+                    Vec2 p = f.CachedMedianPosition.AsVec2;
+                    float dist = VecMath.Dist(p.x, p.y, ownCenter.x, ownCenter.y);
+                    if (!found || dist < d)
+                    {
+                        d = dist;
+                        found = true;
+                    }
+                }
+            }
+            return found;
+        }
+
+        private static Vec2 TeamCenter(Team team)
+        {
+            float sx = 0f, sy = 0f;
+            int n = 0;
+            foreach (Formation f in team.FormationsIncludingEmpty)
+            {
+                if (f == null || f.CountOfUnits == 0) continue;
+                Vec2 p = f.CachedMedianPosition.AsVec2;
+                sx += p.x; sy += p.y; n++;
+            }
+            return n > 0 ? new Vec2(sx / n, sy / n) : Vec2.Zero;
+        }
+    }
+}

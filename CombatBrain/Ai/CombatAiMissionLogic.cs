@@ -79,6 +79,10 @@ namespace CombatBrain.Ai
         // （0.5s 编队级低频下令，见 ProtectGlue.cs）
         private readonly ProtectGlue _protect = new ProtectGlue();
 
+        // F4 架枪反骑阵地胶水：BraceFormation 意图执行层——敌骑逼近时步兵架枪站定
+        // （0.5s 编队级低频下令，无长杆降级；见 BraceGlue.cs）
+        private readonly BraceGlue _brace = new BraceGlue();
+
         public override void OnBehaviorInitialize()
         {
             base.OnBehaviorInitialize();
@@ -164,6 +168,11 @@ namespace CombatBrain.Ai
             _bench.BeginSection("protect");
             TickProtect(mission, dt);
             _bench.EndSection("protect");
+
+            // F4 架枪反骑：在 protect 之后运行（后写者胜=架枪优先，步兵就地站定不参与殿后机动）
+            _bench.BeginSection("brace");
+            TickBrace(mission, dt);
+            _bench.EndSection("brace");
 
             _bench.BeginSection("block");
             TickBlock(mission, dt);
@@ -408,6 +417,15 @@ namespace CombatBrain.Ai
             Team playerTeam = mission.PlayerTeam;
             Vec2 playerCenter = playerTeam != null ? GetTeamCenter(playerTeam) : Vec2.Zero;
             _protect.Tick(mission, dt, _elapsed, playerCenter, GetTeamIntent);
+        }
+
+        // ---------- F4 架枪反骑阵地（BraceFormation 执行层，编队级） ----------
+
+        private void TickBrace(Mission mission, float dt)
+        {
+            Team playerTeam = mission.PlayerTeam;
+            Vec2 playerCenter = playerTeam != null ? GetTeamCenter(playerTeam) : Vec2.Zero;
+            _brace.Tick(mission, dt, _elapsed, playerCenter, GetTeamIntent);
         }
 
         private IntentType GetTeamIntent(Team team)
