@@ -10,9 +10,10 @@ namespace CombatBrain.Ai
 {
     // F10 反制矩阵 + 套路记忆 —— 胶水层（纯事件驱动）。
     // 职责：
-    //   * CounterMatrix（反制换招）：订阅 IntentSwitched 事件；每次意图切换时对比敌队存活数变化——
-    //     上升 → OnCountered(上一意图)（套路被反制，置信度 ×0.7，连续 3 次打入冷宫）；
-    //     下降 → OnSuccess（置信度回补 +0.15）。新意图若已被冷宫 → PickBest 换招（AdjustIntent）。
+    //   * CounterMatrix（反制换招）：订阅 IntentSwitched 事件；每次意图切换时按「窗口内敌队杀伤速率 vs
+    //     历史基线」判定（P0-②：窗口掉人速率显著高于基线 → OnSuccess 回补 +0.15；显著低于基线或敌存活
+    //     回升 → OnCountered，置信度 ×0.7，连续 3 次打入冷宫；窗口过短/无基线不判定）。新意图若已被冷宫
+    //     → PickBest 换招（AdjustIntent）。
     //   * CampaignHabits（跨战役套路记忆）：记录玩家队每次意图切换（惯用开局/打法）；战役开始载入历史
     //     并预测玩家惯用开局 → 按反制表预设我方开局（每队仅一次，不覆盖玩家队）；战役结束落盘
     //     %TEMP%\CombatBrain_habits.json（手动 JSON 序列化，零第三方依赖）——绝不做每帧 IO。
@@ -26,6 +27,11 @@ namespace CombatBrain.Ai
     public sealed class ExperienceGlue
     {
         private const string HabitsFileName = "CombatBrain_habits.json";
+
+        // P0-② 反制判定（窗口杀伤速率 vs 基线）阈值：
+        private const float MinWindowSeconds = 2f; // 意图窗口短于 2s 不判定（防噪声）
+        private const float SuccessRatio = 1.5f;   // 敌掉人速率 ≥ 基线×1.5 → 套路见效
+        private const float CounteredRatio = 0.5f; // 敌掉人速率 ≤ 基线×0.5 → 被反制
 
         private static readonly int[] AllTacticIntents =
         {
@@ -42,6 +48,13 @@ namespace CombatBrain.Ai
         // 每队：上一意图 + 切换时敌队存活数（反制判定用）
         private readonly Dictionary<int, int> _lastIntent = new Dictionary<int, int>();
         private readonly Dictionary<int, int> _lastEnemyAlive = new Dictionary<int, int>();
+
+        // P0-② 反制判定窗口基线（每场实例，随 Attach 重建）：意图窗口累计（不含当前窗口）。
+        // _lastIntentTime：上次意图切换时刻（e.Time = 战斗累计秒）；_baselineDrop/_baselineTime：
+        // 历史窗口累计敌净掉人 / 累计时长 → 基线速率 = drop/time（整场平均口径）。
+        private readonly Dictionary<int, float> _lastIntentTime = new Dictionary<int, float>();
+        private readonly Dictionary<int, float> _baselineDrop = new Dictionary<int, float>();
+        private readonly Dictionary<int, float> _baselineTime = new Dictionary<int, float>();
 
         private int _playerTeamIndex = -1;
         private Func<int, int> _enemyAliveOf;
@@ -112,21 +125,66 @@ namespace CombatBrain.Ai
                 _playCounts[e.IntValue] = c + 1;
             }
 
-            // 己方反制判定：对比上一意图切换时的敌队存活数
+            // 己方反制判定（P0-②）：意图窗口内敌队杀伤速率 vs 历史基线。
+            // 旧实现按「存活数变化方向」判定——正常战斗敌存活只降不升（除非增援）→ OnSuccess 恒触发、
+            // OnCountered 永不触发，冷宫/换招名存实亡。现改为：rate = 窗口内敌净掉人 / 窗口时长，
+            // 与「不含本窗口的历史平均速率」对比：显著更快 → OnSuccess；显著更慢或敌存活回升 → OnCountered；
+            // 窗口过短 / 无基线（首个窗口）→ 不判定，只累计基线（防噪声）。
             int prev;
+            float now = e.Time;
             int aliveNow = _enemyAliveOf != null ? Math.Max(0, _enemyAliveOf(team)) : 0;
             if (_lastIntent.TryGetValue(team, out prev) && prev >= 0)
             {
-                int alivePrev;
-                if (_lastEnemyAlive.TryGetValue(team, out alivePrev) && alivePrev >= 0 && aliveNow != alivePrev)
+                float prevTime;
+                if (_lastIntentTime.TryGetValue(team, out prevTime))
                 {
-                    CounterMatrix m = GetMatrix(team);
-                    if (aliveNow > alivePrev) m.OnCountered(prev); // 敌队存活上升：套路被反制
-                    else m.OnSuccess(prev);                        // 敌队存活下降：套路见效
+                    float windowSec = now - prevTime;
+                    int alivePrev;
+                    if (windowSec >= MinWindowSeconds
+                        && _lastEnemyAlive.TryGetValue(team, out alivePrev) && alivePrev >= 0)
+                    {
+                        int drop = alivePrev - aliveNow; // 正=敌净掉人；负=敌存活回升（增援/己方溃退）
+                        float baselineDrop, baselineTime;
+                        _baselineDrop.TryGetValue(team, out baselineDrop);
+                        _baselineTime.TryGetValue(team, out baselineTime);
+
+                        if (baselineTime > 0f) // 有历史基线才判定；首个窗口只累计
+                        {
+                            float baseRate = baselineDrop / baselineTime;
+                            float rate = drop / windowSec;
+                            CounterMatrix m = GetMatrix(team);
+                            if (drop < 0 || rate <= baseRate * CounteredRatio)
+                            {
+                                m.OnCountered(prev); // 敌存活回升/推进，或掉人速率显著低于基线 → 被反制
+                                CombatLog.Log(string.Format(
+                                    "[F10] Team {0} 意图 {1} 被反制（窗口 {2:0.0}s 掉人 {3}，基线 {4:0.00}/s）",
+                                    team, (IntentType)prev, windowSec, drop, baseRate));
+                            }
+                            else if (IsClearlyFaster(rate, baseRate))
+                            {
+                                m.OnSuccess(prev); // 掉人速率显著高于基线 → 套路见效
+                                CombatLog.Log(string.Format(
+                                    "[F10] Team {0} 意图 {1} 见效（窗口 {2:0.0}s 掉人 {3}，基线 {4:0.00}/s）",
+                                    team, (IntentType)prev, windowSec, drop, baseRate));
+                            }
+                            // 中性区（≈基线）：不判定，防噪声
+                        }
+
+                        // 累计基线：正掉人计入（回升按 0 不计负），时长照计 → 基线=场均掉人速率（保守口径）
+                        _baselineDrop[team] = baselineDrop + Math.Max(0, drop);
+                        _baselineTime[team] = baselineTime + windowSec;
+                    }
                 }
             }
             _lastIntent[team] = e.IntValue;
             _lastEnemyAlive[team] = aliveNow;
+            _lastIntentTime[team] = now;
+        }
+
+        // 显著更快判据：基线无掉人 → 任何正掉人都是显著提升；否则需 ≥ 基线×SuccessRatio
+        private static bool IsClearlyFaster(float rate, float baseRate)
+        {
+            return baseRate <= 0f ? rate > 0f : rate >= baseRate * SuccessRatio;
         }
 
         // ---------- 反制表（开局预判 → 我方开局） ----------
