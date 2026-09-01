@@ -25,6 +25,7 @@ namespace CombatBrain.Ai
     //   * Formation.CountOfUnits —— L182；Formation.CachedMedianPosition —— L247
     //   * MovementOrder.MovementOrderStop/Charge/FallBack/ChargeToTarget(Formation) —— MovementOrder.cs L53/L57/L61/L397
     //   * ArrangementOrder.ArrangementOrderLine/Column —— ArrangementOrder.cs L36/L34
+    //   * Team.IsPlayerTeam —— Team.cs L40（v1.4.8，P0-④ 玩家队豁免）
     // 说明：命令覆盖原版编队 AI 的移动/阵型指令（F8 即波次指挥）；玩家手动下令的覆盖不做特判（骨架阶段）。
     public sealed class CavalryGlue
     {
@@ -57,7 +58,7 @@ namespace CombatBrain.Ai
 
             foreach (Team team in mission.Teams)
             {
-                if (team == null) continue;
+                if (team == null || team.IsPlayerTeam) continue; // P0-④ 玩家队豁免：玩家骑兵归玩家指挥，不接管波次
                 IntentType intent = getIntent != null ? getIntent(team) : IntentType.Attack;
 
                 foreach (Formation formation in team.FormationsIncludingEmpty)

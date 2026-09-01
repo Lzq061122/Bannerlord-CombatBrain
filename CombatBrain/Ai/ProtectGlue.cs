@@ -30,6 +30,7 @@ namespace CombatBrain.Ai
     //   IsCavalryFormation / IsRangedCavalryFormation @ RBM Utilities.cs:792；ClosestSignificantlyLargeEnemyFormation
     //   @ RBM OverrideBehaviorVanguard.cs:36 / FormationQuerySystem.cs L275；IsPositionInsideBoundaries @ RBM RBMBehaviorArcherFlank.cs:150
     //   Formation.CachedMedianPosition @ CavalryGlue.cs:68（F8 已用）；Mission.Teams 遍历 @ MoraleGlue.cs:76
+    //   Team.IsPlayerTeam @ Team.cs L40（v1.4.8，P0-④ 玩家队豁免统一判断）
     public sealed class ProtectGlue
     {
         public const float TickInterval = 0.5f;
@@ -50,7 +51,7 @@ namespace CombatBrain.Ai
 
             foreach (Team team in mission.Teams)
             {
-                if (team == null) continue;
+                if (team == null || team.IsPlayerTeam) continue; // P0-④ 玩家队豁免：不对玩家编队下令（与玩家指挥打架）
                 IntentType intent = getIntent != null ? getIntent(team) : IntentType.Attack;
                 bool active = intent == IntentType.ProtectArcher || HasPressedRanged(team); // F2 目标识别 or 受压自保
                 _protecting[team.TeamIndex] = active;
@@ -156,7 +157,7 @@ namespace CombatBrain.Ai
             int n = 0;
             foreach (Team team in mission.Teams)
             {
-                if (team == null || team == own) continue;
+                if (team == null || team == own || team.IsPlayerTeam) continue; // P0-④ 玩家队不纳入敌队聚合（玩家领域）
                 foreach (Formation f in team.FormationsIncludingEmpty)
                 {
                     if (f == null || f.CountOfUnits == 0) continue;

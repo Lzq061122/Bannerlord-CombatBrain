@@ -31,6 +31,7 @@ namespace CombatBrain.Ai
     //   Formation.GetCountOfUnitsWithCondition(Func<Agent,bool>) @ Formation.cs L438（sage）
     //   FormationQuerySystem.IsInfantryFormation @ RBM OverrideBehaviorAdvance.cs:149；IsCavalryFormation @ Utilities.cs:792；
     //   IsRangedCavalryFormation @ Utilities.cs:1035；Formation.CachedMedianPosition @ CavalryGlue.cs:68（F8 已用）
+    //   Team.IsPlayerTeam @ Team.cs L40（v1.4.8，P0-④ 玩家队豁免）
     //   已核实但本层不需要：Agent.TryToWieldWeaponInSlot（Agent.cs L4121，F9）、GetLookDirection（L1453，F6）、
     //   SetMovementDirection（L2402，F6）——站定为编队级 Stop 命令，换武器/朝向由引擎架枪动画自理。
     public sealed class BraceGlue
@@ -60,7 +61,7 @@ namespace CombatBrain.Ai
 
             foreach (Team team in mission.Teams)
             {
-                if (team == null) continue;
+                if (team == null || team.IsPlayerTeam) continue; // P0-④ 玩家队豁免：不对玩家编队下站定令
                 IntentType intent = getIntent != null ? getIntent(team) : IntentType.Attack;
                 Vec2 tc = TeamCenter(team);
                 if (VecMath.Dist(playerCenter.x, playerCenter.y, tc.x, tc.y) > DriveRadius) continue; // 剧场效应
@@ -133,7 +134,7 @@ namespace CombatBrain.Ai
             bool found = false;
             foreach (Team team in mission.Teams)
             {
-                if (team == null || team == own) continue;
+                if (team == null || team == own || team.IsPlayerTeam) continue; // P0-④ 玩家队不纳入敌骑扫描（玩家领域）
                 foreach (Formation f in team.FormationsIncludingEmpty)
                 {
                     if (f == null || f.CountOfUnits == 0 || f.QuerySystem == null) continue;

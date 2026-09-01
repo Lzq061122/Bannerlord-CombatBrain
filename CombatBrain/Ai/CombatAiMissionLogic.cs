@@ -270,6 +270,12 @@ namespace CombatBrain.Ai
                 _opponent.Update(own, enemy, _elapsed, ref v, out belief);
                 state.LastVector = v;
 
+                // P0-④ 玩家队豁免意图决策：意图是玩家指挥的领域——玩家队不 Evaluate/不发布
+                // IntentSwitched（否则 F10 把自家引擎输出当玩家套路，循环自证；玩家队也不消费本层
+                // 意图，4 个编队层 Glue 已同步豁免）。态势向量/士气照算（LastVector 仍供 GetMorale
+                // 消费），仅跳过决策与事件发布。IsPlayerTeam @ Team.cs L40（v1.4.8 已核实）。
+                if (own.IsPlayerTeam) continue;
+
                 IntentType newIntent;
                 if (state.Engine.Evaluate(v, belief, 0.5f, out newIntent))
                 {

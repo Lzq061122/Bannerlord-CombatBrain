@@ -24,6 +24,7 @@ namespace CombatBrain.Ai
     //   * Formation.SetMovementOrder(MovementOrder) @ Formation.cs L685；SetArrangementOrder @ L722
     //   * MovementOrder.MovementOrderRetreat @ MovementOrder.cs L55；MovementOrderStop @ L57
     //   * ArrangementOrder.ArrangementOrderLine @ ArrangementOrder.cs L36
+    //   * Team.IsPlayerTeam @ Team.cs L40（v1.4.8，P0-④ 玩家队豁免）
     //   * Agent.Formation @ Agent.cs L1098（OnAgentRemoved 阵亡归队记录）
     public sealed class MoraleGlue
     {
@@ -75,7 +76,7 @@ namespace CombatBrain.Ai
 
             foreach (Team team in mission.Teams)
             {
-                if (team == null) continue;
+                if (team == null || team.IsPlayerTeam) continue; // P0-④ 玩家队豁免：不接管玩家编队士气/撤退
                 IntentType intent = getIntent != null ? getIntent(team) : IntentType.Attack;
                 float teamMoral = getMorale != null ? getMorale(team) : 0.5f;
 

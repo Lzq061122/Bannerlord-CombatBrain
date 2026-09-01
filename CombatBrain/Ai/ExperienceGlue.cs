@@ -17,6 +17,9 @@ namespace CombatBrain.Ai
     //   * CampaignHabits（跨战役套路记忆）：记录玩家队每次意图切换（惯用开局/打法）；战役开始载入历史
     //     并预测玩家惯用开局 → 按反制表预设我方开局（每队仅一次，不覆盖玩家队）；战役结束落盘
     //     %TEMP%\CombatBrain_habits.json（手动 JSON 序列化，零第三方依赖）——绝不做每帧 IO。
+    //     P0-④ 止损（review #3 循环自证）：IntentSwitched 事件源是自家 TickIntent 引擎输出，记玩家队
+    //     = 学自己——已停止记录玩家队套路并停用旧盘加载（_habitsEnabled=false）；方案 a（拦截玩家真实
+    //     命令，公开事件符合反作弊闸）留待信息迷雾接线时一起做，届时置回 true 并接入玩家命令事件。
     // 性能预算：纯事件驱动（事件驱动 > 低频周期 > 每帧）——无轮询、无每帧逻辑；
     //   载入仅战役开始一次、落盘仅 OnMissionEnd 一次。
     // API 核实（BannerlordSage，游戏 v1.4.8）：
@@ -60,6 +63,12 @@ namespace CombatBrain.Ai
         private Func<int, int> _enemyAliveOf;
         private bool _attached;
         private bool _saved; // 落盘幂等守卫（OnMissionStateFinalized / OnClearScene 双钩子只写一次）
+
+        // P0-④ 止损（review #3）：习惯记忆数据源修复前整体停用——记录已删（OnIntentSwitched），
+        // 旧盘 %TEMP%\CombatBrain_habits.json 是自家 TickIntent 自证产物，加载被此开关挡下，
+        // 避免旧循环数据继续影响开局预判（TryGetOpening→Predict 恒空）。方案 a（拦截玩家真实命令）
+        // 接线后置回 true 并恢复记录/加载。
+        private bool _habitsEnabled = false;
 
         /// <summary>
         /// 战役开始接入：订阅事件总线 + 载入跨战役套路记忆（一次 IO）。
@@ -116,14 +125,11 @@ namespace CombatBrain.Ai
             if (e == null) return;
             int team = e.Id;
 
-            // 玩家队：记录惯用打法（每次意图切换 = 一次套路）
-            if (_playerTeamIndex >= 0 && team == _playerTeamIndex)
-            {
-                _habits.Record(e.IntValue);
-                int c;
-                _playCounts.TryGetValue(e.IntValue, out c);
-                _playCounts[e.IntValue] = c + 1;
-            }
+            // P0-④ 止损（review #3 循环自证）：IntentSwitched 事件源是自家 TickIntent 引擎输出，
+            // 把「玩家队意图切换」记入 CampaignHabits = 学自己。决策：停止记录（方案 b）；方案 a
+            // （拦截玩家真实命令，如 OrderIssued/OrderType——公开可观察事件，符合反作弊闸）留待
+            // 信息迷雾接线时一起实现。双保险：TickIntent 已对玩家队停止发布（CombatAiMissionLogic
+            // TickIntent），_habitsEnabled 同时停用旧盘加载（LoadHabits）。
 
             // 己方反制判定（P0-②）：意图窗口内敌队杀伤速率 vs 历史基线。
             // 旧实现按「存活数变化方向」判定——正常战斗敌存活只降不升（除非增援）→ OnSuccess 恒触发、
@@ -237,6 +243,7 @@ namespace CombatBrain.Ai
 
         private void LoadHabits()
         {
+            if (!_habitsEnabled) return; // P0-④ 停用加载（旧数据为自家引擎自证产物，见字段注释）
             try
             {
                 if (!File.Exists(HabitsPath)) return;
