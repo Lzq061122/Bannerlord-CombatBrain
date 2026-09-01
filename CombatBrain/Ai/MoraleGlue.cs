@@ -87,7 +87,11 @@ namespace CombatBrain.Ai
                     if (f == null || f.CountOfUnits == 0) continue;
                     if (f.QuerySystem == null || f.QuerySystem.IsCavalryFormation) continue;
                     Vec2 med = f.CachedMedianPosition.AsVec2;
-                    if (VecMath.Dist(med.x, med.y, playerCenter.x, playerCenter.y) > DriveRadius) continue;
+                    if (VecMath.Dist(med.x, med.y, playerCenter.x, playerCenter.y) > DriveRadius)
+                    {
+                        ReleaseOutsideRadius(f); // P0-⑤ 剧场外释放 FSM 状态与命令（幂等）
+                        continue;
+                    }
                     EnsureState(f, teamMoral);
                     _teamFormations.Add(f);
                 }
@@ -182,6 +186,18 @@ namespace CombatBrain.Ai
                     break;
                 // Hold / RequestRetreat：不下令（保持原状，等待批准）
             }
+        }
+
+        // P0-⑤ 剧场外命令泄漏修复：编队出 70m 后士气/撤退 FSM 停驱，已下发的 Retreat/Stop 与 FSM
+        // 状态会永久残留。出半径 → 丢弃 FSM 状态 + 下发 Advance 交回原版；回场后 EnsureState 重建。
+        // 幂等：无状态直接返回，重复调用无害。_breakWindows 为事件驱动输入（RecordCasualty 写入），保留。
+        private void ReleaseOutsideRadius(Formation formation)
+        {
+            if (!_states.ContainsKey(formation)) return;
+            _states.Remove(formation);
+            _stateElapsed.Remove(formation);
+            _morale.Remove(formation);
+            formation.SetMovementOrder(MovementOrder.MovementOrderAdvance); // 交回原版默认推进（MovementOrder.cs L59，v1.4.8 核实）
         }
 
         private void EnsureState(Formation formation, float teamMoral)

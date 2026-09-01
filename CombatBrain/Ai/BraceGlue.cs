@@ -64,7 +64,11 @@ namespace CombatBrain.Ai
                 if (team == null || team.IsPlayerTeam) continue; // P0-④ 玩家队豁免：不对玩家编队下站定令
                 IntentType intent = getIntent != null ? getIntent(team) : IntentType.Attack;
                 Vec2 tc = TeamCenter(team);
-                if (VecMath.Dist(playerCenter.x, playerCenter.y, tc.x, tc.y) > DriveRadius) continue; // 剧场效应
+                if (VecMath.Dist(playerCenter.x, playerCenter.y, tc.x, tc.y) > DriveRadius)
+                {
+                    ReleaseOutsideRadius(team); // P0-⑤ 剧场外释放剧集状态与 Stop 命令（幂等）
+                    continue;
+                }
 
                 float d;
                 bool hasCav = TryNearestEnemyCavDist(team, tc, mission, out d);
@@ -125,6 +129,24 @@ namespace CombatBrain.Ai
             {
                 if (f != null) _armed.Remove(f);
             }
+        }
+
+        // P0-⑤ 剧场外命令泄漏修复：剧集激活（Stop 已下发）后玩家走出 70m，Tick 不再驱动本队——
+        // 若不清理，_episode/_armed 永不释放、Stop 永久残留（原版 AI 未必覆盖）。出半径 → 复位剧集
+        // + 距离基线 + 只给本剧集站定过的步兵编队（_armed 命中）下发 Advance 恢复命令，交回原版。
+        // 幂等：未激活直接返回，重复调用无害（不刷命令）。
+        private void ReleaseOutsideRadius(Team team)
+        {
+            if (!IsBracing(team.TeamIndex)) return;
+            _episode[team.TeamIndex] = false;
+            _prevCavDist[team.TeamIndex] = -1f; // 距离基线复位（回场后按首次观测重新武装）
+            foreach (Formation f in team.FormationsIncludingEmpty)
+            {
+                if (f == null || f.CountOfUnits == 0) continue;
+                if (_armed.ContainsKey(f))
+                    f.SetMovementOrder(MovementOrder.MovementOrderAdvance); // 交回原版默认推进（MovementOrder.cs L59，v1.4.8 核实）
+            }
+            Release(team); // 清 _armed 评估缓存（幂等）
         }
 
         // 最近敌骑距离：遍历敌编队（O(敌编队数)，只读 CachedMedianPosition），仅骑兵/骑射编队。

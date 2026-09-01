@@ -54,11 +54,34 @@ namespace CombatBrain.Ai
                 if (team == null || team.IsPlayerTeam) continue; // P0-④ 玩家队豁免：不对玩家编队下令（与玩家指挥打架）
                 IntentType intent = getIntent != null ? getIntent(team) : IntentType.Attack;
                 bool active = intent == IntentType.ProtectArcher || HasPressedRanged(team); // F2 目标识别 or 受压自保
-                _protecting[team.TeamIndex] = active;
-                if (!active) continue;
+                if (!active)
+                {
+                    _protecting[team.TeamIndex] = false;
+                    continue;
+                }
                 Vec2 tc = TeamCenter(team);
-                if (VecMath.Dist(playerCenter.x, playerCenter.y, tc.x, tc.y) > DriveRadius) continue; // 剧场效应
+                if (VecMath.Dist(playerCenter.x, playerCenter.y, tc.x, tc.y) > DriveRadius)
+                {
+                    ReleaseOutsideRadius(team); // P0-⑤ 剧场外撤销已下发 Move 命令（幂等，仅首拍生效）
+                    continue;
+                }
+                _protecting[team.TeamIndex] = true;
                 Execute(team, mission);
+            }
+        }
+
+        // P0-⑤ 剧场外命令泄漏修复：出半径后 Move 停刷，但已下发的 Move/Stop 若不撤销会残留
+        // （原版 TeamAI 未必覆盖）。仅当上拍仍在保护中时下发一次 Advance 交回原版；_protecting
+        // 随即复位 → 幂等（重复调用无害、不刷命令）。
+        private void ReleaseOutsideRadius(Team team)
+        {
+            bool wasProtecting;
+            if (!_protecting.TryGetValue(team.TeamIndex, out wasProtecting) || !wasProtecting) return;
+            _protecting[team.TeamIndex] = false;
+            foreach (Formation f in team.FormationsIncludingEmpty)
+            {
+                if (f == null || f.CountOfUnits == 0) continue;
+                f.SetMovementOrder(MovementOrder.MovementOrderAdvance); // 交回原版默认推进（MovementOrder.cs L59，v1.4.8 核实）
             }
         }
 

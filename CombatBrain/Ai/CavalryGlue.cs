@@ -67,11 +67,26 @@ namespace CombatBrain.Ai
                     if (formation.QuerySystem == null || !formation.QuerySystem.IsCavalryFormation) continue; // 只接骑兵编队
 
                     Vec2 med = formation.CachedMedianPosition.AsVec2;
-                    if (VecMath.Dist(med.x, med.y, playerCenter.x, playerCenter.y) > DriveRadius) continue; // 剧场效应
+                    if (VecMath.Dist(med.x, med.y, playerCenter.x, playerCenter.y) > DriveRadius)
+                    {
+                        ReleaseOutsideRadius(formation); // P0-⑤ 剧场外释放 FSM 状态与命令（幂等）
+                        continue;
+                    }
 
                     TickFormation(formation, intent, dt);
                 }
             }
+        }
+
+        // P0-⑤ 剧场外命令泄漏修复：骑兵编队出 70m 后 FSM 停驱，最后下发的命令（Charge/FallBack 等）
+        // 与 FSM 状态会永久残留。出半径 → 丢弃 FSM 状态 + 下发 Advance 交回原版；回场后从 SCOUT
+        // 重新开始。幂等：无状态直接返回，重复调用无害。
+        private void ReleaseOutsideRadius(Formation formation)
+        {
+            if (!_states.ContainsKey(formation)) return;
+            _states.Remove(formation);
+            _stateElapsed.Remove(formation);
+            formation.SetMovementOrder(MovementOrder.MovementOrderAdvance); // 交回原版默认推进（MovementOrder.cs L59，v1.4.8 核实）
         }
 
         private void TickFormation(Formation formation, IntentType teamIntent, float dt)
