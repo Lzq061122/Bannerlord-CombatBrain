@@ -50,6 +50,13 @@ namespace CombatBrain.Ai
         private float _intentTimer;
         private float _blockTimer;
 
+        // P0-③ 感知管线停用开关（用户裁决「先停用止损」）：KnowledgeView.TryGet 无消费者（全仓库仅定义处），
+        // TickPerception 每 1s 对每队全图遍历 mission.Agents 白烧性能（违反「禁全图」）。
+        // 仅停用调用，Perception\KnowledgeView/VisibilityOracle/PerceptionPipeline 类保留供后续信息迷雾接线；
+        // 恢复 = 改回 true（接线消费 KnowledgeView 后）。
+        // 用 static readonly 而非 const：const false 会让编译器报 CS0162 不可达代码警告，质量门要求 0 警。
+        private static readonly bool PerceptionEnabled = false;
+
         // F6 走位/绕侧胶水：0.2s 低频周期 + LOD 剧场效应 + 跳帧聚合（见 MovementGlue.cs）
         private readonly MovementGlue _movement = new MovementGlue();
 
@@ -137,7 +144,10 @@ namespace CombatBrain.Ai
             int agentCount = mission.Agents.Count;
 
             _bench.BeginSection("perception");
-            TickPerception(mission);
+            if (PerceptionEnabled) // P0-③ 停用：KnowledgeView 无消费者，白烧全图遍历；保留方法供接线恢复
+            {
+                TickPerception(mission);
+            }
             _bench.EndSection("perception");
 
             _bench.BeginSection("lod");
