@@ -45,6 +45,9 @@ namespace CombatBrain.Ai
 
         private readonly MBList<Agent> _enemyBuffer = new MBList<Agent>();
         private readonly DecisionJitterGlue _jitter = new DecisionJitterGlue(); // F12 横切
+        // P0-① 抖动时间基准：每 agent「上次调用 ShouldAct 的时刻」（now 基准 = 传入的 now），
+        // 真实决策间隔 = now - last；传帧 dt 会让维持期/疲劳慢 6~20 倍。
+        private readonly Dictionary<int, float> _lastJitterTime = new Dictionary<int, float>();
         private readonly Dictionary<int, bool> _fallingBack = new Dictionary<int, bool>(); // 后撤态（F6 跳过依据）
         private RangedTarget[] _targets = new RangedTarget[16]; // 可复用目标数组（仅必要时扩容）
         private Agent[] _targetAgents = new Agent[16];          // 与 _targets 平行，免 Index 反查
@@ -61,11 +64,12 @@ namespace CombatBrain.Ai
         /// </summary>
         /// <param name="mission">当前 Mission</param>
         /// <param name="dt">帧时间</param>
+        /// <param name="now">战斗累计时间（P0-①：F12 真实决策间隔基准，= CombatAiMissionLogic._elapsed）</param>
         /// <param name="getLod">agent LOD 查询（剧场上限）</param>
         /// <param name="getProfile">agent FighterProfile 查询（F12 纪律，真实兵种分类）</param>
         /// <param name="getMorale">队士气查询（F12 输入）</param>
         /// <param name="isSurvivalRetreat">F7 求生撤退态（撤退中跳过远程决策，优先级最高）</param>
-        public void Tick(Mission mission, float dt,
+        public void Tick(Mission mission, float dt, float now,
             Func<int, LodLevel> getLod,
             Func<Agent, FighterProfile> getProfile,
             Func<Team, float> getMorale,
@@ -97,19 +101,20 @@ namespace CombatBrain.Ai
                 EquipmentIndex rangedSlot = FindRangedSlot(agent);
                 if (rangedSlot == EquipmentIndex.None) continue; // 非远程兵
 
-                ApplyRanged(mission, agent, team, rangedSlot, dt, getProfile(agent), getMorale(team));
+                ApplyRanged(mission, agent, team, rangedSlot, now, getProfile(agent), getMorale(team));
             }
         }
 
         public void Remove(int agentIndex)
         {
             _jitter.Remove(agentIndex);
+            _lastJitterTime.Remove(agentIndex);
             _fallingBack.Remove(agentIndex);
         }
 
         // ---------- 决策 ----------
 
-        private void ApplyRanged(Mission mission, Agent agent, Team team, EquipmentIndex rangedSlot, float dt, FighterProfile profile, float morale)
+        private void ApplyRanged(Mission mission, Agent agent, Team team, EquipmentIndex rangedSlot, float now, FighterProfile profile, float morale)
         {
             Vec2 pos = agent.Position.AsVec2;
             mission.GetNearbyEnemyAgents(pos, ScanRadius, team, _enemyBuffer);
@@ -156,9 +161,16 @@ namespace CombatBrain.Ai
             bool inMeleeRange = nearest != null && nearestD <= MeleeRange;
             RangedFallback fallback = RangedBrain.DecideFallback(ammoRatio, inMeleeRange);
 
+            // P0-① 真实决策间隔：now - last（跨节流+跳帧空拍也在内）；首次近似=节流周期；时钟异常兜底。
+            float last;
+            if (!_lastJitterTime.TryGetValue(agent.Index, out last)) last = now - TickInterval;
+            float elapsed = now - last;
+            if (elapsed <= 0f) elapsed = TickInterval;
+            _lastJitterTime[agent.Index] = now;
+
             // F12 横切：犹豫/延迟维持期跳过本轮（拟人化，不侵入纯逻辑）
             float signedWobble;
-            if (!_jitter.ShouldAct(agent.Index, dt, DecisionJitterGlue.DisciplineFrom(profile), morale, out signedWobble))
+            if (!_jitter.ShouldAct(agent.Index, elapsed, DecisionJitterGlue.DisciplineFrom(profile), morale, out signedWobble))
                 return;
 
             switch (fallback)

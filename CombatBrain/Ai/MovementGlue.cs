@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using TaleWorlds.Core;
 using TaleWorlds.Library;
 using TaleWorlds.MountAndBlade;
@@ -51,6 +52,10 @@ namespace CombatBrain.Ai
         // F12 决策抖动&服从度横切包装（走位决策前调用，详见 DecisionJitterGlue.cs）
         private readonly DecisionJitterGlue _jitter = new DecisionJitterGlue();
 
+        // P0-① 抖动时间基准：每 agent「上次调用 ShouldAct 的时刻」，用于算真实决策间隔（now - last）。
+        // 调用点被节流(0.2s)+跳帧，传帧 dt 会让维持期/疲劳慢 6~20 倍；此处按真实经过时间计。
+        private readonly Dictionary<int, float> _lastJitterTime = new Dictionary<int, float>();
+
         // 决策直方图（仅日志观测，10s 一报）
         private int _cAdvance;
         private int _cStepBack;
@@ -65,11 +70,12 @@ namespace CombatBrain.Ai
         /// </summary>
         /// <param name="mission">当前 Mission</param>
         /// <param name="dt">帧时间</param>
+        /// <param name="now">战斗累计时间（P0-①：F12 真实决策间隔基准，= CombatAiMissionLogic._elapsed）</param>
         /// <param name="getLod">agent 的 LOD 查询（剧场上限）</param>
         /// <param name="getProfile">agent 的 FighterProfile 查询（绕侧意识，真实兵种分类）</param>
         /// <param name="getMorale">agent 所属队士气查询（F12 输入，0..1）</param>
         /// <param name="isSurvivalRetreat">F7 求生撤退 / F9 远程后撤态查询（撤退/后撤中跳过走位，优先级最高）</param>
-        public void Tick(Mission mission, float dt, Func<int, LodLevel> getLod, Func<Agent, FighterProfile> getProfile, Func<Team, float> getMorale, Func<int, bool> isSurvivalRetreat)
+        public void Tick(Mission mission, float dt, float now, Func<int, LodLevel> getLod, Func<Agent, FighterProfile> getProfile, Func<Team, float> getMorale, Func<int, bool> isSurvivalRetreat)
         {
             _sinceTick += dt;
             if (_sinceTick < TickInterval) return;
@@ -98,7 +104,7 @@ namespace CombatBrain.Ai
                 int step = BehaviorLodScheduler.StepFor(lod, agentCount);
                 if (((agent.Index + _phase) % step) != 0) { _cSkipped++; continue; } // 跳帧决策
 
-                ApplyDecision(mission, agent, team, getProfile(agent), dt, getMorale(team));
+                ApplyDecision(mission, agent, team, getProfile(agent), now, getMorale(team));
             }
 
             _sinceReport += dt;
@@ -109,7 +115,7 @@ namespace CombatBrain.Ai
             }
         }
 
-        private void ApplyDecision(Mission mission, Agent agent, Team team, FighterProfile profile, float dt, float morale)
+        private void ApplyDecision(Mission mission, Agent agent, Team team, FighterProfile profile, float now, float morale)
         {
             Vec2 pos = agent.Position.AsVec2;
 
@@ -162,9 +168,17 @@ namespace CombatBrain.Ai
 
             MovementDecision d2 = MovementController.Decide(ctx);
 
+            // P0-① 真实决策间隔：now - last（跨节流+跳帧的空拍也在内，维持期/疲劳按真实战斗时间走）；
+            // 首次近似为一个节流周期；时钟异常（elapsed<=0）兜底为节流周期。
+            float last;
+            if (!_lastJitterTime.TryGetValue(agent.Index, out last)) last = now - TickInterval;
+            float elapsed = now - last;
+            if (elapsed <= 0f) elapsed = TickInterval;
+            _lastJitterTime[agent.Index] = now;
+
             // F12 横切：犹豫/延迟维持期跳过本轮；走形扰动移动方向（拟人化，不侵入纯逻辑）
             float signedWobble;
-            if (_jitter.ShouldAct(agent.Index, dt, DecisionJitterGlue.DisciplineFrom(profile), morale, out signedWobble))
+            if (_jitter.ShouldAct(agent.Index, elapsed, DecisionJitterGlue.DisciplineFrom(profile), morale, out signedWobble))
             {
                 Vec2 dir = new Vec2(d2.MoveX, d2.MoveY);
                 if (dir.LengthSquared > 1e-6f && Math.Abs(signedWobble) > 0.01f)
@@ -279,6 +293,7 @@ namespace CombatBrain.Ai
         public void RemoveAgent(int agentIndex)
         {
             _jitter.Remove(agentIndex);
+            _lastJitterTime.Remove(agentIndex);
         }
 
         private void CountAction(MoveAction action)

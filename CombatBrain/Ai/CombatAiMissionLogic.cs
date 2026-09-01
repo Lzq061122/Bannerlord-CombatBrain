@@ -70,6 +70,9 @@ namespace CombatBrain.Ai
 
         // F12 决策抖动横切：格挡决策点（L3）独立实例，避免与走位共用延迟计时
         private readonly DecisionJitterGlue _jitterBlock = new DecisionJitterGlue();
+        // P0-① 抖动时间基准：每 agent「上次调用 _jitterBlock.ShouldAct 的时刻」（now = _elapsed），
+        // 真实决策间隔 = now - last；传帧 dt 会让维持期/疲劳慢 6~20 倍。
+        private readonly Dictionary<int, float> _lastBlockJitter = new Dictionary<int, float>();
 
         // F2 对手建模胶水：0.5s 编队级事件聚合（8 信号 → 敌方意图信念）+ 新 4 维填充
         // （EnemCav/FlankEx/Gap/Skirm，t11 A1）；读不懂 → belief=null 不注入（见 OpponentModelGlue.cs）
@@ -374,7 +377,7 @@ namespace CombatBrain.Ai
         private void TickMovement(Mission mission, float dt)
         {
             // F7 求生撤退 / F9 远程后撤中的兵跳过走位（求生/后撤优先级高于走位）
-            _movement.Tick(mission, dt, GetLod, GetProfile, GetMorale,
+            _movement.Tick(mission, dt, _elapsed, GetLod, GetProfile, GetMorale,
                 i => _survival.IsRetreating(i) || _ranged.IsFallingBack(i));
         }
 
@@ -389,7 +392,7 @@ namespace CombatBrain.Ai
 
         private void TickRanged(Mission mission, float dt)
         {
-            _ranged.Tick(mission, dt, GetLod, GetProfile, GetMorale, _survival.IsRetreating);
+            _ranged.Tick(mission, dt, _elapsed, GetLod, GetProfile, GetMorale, _survival.IsRetreating);
         }
 
         // ---------- F8 骑兵波次（编队级） ----------
@@ -482,10 +485,19 @@ namespace CombatBrain.Ai
                 float confidence;
                 if (PredictiveBlock.TryPredict(stats, defenderProfile, attackerProfile.FeintRate, out predicted, out confidence))
                 {
+                    // P0-① 真实决策间隔：now(_elapsed) - last（跨 0.1s 节流+跳帧空拍也在内）；
+                    // 首次近似=节流周期 0.1s；时钟异常兜底 0.1s。
+                    float now = _elapsed;
+                    float last;
+                    if (!_lastBlockJitter.TryGetValue(defender.Index, out last)) last = now - 0.1f;
+                    float elapsed = now - last;
+                    if (elapsed <= 0f) elapsed = 0.1f;
+                    _lastBlockJitter[defender.Index] = now;
+
                     // F12 横切：犹豫/延迟维持期跳过本轮举盾（拟人化反应迟滞，不侵入纯逻辑）
                     float signedWobble;
                     if (_jitterBlock.ShouldAct(
-                        defender.Index, dt,
+                        defender.Index, elapsed,
                         DecisionJitterGlue.DisciplineFrom(defenderProfile),
                         GetMorale(defender.Team), out signedWobble))
                     {
@@ -536,6 +548,7 @@ namespace CombatBrain.Ai
                 _survival.Remove(affectedAgent.Index);
                 _ranged.Remove(affectedAgent.Index);
                 _jitterBlock.Remove(affectedAgent.Index);
+                _lastBlockJitter.Remove(affectedAgent.Index); // P0-① 清理时间基准
                 _morale.RecordCasualty(affectedAgent.Formation, _elapsed); // F11 脱阵窗口（事件驱动）
             }
         }

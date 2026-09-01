@@ -46,6 +46,9 @@ namespace CombatBrain.Ai
 
         // 每 agent 常驻状态
         private readonly DecisionJitterGlue _jitter = new DecisionJitterGlue(); // F12 横切（撤退前犹豫/走形）
+        // P0-① 抖动时间基准：每 agent「上次调用 ShouldAct 的时刻」（now 基准 = 传入的 now），
+        // 真实决策间隔 = now - last；传帧 dt 会让维持期/疲劳慢 6~20 倍。
+        private readonly Dictionary<int, float> _lastJitterTime = new Dictionary<int, float>();
         private readonly Dictionary<int, bool> _wasCritical = new Dictionary<int, bool>(); // 濒死线跃迁检测
         private readonly Dictionary<int, bool> _retreating = new Dictionary<int, bool>();  // 撤退态（F6 跳过依据）
 
@@ -137,7 +140,7 @@ namespace CombatBrain.Ai
 
                 if (action == SurvivalAction.RetreatToAllies)
                 {
-                    ApplyRetreat(mission, agent, team, nearestEnemy, pos, dt, getProfile(agent), getMorale(team));
+                    ApplyRetreat(mission, agent, team, nearestEnemy, pos, now, getProfile(agent), getMorale(team));
                 }
                 else
                 {
@@ -149,6 +152,7 @@ namespace CombatBrain.Ai
         public void Remove(int agentIndex)
         {
             _jitter.Remove(agentIndex);
+            _lastJitterTime.Remove(agentIndex);
             _wasCritical.Remove(agentIndex);
             _retreating.Remove(agentIndex);
         }
@@ -164,7 +168,7 @@ namespace CombatBrain.Ai
         }
 
         private void ApplyRetreat(Mission mission, Agent agent, Team team, Agent nearestEnemy, Vec2 pos,
-            float dt, FighterProfile profile, float morale)
+            float now, FighterProfile profile, float morale)
         {
             Vec2 target = FindRetreatTarget(mission, agent, team, nearestEnemy, pos);
             float dx = target.x - pos.x;
@@ -176,9 +180,16 @@ namespace CombatBrain.Ai
                 return;
             }
 
+            // P0-① 真实决策间隔：now - last（跨节流+跳帧空拍也在内）；首次近似=节流周期；时钟异常兜底。
+            float last;
+            if (!_lastJitterTime.TryGetValue(agent.Index, out last)) last = now - TickInterval;
+            float elapsed = now - last;
+            if (elapsed <= 0f) elapsed = TickInterval;
+            _lastJitterTime[agent.Index] = now;
+
             // F12 横切：犹豫/延迟维持期本轮不跑；走形扰动撤退方向（拟人化，不侵入纯逻辑）
             float signedWobble;
-            if (_jitter.ShouldAct(agent.Index, dt, DecisionJitterGlue.DisciplineFrom(profile), morale, out signedWobble))
+            if (_jitter.ShouldAct(agent.Index, elapsed, DecisionJitterGlue.DisciplineFrom(profile), morale, out signedWobble))
             {
                 Vec2 dir = new Vec2(dx / len, dy / len);
                 if (Math.Abs(signedWobble) > 0.01f)

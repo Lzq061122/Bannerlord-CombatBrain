@@ -51,6 +51,9 @@ namespace CombatBrain.Ai
         /// <summary>
         /// 决策执行前调用。返回 true=允许执行本轮决策；false=跳过（犹豫中/延迟维持期）。
         /// signedWobble：带符号走形幅度（-1..1），仅用于扰动非零移动向量。
+        /// dt 语义：该 agent 距上次调用 ShouldAct 的「真实间隔（秒）」，由节流+跳帧的调用方
+        /// （MovementGlue/SurvivalGlue/RangedGlue/TickBlock）按实际经过时间计算传入，不得传帧 dt——
+        /// 否则维持期扣减（DelayRemaining）与疲劳累计（ActiveTime）按帧步进，慢 6~20 倍（P0-①）。
         /// </summary>
         public bool ShouldAct(int agentIndex, float dt, float discipline, float morale, out float signedWobble)
         {
