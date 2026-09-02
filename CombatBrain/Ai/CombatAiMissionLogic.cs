@@ -675,6 +675,7 @@ namespace CombatBrain.Ai
                 _ranged.Remove(affectedAgent.Index);
                 _jitterBlock.Remove(affectedAgent.Index);
                 _lastBlockJitter.Remove(affectedAgent.Index); // P0-① 清理时间基准
+                _attackStats.Remove(affectedAgent.Index); // P2-① 预测格挡统计随 Agent 生命周期清理（否则字典只增不减，GetAttackStats 会重建）
                 _attackSuppression.Remove(affectedAgent.Index); // T3 攻击抑制 Agent 生命周期清理
                 _morale.RecordCasualty(affectedAgent.Formation, _elapsed); // F11 脱阵窗口（事件驱动）
             }
