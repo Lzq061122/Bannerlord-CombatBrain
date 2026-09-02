@@ -93,6 +93,10 @@ namespace CombatBrain.Ai
         // （0.5s 编队级低频下令，无长杆降级；见 BraceGlue.cs）
         private readonly BraceGlue _brace = new BraceGlue();
 
+        // T3 攻击抑制/恢复模式工具：供 H3/H4 复用（存原值→置 0→每帧恢复重判，见 AttackSuppression.cs）。
+        // 当前仅建立 OnAgentRemoved 生命周期清理挂点；实际抑制/恢复由 H3/H4 决策点调用。
+        private readonly AttackSuppression _attackSuppression = new AttackSuppression();
+
         public override void OnBehaviorInitialize()
         {
             base.OnBehaviorInitialize();
@@ -581,6 +585,7 @@ namespace CombatBrain.Ai
                 _ranged.Remove(affectedAgent.Index);
                 _jitterBlock.Remove(affectedAgent.Index);
                 _lastBlockJitter.Remove(affectedAgent.Index); // P0-① 清理时间基准
+                _attackSuppression.Remove(affectedAgent.Index); // T3 攻击抑制 Agent 生命周期清理
                 _morale.RecordCasualty(affectedAgent.Formation, _elapsed); // F11 脱阵窗口（事件驱动）
             }
         }

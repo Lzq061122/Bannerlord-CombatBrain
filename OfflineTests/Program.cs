@@ -71,6 +71,9 @@ namespace OfflineTests
             Console.WriteLine("== T1 DecisionBranchTally ==");
             TestObservationTally();
 
+            Console.WriteLine("== T3 AttackSuppressionState ==");
+            TestAttackSuppression();
+
             Console.WriteLine();
             if (_failures == 0)
             {
@@ -651,6 +654,32 @@ namespace OfflineTests
             t.Observe("block.predicted");
             t.Reset();
             Check(t.TotalObserved == 0 && t.DistinctObserved == 0, "Reset clears");
+        }
+
+        // T3 攻击抑制/恢复核心状态（AttackSuppressionState，纯逻辑）
+        private static void TestAttackSuppression()
+        {
+            var s = new AttackSuppressionState();
+            Check(s.Count == 0 && !s.IsSuppressed(3), "init none suppressed");
+            float v;
+            Check(!s.TryRestore(3, out v), "restore unsuppressed -> false");
+
+            bool first = s.TrySave(3, 0.8f);
+            Check(first && s.IsSuppressed(3) && s.Count == 1, "save current value + suppressed");
+            Check(!s.TrySave(3, 0.5f), "re-save while suppressed -> false (keep original)");
+
+            Check(s.TryRestore(3, out v) && Math.Abs(v - 0.8f) < 1e-6f, "restore returns saved 0.8");
+            Check(!s.IsSuppressed(3) && s.Count == 0, "restored -> clear");
+
+            s.TrySave(5, 0.3f);
+            s.Clear(5);
+            Check(!s.IsSuppressed(5) && s.Count == 0, "lifecycle Remove clears entry");
+
+            s.TrySave(7, 0.9f);
+            s.TrySave(8, 0.4f);
+            Check(s.Count == 2, "two suppressed tracked");
+            s.ClearAll();
+            Check(s.Count == 0, "ClearAll empties");
         }
 
         private static int idxDefend()
