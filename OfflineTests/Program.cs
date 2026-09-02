@@ -9,6 +9,7 @@ using CombatBrain.Compliance;
 using CombatBrain.Morale;
 using CombatBrain.Experience;
 using CombatBrain.Intent;
+using CombatBrain.Ai;
 
 namespace OfflineTests
 {
@@ -66,6 +67,9 @@ namespace OfflineTests
             TestProtectPlan();
             Console.WriteLine("== F4 BracePlan ==");
             TestBracePlan();
+
+            Console.WriteLine("== T1 DecisionBranchTally ==");
+            TestObservationTally();
 
             Console.WriteLine();
             if (_failures == 0)
@@ -626,6 +630,27 @@ namespace OfflineTests
             Check(!BracePlan.ShouldIssueBraceOrder(false, true, false), "no episode -> no stand");
             Check(!BracePlan.ShouldIssueBraceOrder(true, false, false), "degraded -> no stand");
             Check(!BracePlan.ShouldIssueBraceOrder(true, true, true), "survival retreat takes over");
+        }
+
+        // T1 决策分支计数器（DecisionBranchTally，纯逻辑）
+        private static void TestObservationTally()
+        {
+            var t = new DecisionBranchTally(new[] { "move.advance", "intent.switch", "block.predicted" });
+            Check(t.BranchCount == 3, "tally 3 branches registered");
+            Check(t.TotalObserved == 0 && t.DistinctObserved == 0, "init empty");
+            Check(t.SnapshotAndReset() == string.Empty, "empty snapshot -> empty");
+            t.Observe("move.advance");
+            t.Observe("move.advance");
+            t.Observe("intent.switch");
+            Check(t.TotalObserved == 3, "3 observes counted");
+            Check(t.DistinctObserved == 2, "2 distinct branches observed");
+            Check(t.SnapshotAndReset() == "intent.switch=1 move.advance=2", "sorted aggregated snapshot");
+            Check(t.TotalObserved == 0, "snapshot resets total");
+            t.Observe("unknown.branch"); // 未注册忽略
+            Check(t.TotalObserved == 0, "unregistered branch ignored (no alloc/logic growth)");
+            t.Observe("block.predicted");
+            t.Reset();
+            Check(t.TotalObserved == 0 && t.DistinctObserved == 0, "Reset clears");
         }
 
         private static int idxDefend()

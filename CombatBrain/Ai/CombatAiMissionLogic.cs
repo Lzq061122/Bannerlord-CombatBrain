@@ -104,6 +104,10 @@ namespace CombatBrain.Ai
             if (_initialized) return;
             _initialized = true;
 
+            // T1 观测管线：挂载决策分支计数器 + 补丁/管线活性自检（单一 CombatLog 渠道）
+            DecisionObservatory.Attach();
+            if (DecisionObservatory.Instance != null) DecisionObservatory.Instance.CheckHygiene();
+
             _replay = new ReplayRecorder(_bus);
 
             var mission = Mission;
@@ -142,6 +146,9 @@ namespace CombatBrain.Ai
 
             _elapsed += dt;
             int agentCount = mission.Agents.Count;
+
+            // T1 观测管线：低频周期导出（3s 窗内聚合，随帧累计耗时可忽略；单一 CombatLog 渠道）
+            if (DecisionObservatory.Instance != null) DecisionObservatory.Instance.ReportIfDue(_elapsed);
 
             _bench.BeginSection("perception");
             if (PerceptionEnabled) // P0-③ 停用：KnowledgeView 无消费者，白烧全图遍历；保留方法供接线恢复
@@ -290,6 +297,7 @@ namespace CombatBrain.Ai
                     newIntent = (IntentType)adjusted;
 
                     state.LastIntent = newIntent;
+                    DecisionObservatory.Observe(DecisionObservatory.BIntentSwitch); // T1 决策分支计数
                     _bus.Publish(new CombatEvent
                     {
                         Kind = CombatEventKind.IntentSwitched,
@@ -501,6 +509,9 @@ namespace CombatBrain.Ai
                 float confidence;
                 if (PredictiveBlock.TryPredict(stats, defenderProfile, attackerProfile.FeintRate, out predicted, out confidence))
                 {
+                    // T1 决策分支计数：产生格挡预测 = 决策分支命中
+                    DecisionObservatory.Observe(DecisionObservatory.BBlockPred);
+
                     // P0-① 真实决策间隔：now(_elapsed) - last（跨 0.1s 节流+跳帧空拍也在内）；
                     // 首次近似=节流周期 0.1s；时钟异常兜底 0.1s。
                     float now = _elapsed;
@@ -518,6 +529,11 @@ namespace CombatBrain.Ai
                         GetMorale(defender.Team), out signedWobble))
                     {
                         defender.EnforceShieldUsage(ToUsageDefend(predicted));
+                    }
+                    else
+                    {
+                        // T1 决策分支计数：F12 犹豫/维持期让过本轮举盾
+                        DecisionObservatory.Observe(DecisionObservatory.BBlockSkip);
                     }
                 }
             }

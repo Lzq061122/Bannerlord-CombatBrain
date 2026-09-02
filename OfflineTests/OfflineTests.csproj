@@ -26,6 +26,7 @@
     <Compile Include="..\CombatBrain\Intent\BeliefIntentEngine.cs" Link="Intent\BeliefIntentEngine.cs" />
     <Compile Include="..\CombatBrain\Intent\ProtectPlan.cs" Link="Intent\ProtectPlan.cs" />
     <Compile Include="..\CombatBrain\Intent\BracePlan.cs" Link="Intent\BracePlan.cs" />
+    <Compile Include="..\CombatBrain\Ai\DecisionBranchTally.cs" Link="Ai\DecisionBranchTally.cs" />
   </ItemGroup>
 
 </Project>

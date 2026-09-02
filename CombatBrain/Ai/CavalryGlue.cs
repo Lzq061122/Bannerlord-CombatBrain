@@ -136,6 +136,7 @@ namespace CombatBrain.Ai
                 _states[formation] = next;
                 _stateElapsed[formation] = 0f;
                 IssueOrder(formation, next, enemy != null ? enemy.Formation : null);
+                DecisionObservatory.Observe(DecisionObservatory.BCavChange); // T1 决策分支计数：编队 FSM 转移
                 CombatLog.Log(string.Format(
                     "[F8] 骑兵编队(team {0}) {1} → {2}", formation.Team.TeamIndex, state, next));
             }

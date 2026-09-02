@@ -191,6 +191,7 @@ namespace CombatBrain.Ai
 
                 case RangedFallback.SwitchToMelee:
                     _fallingBack[agent.Index] = false;
+                    DecisionObservatory.Observe(DecisionObservatory.BRangedFall); // T1 决策分支计数：远程弹药回退
                     EquipmentIndex melee = FindMeleeSlot(agent);
                     if (melee != EquipmentIndex.None)
                         agent.TryToWieldWeaponInSlot(melee, Agent.WeaponWieldActionType.WithAnimation, false);
@@ -200,6 +201,7 @@ namespace CombatBrain.Ai
 
                 case RangedFallback.Retreat:
                     Retreat(agent, pos, nearest, signedWobble);
+                    DecisionObservatory.Observe(DecisionObservatory.BRangedFall); // T1 决策分支计数：远程后撤回退
                     break;
             }
         }

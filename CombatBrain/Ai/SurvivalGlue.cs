@@ -196,6 +196,7 @@ namespace CombatBrain.Ai
                     dir = DecisionJitterGlue.ApplyWobble(dir, signedWobble);
                 agent.SetMovementDirection(dir);
                 _retreating[agent.Index] = true;
+                DecisionObservatory.Observe(DecisionObservatory.BSurvRetreat); // T1 决策分支计数
             }
         }
 
@@ -296,6 +297,7 @@ namespace CombatBrain.Ai
                     });
                 }
                 CombatLog.Log(string.Format("[F7] Team {0} 编队重伤触发重整信号", team.TeamIndex));
+                DecisionObservatory.Observe(DecisionObservatory.BSurvReform); // T1 决策分支计数
                 _reformArmed[team.TeamIndex] = false; // 单发触发
             }
             else if (!windowFull)

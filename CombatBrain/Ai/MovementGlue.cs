@@ -300,12 +300,27 @@ namespace CombatBrain.Ai
         {
             switch (action)
             {
-                case MoveAction.Advance: _cAdvance++; break;
-                case MoveAction.StepBack: _cStepBack++; break;
+                case MoveAction.Advance:
+                    _cAdvance++;
+                    DecisionObservatory.Observe(DecisionObservatory.BMoveAdvance); // T1 决策分支计数
+                    break;
+                case MoveAction.StepBack:
+                    _cStepBack++;
+                    DecisionObservatory.Observe(DecisionObservatory.BMoveBack);
+                    break;
                 case MoveAction.StrafeLeft:
-                case MoveAction.StrafeRight: _cStrafe++; break;
-                case MoveAction.RetreatToAllies: _cRetreat++; break;
-                default: _cHold++; break;
+                case MoveAction.StrafeRight:
+                    _cStrafe++;
+                    DecisionObservatory.Observe(DecisionObservatory.BMoveStrafe);
+                    break;
+                case MoveAction.RetreatToAllies:
+                    _cRetreat++;
+                    DecisionObservatory.Observe(DecisionObservatory.BMoveRetreat);
+                    break;
+                default:
+                    _cHold++;
+                    DecisionObservatory.Observe(DecisionObservatory.BMoveHold);
+                    break;
             }
         }
 
