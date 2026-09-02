@@ -196,6 +196,7 @@ namespace CombatBrain.Ai
                     dir = DecisionJitterGlue.ApplyWobble(dir, signedWobble);
                 agent.SetMovementDirection(dir);
                 _retreating[agent.Index] = true;
+                InGameFeedback.Count("求生撤退"); // 游戏内反馈：个体级聚合（防逐兵刷屏）
                 DecisionObservatory.Observe(DecisionObservatory.BSurvRetreat); // T1 决策分支计数
             }
         }

@@ -332,6 +332,9 @@ namespace CombatBrain.Ai
                     CombatLog.Log(string.Format(
                         "Team {0} 意图切换 → {1}  [{2}]",
                         own.TeamIndex, newIntent, v.ToString()));
+                    InGameFeedback.Notify("意图", // 游戏内反馈：战术级全量（0.5s 拍低频事件）
+                        string.Format("[意图] Team {0} → {1}", own.TeamIndex, newIntent),
+                        InGameFeedback.TacticalColor);
                 }
             }
         }
@@ -626,6 +629,7 @@ namespace CombatBrain.Ai
                 {
                     // T1 决策分支计数：产生格挡预测 = 决策分支命中
                     DecisionObservatory.Observe(DecisionObservatory.BBlockPred);
+                    InGameFeedback.Count("格挡预测"); // 游戏内反馈：个体级聚合（防 500 人逐兵刷屏）
 
                     // P0-① 真实决策间隔：now(_elapsed) - last（跨 0.1s 节流+跳帧空拍也在内）；
                     // 首次近似=节流周期 0.1s；时钟异常兜底 0.1s。

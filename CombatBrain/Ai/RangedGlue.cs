@@ -209,6 +209,7 @@ namespace CombatBrain.Ai
         private void Retreat(Agent agent, Vec2 pos, Agent nearest, float signedWobble)
         {
             _fallingBack[agent.Index] = true;
+            InGameFeedback.Count("远程后撤"); // 游戏内反馈：个体级聚合（防逐兵刷屏）
             Vec2 dir;
             if (nearest != null)
             {

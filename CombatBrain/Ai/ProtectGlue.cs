@@ -56,6 +56,9 @@ namespace CombatBrain.Ai
                 bool active = intent == IntentType.ProtectArcher || HasPressedRanged(team); // F2 目标识别 or 受压自保
                 if (!active)
                 {
+                    bool wasOff; // 游戏内反馈：保护释放边沿（上拍保护中→本拍解除一次性输出）
+                    if (_protecting.TryGetValue(team.TeamIndex, out wasOff) && wasOff)
+                        InGameFeedback.Notify("保护", string.Format("[F3] Team {0} 保护释放", team.TeamIndex), InGameFeedback.FormationColor);
                     _protecting[team.TeamIndex] = false;
                     continue;
                 }
@@ -65,6 +68,10 @@ namespace CombatBrain.Ai
                     ReleaseOutsideRadius(team); // P0-⑤ 剧场外撤销已下发 Move 命令（幂等，仅首拍生效）
                     continue;
                 }
+                bool wasOn; // 游戏内反馈：保护激活边沿（上拍未保护→本拍激活一次性输出）
+                if (!_protecting.TryGetValue(team.TeamIndex, out wasOn) || !wasOn)
+                    InGameFeedback.Notify("保护",
+                        string.Format("[F3] Team {0} 保护激活（远程退后/殿后/骑兵回援）", team.TeamIndex), InGameFeedback.FormationColor);
                 _protecting[team.TeamIndex] = true;
                 Execute(team, mission);
             }
@@ -78,6 +85,8 @@ namespace CombatBrain.Ai
             bool wasProtecting;
             if (!_protecting.TryGetValue(team.TeamIndex, out wasProtecting) || !wasProtecting) return;
             _protecting[team.TeamIndex] = false;
+            InGameFeedback.Notify("保护", // 游戏内反馈：剧场外释放边沿（上方 wasProtecting 保证一次性）
+                string.Format("[F3] Team {0} 保护释放（剧场外，Move 已撤销）", team.TeamIndex), InGameFeedback.FormationColor);
             foreach (Formation f in team.FormationsIncludingEmpty)
             {
                 if (f == null || f.CountOfUnits == 0) continue;
