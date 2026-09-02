@@ -300,6 +300,9 @@ namespace OfflineTests
             Check(MoralePropagation.AtCollapse(0.5f, 0.6f), "high break rate -> collapse");
             Check(!MoralePropagation.AtCollapse(0.5f, 0.3f), "stable -> no collapse");
             Check(!MoralePropagation.AtCollapse(0.4f, 0f), "above threshold -> no collapse");
+            // t50 判据合理化：满士气+伤亡波不崩（伤亡先经存活率/传染拉低士气）；士气受创+高脱阵才加速崩
+            Check(!MoralePropagation.AtCollapse(1.0f, 0.6f), "full morale + casualty wave -> no collapse");
+            Check(MoralePropagation.AtCollapse(0.7f, 0.6f), "dented morale + high break rate -> collapse");
 
             var w = new BreakRateWindow(5f, 10);
             w.Record(0f);

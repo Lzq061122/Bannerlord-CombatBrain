@@ -37,6 +37,8 @@ namespace CombatBrain.Ai
         private const float TeamMoralBlend = 0.15f;       // 队级士气(F2)混入权重
         private const float ReformMoraleBoost = 0.15f;    // 重整完成士气回升
         private const float DesperateMoral = 0.15f;       // 绝望阈值：士气跌破即自动批准
+        private const float BreakRateRefSize = 20f;       // t50 脱阵率按编队规模归一的基准人数（≤基准不缩放）
+        private const float RequestMinDwell = 3f;         // t50 撤退请求最短停留：RequestRetreat 3s 内不因危机短暂解除回 Hold（迟滞）
 
         private float _sinceTick;
         private readonly List<Formation> _teamFormations = new List<Formation>(); // 每队可复用列表（零分配）
@@ -104,12 +106,15 @@ namespace CombatBrain.Ai
                 }
 
                 // 邻队聚合（O(n²)，n≤个位数）：先算各队 BreakRate 与本队 Moral
+                // t50 口径统一：脱阵率按编队规模归一（基准 20 人）——大编队正常伤亡波不再=满脱阵率，
+                // 与 getMorale（F2 存活率维，同为相对比例口径）对齐；崩判据见 MoralePropagation.AtCollapse
+                //（士气为主判据，脱阵率仅士气受创后加速）。
                 int n = _teamFormations.Count;
                 for (int i = 0; i < n; i++)
                 {
                     Formation self = _teamFormations[i];
                     FormationMorale m = _morale[self];
-                    m.BreakRate = RateOf(self, now);
+                    m.BreakRate = NormalizedRate(self, now);
                     float sumM = 0f;
                     float sumB = 0f;
                     for (int j = 0; j < n; j++)
@@ -118,7 +123,7 @@ namespace CombatBrain.Ai
                         Formation other = _teamFormations[j];
                         FormationMorale om = _morale[other];
                         sumM += om.Moral;
-                        sumB += RateOf(other, now);
+                        sumB += NormalizedRate(other, now);
                     }
                     float neighborMoralAvg = n > 1 ? sumM / (n - 1) : m.Moral;
                     float neighborBreakRate = n > 1 ? sumB / (n - 1) : 0f;
@@ -141,6 +146,9 @@ namespace CombatBrain.Ai
             bool collapse = MoralePropagation.AtCollapse(m.Moral, m.BreakRate);
             if (teamIntent == IntentType.Reform && state == RetreatState.RequestRetreat)
                 collapse = false; // F2 重整令：危机解除，撤销撤退请求
+            else if (state == RetreatState.RequestRetreat && !collapse && elapsed < RequestMinDwell)
+                collapse = true; // t50 迟滞：请求撤退最短停留 3s——阵亡事件进/出 5s 窗的抖动不再秒切回 Hold
+                                 //（消除 Hold↔RequestRetreat 0.5-1s 振荡；F2 Reform 撤销优先于迟滞）
 
             var inp = new RetreatInput
             {
@@ -225,6 +233,14 @@ namespace CombatBrain.Ai
         {
             BreakRateWindow w;
             return _breakWindows.TryGetValue(formation, out w) ? w.Rate(now) : 0f;
+        }
+
+        // t50 脱阵率按编队规模归一：基准 20 人（≤基准不缩放；100 人编队阵亡 5 人=0.1 而非 0.5），
+        // 消除「大编队正常伤亡波=满脱阵率」的口径失真（与 getMorale 存活率同为相对比例口径）。
+        private float NormalizedRate(Formation formation, float now)
+        {
+            float raw = RateOf(formation, now);
+            return raw * BreakRateRefSize / Math.Max(BreakRateRefSize, formation.CountOfUnits);
         }
 
         private static float DistanceToEnemy(Formation formation)

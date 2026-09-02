@@ -17,6 +17,9 @@ namespace CombatBrain.Morale
         public const float ContagionWeight = 0.40f;   // 邻队脱阵传染强度
         public const float CollapseThreshold = 0.30f; // 低于此值视为崩溃临界
         public const float BreakRateCollapse = 0.50f; // 脱阵斜率高于此值视为崩溃临界
+        public const float BreakMoralCap = 0.75f;     // t50：脱阵判崩的士气上限——士气 ≥ 此值时高伤亡不直接判崩
+                                                      //（伤亡波先经 F2 存活率/邻队传染拉低士气，跌破上限后高脱阵才加速崩溃；
+                                                      //  修复「士气=1.00 脱阵率0.60→RequestRetreat」的满士气撤退振荡）
 
         // 邻队对某队士气的净影响，返回新的士气 0..1。
         public static float Propagate(float ownMoral, float neighborMoralAvg, float neighborBreakRate)
@@ -27,9 +30,13 @@ namespace CombatBrain.Morale
         }
 
         // 是否已到崩溃临界(触发请求撤退/REFORM)。
+        // t50 判据合理化：士气崩溃（moral < CollapseThreshold）为主判据；高脱阵率
+        // （breakRate > BreakRateCollapse）仅在士气已受创（moral < BreakMoralCap）时作为加速器——
+        // 单次阵亡波（5s 窗内 ≥5 阵亡）不再让满士气编队秒切撤退。
         public static bool AtCollapse(float moral, float breakRate)
         {
-            return moral < CollapseThreshold || breakRate > BreakRateCollapse;
+            if (moral < CollapseThreshold) return true;
+            return breakRate > BreakRateCollapse && moral < BreakMoralCap;
         }
 
         private static float Clamp01(float v)
