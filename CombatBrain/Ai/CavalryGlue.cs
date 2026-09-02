@@ -13,7 +13,8 @@ namespace CombatBrain.Ai
     // 性能预算（三条铁律落地）：
     //   * 编队级聚合（聚合 > 遍历）：每 0.5s 只遍历各队非空编队（O(编队数)≈个位数），
     //     命令整编队，绝不逐兵每帧；无空间查询、无 MBList 遍历。
-    //   * 剧场效应：只接管玩家 70m（PlayerFocusRadius）内的骑兵编队，远处交原版 AI。
+    //   * 剧场效应：接管玩家 150m（CavalryDriveRadius，t48 骑兵扩剧场）内的骑兵编队；
+    //     150m 外仅暂停驱动（FSM 冻结），300m 外完整释放交回原版。
     //   * 命令只在 FSM 状态跃迁时下发一次（防每拍刷命令）。
     // 反贴脸卡死：CHARGE 触敌（两编队中位距 ≤6m）→ RECALL；RECALL 拉到 30m 外或 6s 超时 → REFORM；
     // REFORM 4s 超时 → SETUP；SETUP/SCOUT 超时兜底推进——任何状态都有出路。
@@ -31,7 +32,12 @@ namespace CombatBrain.Ai
     {
         public const float TickInterval = 0.5f;
 
-        private const float DriveRadius = 70f;   // 剧场上限：与 BehaviorLodScheduler.PlayerFocusRadius 对齐
+        private const float CavalryDriveRadius = 150f; // t48 骑兵剧场：冲锋距离远超步兵 70m 剧场——
+                                                       // 70m 会把出半径的骑兵编队 FSM 状态删除，回场重走
+                                                       // Scout→Setup，elapsed 永远攒不到超时 → 整场不冲（实测 P0）。
+                                                       // 150m 与步兵 70m 区分；150m 外仅暂停驱动（不删状态不下命令）。
+        private const float ReleaseRadius = 300f;      // 兜底：远离战场 2×剧场 → 完整释放（删状态+Advance 交回原版，
+                                                       // 保留 P0-⑤ 防命令泄漏语义；正常冲锋不会到 300m 外）
         private const float ImpactRadius = 6f;   // CHARGE 触敌判定半径（贴脸即回撤，防卡死）
         private const float RallyDistance = 30f; // RECALL 回撤达标距离
         private const float ChargeTimeout = 12f; // 各状态超时兜底（防任何卡死）
@@ -74,9 +80,17 @@ namespace CombatBrain.Ai
                     if (formation.QuerySystem == null || !formation.QuerySystem.IsCavalryFormation) continue; // 只接骑兵编队
 
                     Vec2 med = TeamGeometry.GetFormationPosition(formation, TeamPosKind.CachedMedian); // P1-④ 统一入口
-                    if (VecMath.Dist(med.x, med.y, playerCenter.x, playerCenter.y) > DriveRadius)
+                    float dist = VecMath.Dist(med.x, med.y, playerCenter.x, playerCenter.y);
+                    if (dist > ReleaseRadius)
                     {
-                        ReleaseOutsideRadius(formation); // P0-⑤ 剧场外释放 FSM 状态与命令（幂等）
+                        ReleaseOutsideRadius(formation); // 300m 外视为离开战场：完整释放（幂等，P0-⑤ 防命令残留保留）
+                        continue;
+                    }
+                    if (dist > CavalryDriveRadius)
+                    {
+                        // t48：150m 外仅暂停驱动——FSM 状态与 elapsed 冻结保留（不删状态不下命令），
+                        // 消除「出半径删状态→回场重走 Scout→Setup」的无限重置；冲锋跨出剧场也不被打断。
+                        // 权衡：剧场外短暂保留本 mod 命令（如冲锋中）比交回原版更符合骑兵行为；300m 外兜底释放。
                         continue;
                     }
 
@@ -85,9 +99,8 @@ namespace CombatBrain.Ai
             }
         }
 
-        // P0-⑤ 剧场外命令泄漏修复：骑兵编队出 70m 后 FSM 停驱，最后下发的命令（Charge/FallBack 等）
-        // 与 FSM 状态会永久残留。出半径 → 丢弃 FSM 状态 + 下发 Advance 交回原版；回场后从 SCOUT
-        // 重新开始。幂等：无状态直接返回，重复调用无害。
+        // 300m 外兜底释放（t48 收窄职责：150m 外仅暂停，不再删状态）：丢弃 FSM 状态 + 下发 Advance
+        // 交回原版，防命令永久残留（P0-⑤ 语义保留）。幂等：无状态直接返回，重复调用无害。
         private void ReleaseOutsideRadius(Formation formation)
         {
             if (!_states.ContainsKey(formation)) return;
@@ -152,12 +165,18 @@ namespace CombatBrain.Ai
             }
         }
 
-        // F2 意图 → 机会窗映射：侧翼=敌方阵线缺口；追击=敌骑冲锋结束空窗
+        // F2 意图 → 机会窗映射（t48 拓宽）：进攻性意图均可触发冲锋——
+        //   Attack/Flank/Harass=正面有敌即阵线缺口（EnemyLineGap）；Pursue=敌溃追击（EnemyChargeEnded）。
+        //   修复前仅 Flank/Pursue 映射，而意图引擎几乎不产生这两个意图（实测整场只有
+        //   BraceFormation/Defend/ProtectArcher）→ 机会窗恒 None、骑兵整场不冲。
+        // 防守/重组意图（Defend/ProtectArcher/BraceFormation/Retreat/Reform）不冲（保持原语义）。
         private static OpportunityType MapOpportunity(IntentType intent)
         {
             switch (intent)
             {
-                case IntentType.Flank: return OpportunityType.EnemyLineGap;
+                case IntentType.Attack:
+                case IntentType.Flank:
+                case IntentType.Harass: return OpportunityType.EnemyLineGap;
                 case IntentType.Pursue: return OpportunityType.EnemyChargeEnded;
                 default: return OpportunityType.None;
             }
