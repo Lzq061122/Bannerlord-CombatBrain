@@ -332,7 +332,7 @@ namespace CombatBrain.Ai
                     CombatLog.Log(string.Format(
                         "Team {0} 意图切换 → {1}  [{2}]",
                         own.TeamIndex, newIntent, v.ToString()));
-                    InGameFeedback.Notify("意图", // 游戏内反馈：战术级全量（0.5s 拍低频事件）
+                    InGameFeedback.NotifyTactical("意图", // 游戏内反馈：战术级全量（0.5s 拍低频事件，正常模式显示）
                         string.Format("[意图] Team {0} → {1}", own.TeamIndex, newIntent),
                         InGameFeedback.TacticalColor);
                 }

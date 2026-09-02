@@ -329,8 +329,8 @@ namespace CombatBrain.Ai
             CombatLog.Log(string.Format(
                 "[F6] 走位决策 adv={0} back={1} strafe={2} retreat={3} hold={4} skip={5} jitter={6}",
                 _cAdvance, _cStepBack, _cStrafe, _cRetreat, _cHold, _cSkipped, _cJitter));
-            // 游戏内反馈：个体级聚合的周期汇总（走位逐兵决策经本周期聚合输出，防逐兵刷屏）
-            InGameFeedback.Notify("走位",
+            // 游戏内反馈：个体级聚合的周期汇总（仅 DebugMode 显示，正常模式静默；防逐兵刷屏）
+            InGameFeedback.NotifyIndividual("走位",
                 string.Format("[F6] 走位 冲={0} 退步={1} 侧移={2} 撤={3} 守={4} 跳={5}",
                     _cAdvance, _cStepBack, _cStrafe, _cRetreat, _cHold, _cSkipped),
                 InGameFeedback.AggregateColor);

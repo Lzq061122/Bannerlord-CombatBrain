@@ -169,7 +169,7 @@ namespace CombatBrain.Ai
                 CombatLog.Log(string.Format(
                     "[F11] 编队(team {0}) 士气={1:F2} 脱阵率={2:F2} {3} → {4}",
                     formation.Team.TeamIndex, m.Moral, m.BreakRate, state, next));
-                InGameFeedback.Notify("士气", // 游戏内反馈：编队级全量（撤退 FSM 跃迁一次性事件）
+                InGameFeedback.NotifyTactical("士气", // 游戏内反馈：编队级全量（撤退 FSM 跃迁一次性事件，正常模式显示）
                     string.Format("[F11] Team {0} {1} → {2}（士气 {3:F2}）", formation.Team.TeamIndex, state, next, m.Moral),
                     InGameFeedback.FormationColor);
             }

@@ -139,7 +139,7 @@ namespace CombatBrain.Ai
                 DecisionObservatory.Observe(DecisionObservatory.BCavChange); // T1 决策分支计数：编队 FSM 转移
                 CombatLog.Log(string.Format(
                     "[F8] 骑兵编队(team {0}) {1} → {2}", formation.Team.TeamIndex, state, next));
-                InGameFeedback.Notify("骑兵", // 游戏内反馈：编队级全量（FSM 跃迁一次性事件）
+                InGameFeedback.NotifyTactical("骑兵", // 游戏内反馈：编队级全量（FSM 跃迁一次性事件，正常模式显示）
                     string.Format("[F8] Team {0} 骑兵 {1} → {2}", formation.Team.TeamIndex, state, next),
                     InGameFeedback.FormationColor);
             }
