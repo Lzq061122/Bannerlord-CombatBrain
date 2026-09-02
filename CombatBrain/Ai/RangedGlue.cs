@@ -217,8 +217,9 @@ namespace CombatBrain.Ai
             else
             {
                 Formation f = agent.Formation;
+                Vec2 fpos = TeamGeometry.GetFormationPosition(f, TeamPosKind.SmoothedAverage); // P1-④ 统一入口
                 dir = f != null
-                    ? new Vec2(f.SmoothedAverageUnitPosition.x - pos.x, f.SmoothedAverageUnitPosition.y - pos.y)
+                    ? new Vec2(fpos.x - pos.x, fpos.y - pos.y)
                     : Vec2.Zero;
             }
             float len = (float)Math.Sqrt(dir.x * dir.x + dir.y * dir.y);

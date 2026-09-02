@@ -161,7 +161,7 @@ namespace CombatBrain.Ai
                 {
                     if (f == null || f.CountOfUnits == 0 || f.QuerySystem == null) continue;
                     if (!f.QuerySystem.IsCavalryFormation && !f.QuerySystem.IsRangedCavalryFormation) continue;
-                    Vec2 p = f.CachedMedianPosition.AsVec2;
+                    Vec2 p = TeamGeometry.GetFormationPosition(f, TeamPosKind.CachedMedian); // P1-④ 统一入口
                     float dist = VecMath.Dist(p.x, p.y, ownCenter.x, ownCenter.y);
                     if (!found || dist < d)
                     {
@@ -175,15 +175,9 @@ namespace CombatBrain.Ai
 
         private static Vec2 TeamCenter(Team team)
         {
-            float sx = 0f, sy = 0f;
-            int n = 0;
-            foreach (Formation f in team.FormationsIncludingEmpty)
-            {
-                if (f == null || f.CountOfUnits == 0) continue;
-                Vec2 p = f.CachedMedianPosition.AsVec2;
-                sx += p.x; sy += p.y; n++;
-            }
-            return n > 0 ? new Vec2(sx / n, sy / n) : Vec2.Zero;
+            // P1-④ 口径收敛：几何聚合进 TeamGeometry（CachedMedian 口径单一实现，原私有重复版删除）
+            Vec2 c;
+            return TeamGeometry.TryGetTeamCenter(team, TeamPosKind.CachedMedian, out c) ? c : Vec2.Zero;
         }
     }
 }

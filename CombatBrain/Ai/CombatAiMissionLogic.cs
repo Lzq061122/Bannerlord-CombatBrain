@@ -746,7 +746,7 @@ namespace CombatBrain.Ai
                 foreach (Formation f in state.Team.FormationsIncludingEmpty)
                 {
                     if (f == null || f.CountOfUnits == 0) continue;
-                    list.Add(f.SmoothedAverageUnitPosition);
+                    list.Add(TeamGeometry.GetFormationPosition(f, TeamPosKind.SmoothedAverage)); // P1-④ 统一入口
                 }
             }
             return list;
@@ -754,30 +754,18 @@ namespace CombatBrain.Ai
 
         private Vec2 GetTeamCenter(Team team)
         {
-            float sx = 0f;
-            float sy = 0f;
-            int n = 0;
-            foreach (Formation f in team.FormationsIncludingEmpty)
+            // P1-④ 口径收敛：几何聚合进 TeamGeometry（Smoothed 口径单一实现）；
+            // 此处仅保留胶水状态回退（无一兵保持上次中心，避免跳回原点把 Dist 打成 1.0 假象）
+            Vec2 result;
+            if (!TeamGeometry.TryGetTeamCenter(team, TeamPosKind.SmoothedAverage, out result))
             {
-                if (f == null || f.CountOfUnits == 0) continue;
-                Vec2 p = f.SmoothedAverageUnitPosition;
-                sx += p.x;
-                sy += p.y;
-                n++;
-            }
-
-            TeamState state;
-            if (n == 0)
-            {
-                // 无一兵：保持上次中心，避免跳回原点把 Dist 打成 1.0 假象
+                TeamState state;
                 return _states.TryGetValue(team.TeamIndex, out state) ? state.Center : Vec2.Zero;
             }
 
-            var result = Vec2.Zero;
-            result.x = sx / n;
-            result.y = sy / n;
-            if (_states.TryGetValue(team.TeamIndex, out state))
-                state.Center = result;
+            TeamState st;
+            if (_states.TryGetValue(team.TeamIndex, out st))
+                st.Center = result;
             return result;
         }
 
@@ -789,7 +777,7 @@ namespace CombatBrain.Ai
             foreach (Formation f in team.FormationsIncludingEmpty)
             {
                 if (f == null || f.CountOfUnits == 0) continue;
-                Vec2 p = f.SmoothedAverageUnitPosition;
+                Vec2 p = TeamGeometry.GetFormationPosition(f, TeamPosKind.SmoothedAverage); // P1-④ 统一入口
                 sum += VecMath.Dist(p.x, p.y, c.x, c.y);
                 n++;
             }

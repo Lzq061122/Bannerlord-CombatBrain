@@ -117,7 +117,7 @@ namespace CombatBrain.Ai
             // ① 远程退向步兵阵后（退后≠溃逃：目标是阵后受保护射击位；未受压不打断）
             foreach (Formation r in _ranged)
             {
-                Vec2 rp = r.CachedMedianPosition.AsVec2;
+                Vec2 rp = TeamGeometry.GetFormationPosition(r, TeamPosKind.CachedMedian); // P1-④ 统一入口
                 float enemyToR = VecMath.Dist(ec.x, ec.y, rp.x, rp.y);
                 if (!ProtectPlan.IsUnderPressure(enemyToR)) continue;
                 float tx, ty;
@@ -146,10 +146,11 @@ namespace CombatBrain.Ai
         // （SetVec2/GetNavMesh 校验顺序同 RBM RBMBehaviorArcherFlank.cs:149-150 / OverrideBehaviorProtectFlank.cs:186）
         private void IssueMove(Formation f, float tx, float ty, Mission mission)
         {
-            Vec2 cur = f.CachedMedianPosition.AsVec2;
+            Vec2 cur = TeamGeometry.GetFormationPosition(f, TeamPosKind.CachedMedian); // P1-④ 统一入口
             if (!ProtectPlan.ShouldIssueOrder(VecMath.Dist(cur.x, cur.y, tx, ty))) return; // 防抖
             Vec2 target = new Vec2(tx, ty);
             if (!mission.IsPositionInsideBoundaries(target)) return; // 界外不下令（RBM 同款）
+            // P1-④ 注：此处需完整 WorldPosition（SetVec2 重定向 + 导航点校验），非 Vec2 口径范畴，保留直读
             WorldPosition wp = f.CachedMedianPosition;
             wp.SetVec2(target);
             if (wp.GetNavMesh() == UIntPtr.Zero) return; // 无导航点（RBM 同款）
@@ -165,8 +166,9 @@ namespace CombatBrain.Ai
                 if (!f.QuerySystem.IsRangedFormation && !f.QuerySystem.IsRangedCavalryFormation) continue;
                 FormationQuerySystem enemy = f.QuerySystem.ClosestSignificantlyLargeEnemyFormation;
                 if (enemy == null || enemy.Formation == null) continue;
-                Vec2 a = f.CachedMedianPosition.AsVec2;
-                Vec2 b = enemy.Formation.CachedMedianPosition.AsVec2;
+                // P1-④ 统一入口：跨子系统敌我对比，双方显式同口径（CachedMedian）
+                Vec2 a = TeamGeometry.GetFormationPosition(f, TeamPosKind.CachedMedian);
+                Vec2 b = TeamGeometry.GetFormationPosition(enemy.Formation, TeamPosKind.CachedMedian);
                 if (ProtectPlan.IsUnderPressure(VecMath.Dist(a.x, a.y, b.x, b.y))) return true;
             }
             return false;
@@ -184,7 +186,7 @@ namespace CombatBrain.Ai
                 foreach (Formation f in team.FormationsIncludingEmpty)
                 {
                     if (f == null || f.CountOfUnits == 0) continue;
-                    Vec2 p = f.CachedMedianPosition.AsVec2;
+                    Vec2 p = TeamGeometry.GetFormationPosition(f, TeamPosKind.CachedMedian); // P1-④ 统一入口
                     sx += p.x; sy += p.y; n++;
                 }
             }
@@ -195,28 +197,16 @@ namespace CombatBrain.Ai
 
         private static Vec2 TeamCenter(Team team)
         {
-            float sx = 0f, sy = 0f;
-            int n = 0;
-            foreach (Formation f in team.FormationsIncludingEmpty)
-            {
-                if (f == null || f.CountOfUnits == 0) continue;
-                Vec2 p = f.CachedMedianPosition.AsVec2;
-                sx += p.x; sy += p.y; n++;
-            }
-            return n > 0 ? new Vec2(sx / n, sy / n) : Vec2.Zero;
+            // P1-④ 口径收敛：几何聚合进 TeamGeometry（CachedMedian 口径单一实现，原私有重复版删除）
+            Vec2 c;
+            return TeamGeometry.TryGetTeamCenter(team, TeamPosKind.CachedMedian, out c) ? c : Vec2.Zero;
         }
 
         private static Vec2 CenterOf(List<Formation> list)
         {
-            float sx = 0f, sy = 0f;
-            int n = 0;
-            foreach (Formation f in list)
-            {
-                if (f == null) continue;
-                Vec2 p = f.CachedMedianPosition.AsVec2;
-                sx += p.x; sy += p.y; n++;
-            }
-            return n > 0 ? new Vec2(sx / n, sy / n) : Vec2.Zero;
+            // P1-④ 口径收敛：列表为已过滤编队集合（仅跳 null，与原实现一致）
+            Vec2 c;
+            return TeamGeometry.TryCenterOf(list, TeamPosKind.CachedMedian, out c) ? c : Vec2.Zero;
         }
 
         // 编队离散度代理（阵宽）：中心平均距离。
@@ -228,7 +218,7 @@ namespace CombatBrain.Ai
             foreach (Formation f in list)
             {
                 if (f == null) continue;
-                Vec2 p = f.CachedMedianPosition.AsVec2;
+                Vec2 p = TeamGeometry.GetFormationPosition(f, TeamPosKind.CachedMedian); // P1-④ 统一入口
                 sum += VecMath.Dist(p.x, p.y, c.x, c.y);
                 n++;
             }

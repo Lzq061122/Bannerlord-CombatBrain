@@ -73,7 +73,7 @@ namespace CombatBrain.Ai
                 if (f == null || f.CountOfUnits == 0 || f.QuerySystem == null) continue;
                 int n = f.CountOfUnits;
                 total += n;
-                Vec2 fc = f.SmoothedAverageUnitPosition; // 只读位置 ✅
+                Vec2 fc = TeamGeometry.GetFormationPosition(f, TeamPosKind.SmoothedAverage); // 只读位置 ✅ P1-④ 统一入口
                 float fd = VecMath.Dist(fc.x, fc.y, oc.x, oc.y);
                 _enemyFcs.Add(fc);
 
@@ -139,7 +139,7 @@ namespace CombatBrain.Ai
             foreach (Formation f in own.FormationsIncludingEmpty)
             {
                 if (f == null || f.CountOfUnits == 0) continue;
-                _ownFcs.Add(f.SmoothedAverageUnitPosition);
+                _ownFcs.Add(TeamGeometry.GetFormationPosition(f, TeamPosKind.SmoothedAverage)); // P1-④ 统一入口
             }
 
             // ---- 逃跑数（存活率代理 ✅）：≥15% → 撤退视为真退，不判佯退 ----
@@ -238,20 +238,11 @@ namespace CombatBrain.Ai
 
         private Vec2 TeamCenter(Team team)
         {
-            float sx = 0f, sy = 0f;
-            int n = 0;
-            foreach (Formation f in team.FormationsIncludingEmpty)
-            {
-                if (f == null || f.CountOfUnits == 0) continue;
-                Vec2 p = f.SmoothedAverageUnitPosition;
-                sx += p.x; sy += p.y; n++;
-            }
+            // P1-④ 口径收敛：几何聚合进 TeamGeometry（Smoothed 口径单一实现）；
+            // 此处仅保留「无一兵保持上次中心」胶水状态回退
             Vec2 c;
-            if (n == 0)
-            {
-                return _teamCenter.TryGetValue(team.TeamIndex, out c) ? c : Vec2.Zero; // 无一兵保持上次中心
-            }
-            c = new Vec2(sx / n, sy / n);
+            if (!TeamGeometry.TryGetTeamCenter(team, TeamPosKind.SmoothedAverage, out c))
+                return _teamCenter.TryGetValue(team.TeamIndex, out c) ? c : Vec2.Zero;
             _teamCenter[team.TeamIndex] = c;
             return c;
         }

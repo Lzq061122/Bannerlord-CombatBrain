@@ -275,7 +275,7 @@ namespace CombatBrain.Ai
             }
 
             Formation f = agent.Formation;
-            if (f != null && f.CountOfUnits > 0) return f.SmoothedAverageUnitPosition;
+            if (f != null && f.CountOfUnits > 0) return TeamGeometry.GetFormationPosition(f, TeamPosKind.SmoothedAverage); // P1-④ 统一入口
 
             // 兜底：退离最近敌人 RetreatFallbackDist
             float dx = pos.x - nearestEnemy.Position.x;

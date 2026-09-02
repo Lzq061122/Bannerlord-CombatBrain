@@ -86,7 +86,7 @@ namespace CombatBrain.Ai
                 {
                     if (f == null || f.CountOfUnits == 0) continue;
                     if (f.QuerySystem == null || f.QuerySystem.IsCavalryFormation) continue;
-                    Vec2 med = f.CachedMedianPosition.AsVec2;
+                    Vec2 med = TeamGeometry.GetFormationPosition(f, TeamPosKind.CachedMedian); // P1-④ 统一入口
                     if (VecMath.Dist(med.x, med.y, playerCenter.x, playerCenter.y) > DriveRadius)
                     {
                         ReleaseOutsideRadius(f); // P0-⑤ 剧场外释放 FSM 状态与命令（幂等）
@@ -222,9 +222,10 @@ namespace CombatBrain.Ai
             FormationQuerySystem enemy = formation.QuerySystem != null
                 ? formation.QuerySystem.ClosestSignificantlyLargeEnemyFormation
                 : null;
-            Vec2 a = formation.CachedMedianPosition.AsVec2;
+            // P1-④ 统一入口：跨子系统敌我对比，双方显式同口径（CachedMedian）
+            Vec2 a = TeamGeometry.GetFormationPosition(formation, TeamPosKind.CachedMedian);
             Vec2 b = enemy != null && enemy.Formation != null
-                ? enemy.Formation.CachedMedianPosition.AsVec2
+                ? TeamGeometry.GetFormationPosition(enemy.Formation, TeamPosKind.CachedMedian)
                 : a;
             return VecMath.Dist(a.x, a.y, b.x, b.y);
         }

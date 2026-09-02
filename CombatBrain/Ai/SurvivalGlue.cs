@@ -246,7 +246,7 @@ namespace CombatBrain.Ai
             if (best != null) return best.Position.AsVec2;
 
             Formation f = agent.Formation;
-            if (f != null && f.CountOfUnits > 0) return f.SmoothedAverageUnitPosition;
+            if (f != null && f.CountOfUnits > 0) return TeamGeometry.GetFormationPosition(f, TeamPosKind.SmoothedAverage); // P1-④ 统一入口
 
             if (nearestEnemy != null)
             {
