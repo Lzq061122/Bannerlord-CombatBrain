@@ -45,6 +45,13 @@ namespace CombatBrain.Ai
         private readonly Dictionary<Formation, RetreatState> _states = new Dictionary<Formation, RetreatState>();
         private readonly Dictionary<Formation, float> _stateElapsed = new Dictionary<Formation, float>();
 
+        // 日志明细用：士气撤退 FSM 当前阶段名（无记录 → "-"，只读）
+        public string GetStateName(Formation formation)
+        {
+            RetreatState s;
+            return _states.TryGetValue(formation, out s) ? s.ToString() : "-";
+        }
+
         /// <summary>阵亡事件写入所属编队脱阵窗口（由 CombatAiMissionLogic.OnAgentRemoved 调用，事件驱动）。</summary>
         public void RecordCasualty(Formation formation, float now)
         {

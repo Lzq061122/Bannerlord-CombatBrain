@@ -49,6 +49,7 @@ namespace CombatBrain.Ai
         private float _lodTimer;
         private float _intentTimer;
         private float _blockTimer;
+        private float _formationLogTimer; // 日志增强：编队明细快照 5s 节拍
 
         // P0-③ 感知管线停用开关（用户裁决「先停用止损」）：KnowledgeView.TryGet 无消费者（全仓库仅定义处），
         // TickPerception 每 1s 对每队全图遍历 mission.Agents 白烧性能（违反「禁全图」）。
@@ -147,6 +148,14 @@ namespace CombatBrain.Ai
                 GetEnemyAliveCount);
 
             CombatLog.Log("CombatBrain 战斗AI已初始化, teams=" + _states.Count);
+
+            // 日志增强：阵营归属（消除 team 归属歧义——玩家队 index + 各队 Side/阵营/与玩家关系）
+            CombatLog.Log(string.Format("阵营归属: PlayerTeam=Team {0}",
+                mission.PlayerTeam != null ? mission.PlayerTeam.TeamIndex.ToString() : "无"));
+            foreach (TeamState st in _states.Values)
+            {
+                LogTeamIdentity(st.Team);
+            }
         }
 
         public override void OnMissionTick(float dt)
@@ -169,6 +178,14 @@ namespace CombatBrain.Ai
 
             // T1 观测管线：低频周期导出（3s 窗内聚合，随帧累计耗时可忽略；单一 CombatLog 渠道）
             if (DecisionObservatory.Instance != null) DecisionObservatory.Instance.ReportIfDue(_elapsed);
+
+            // 日志增强：编队级明细快照（5s 低频，看清兵种构成/位置/FSM 状态；拍内拼接、无每帧 IO）
+            _formationLogTimer -= dt;
+            if (_formationLogTimer <= 0f)
+            {
+                _formationLogTimer = 5f;
+                LogFormationDetails(mission);
+            }
 
             _bench.BeginSection("perception");
             if (PerceptionEnabled) // P0-③ 停用：KnowledgeView 无消费者，白烧全图遍历；保留方法供接线恢复
@@ -448,6 +465,57 @@ namespace CombatBrain.Ai
             {
                 _terrain = null; // 宁缺毋假：构建失败 → Height 维中性 0.5
                 CombatLog.Log("TerrainSampler 构建失败（Height 维降级中性 0.5）: " + e.Message);
+            }
+        }
+
+        // 日志增强：单队身份行（Side/阵营名/与玩家关系），开战一次。
+        // 阵营名取通用（GeneralAgent）所属文化 StringId（empire/battania 等，与验收示例 Empire/Battania 对应）。
+        // 不用 BasicCultureObject.Name：其为 TextObject（TaleWorlds.Localization 未引用，CS0012）；
+        // StringId 来自 MBObjectBase（TaleWorlds.ObjectSystem 已引用）。只读公开属性（反作弊闸不变）。
+        private void LogTeamIdentity(Team team)
+        {
+            if (team == null) return;
+            string culture = "-";
+            try
+            {
+                Agent general = team.GeneralAgent;
+                if (general != null && general.Character != null && general.Character.Culture != null)
+                    culture = general.Character.Culture.StringId;
+            }
+            catch { }
+            string relation = Mission.PlayerTeam == null ? "-"
+                : (team.IsPlayerTeam ? "玩家" : team.IsPlayerAlly ? "玩家盟友" : "敌方");
+            CombatLog.Log(string.Format("  Team {0}: Side={1} 阵营={2} 关系={3}",
+                team.TeamIndex, team.Side, culture, relation));
+        }
+
+        // 日志增强：编队级明细快照（5s 一拍，OnMissionTick 挂点）。构成按 QuerySystem 兵种旗标
+        // 分类（骑射优先于骑兵/射手判定），位置用 TeamGeometry CachedMedian 口径（与编队层下令一致），
+        // FSM 状态从各 Glue 只读 getter 读取，架枪/保护为队级（IsBracing/IsProtecting）。
+        // 低频（每 5s 一拍、每编队一条）+ 字符串拼接仅发生在拍内，无每帧 IO/分配。
+        private void LogFormationDetails(Mission mission)
+        {
+            foreach (TeamState state in _states.Values)
+            {
+                Team team = state.Team;
+                if (team == null) continue;
+                CombatLog.Log(string.Format("[编队明细] Team {0} 意图={1} 保护={2} 架枪={3}",
+                    team.TeamIndex, state.LastIntent,
+                    _protect.IsProtecting(team.TeamIndex) ? "是" : "否",
+                    _brace.IsBracing(team.TeamIndex) ? "是" : "否"));
+                foreach (Formation f in team.FormationsIncludingEmpty)
+                {
+                    if (f == null || f.CountOfUnits == 0 || f.QuerySystem == null) continue;
+                    FormationQuerySystem qs = f.QuerySystem;
+                    string kind = qs.IsRangedCavalryFormation ? "骑射"
+                        : qs.IsCavalryFormation ? "骑兵"
+                        : qs.IsRangedFormation ? "射手"
+                        : "步兵";
+                    Vec2 pos = TeamGeometry.GetFormationPosition(f, TeamPosKind.CachedMedian);
+                    CombatLog.Log(string.Format("  └ {0}x{1}@({2:F0},{3:F0}) 骑FSM={4} 士FSM={5}",
+                        kind, f.CountOfUnits, pos.x, pos.y,
+                        _cavalry.GetStateName(f), _morale.GetStateName(f)));
+                }
             }
         }
 

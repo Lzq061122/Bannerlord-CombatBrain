@@ -20,6 +20,7 @@ namespace CombatBrain
         private static readonly object _lock = new object();
         private static readonly string _logPath;
         private static readonly StringBuilder _buffer = new StringBuilder(FlushThresholdChars + 256);
+        private static readonly UTF8Encoding _utf8Bom = new UTF8Encoding(true); // 带 BOM，复用实例零分配
         private static Timer _flushTimer;
         private static bool _hooksInstalled;
 
@@ -56,7 +57,11 @@ namespace CombatBrain
         private static void FlushInternal()
         {
             if (_buffer.Length == 0) return;
-            File.AppendAllText(_logPath, _buffer.ToString());
+            // 日志增强：UTF-8 with BOM 落盘——PowerShell Get-Content 默认按 BOM 识别编码，
+            // 消除中文乱码（楠戝叺缂栭槦/澹皵 等，原为无 BOM 被 ANSI/GBK 误读）。
+            // 注：BOM 仅在文件新建/为空时写入一次（AppendAllText 追加模式不重复写 BOM）；
+            // 旧的无 BOM 日志文件删除后即以新编码重建。
+            File.AppendAllText(_logPath, _buffer.ToString(), _utf8Bom);
             _buffer.Clear();
         }
 

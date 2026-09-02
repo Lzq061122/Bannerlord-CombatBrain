@@ -43,6 +43,13 @@ namespace CombatBrain.Ai
         private readonly Dictionary<Formation, CavalryState> _states = new Dictionary<Formation, CavalryState>();
         private readonly Dictionary<Formation, float> _stateElapsed = new Dictionary<Formation, float>();
 
+        // 日志明细用：骑兵 FSM 当前状态名（无记录 → "-"，只读）
+        public string GetStateName(Formation formation)
+        {
+            CavalryState s;
+            return _states.TryGetValue(formation, out s) ? s.ToString() : "-";
+        }
+
         /// <summary>
         /// 编队级低频驱动：CombatAiMissionLogic.OnMissionTick 每帧调用，内部按 TickInterval 节流。
         /// </summary>
