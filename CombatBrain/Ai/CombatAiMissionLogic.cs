@@ -592,7 +592,28 @@ namespace CombatBrain.Ai
             for (int i = 0; i < l3.Count; i++)
             {
                 Agent defender = l3[i];
-                Agent attacker = FindNearestEnemyAgent(defender, l3);
+                // P2-② 攻击者查找改引擎空间查询：Mission.GetNearbyEnemyAgents(Vec2,float,Team,MBList<Agent>)
+                // （v1.4.8 已核实：Mission.cs L6582-6586；GetNearbyAgentsAux L2312-2333 只 Add 不清空，
+                //   故经 BufferPool.GetMBList 清空复用，与 F6/F7/F9 同款）。引擎空间哈希 O(邻域)
+                //   替代原 L3 候选列表内 O(n²) 扫描；且不再要求攻击者也是 L3——近战半径内任意敌人均
+                //   可成为预测源，L2 攻击者不再漏判。
+                if (defender.Team == null) continue; // 无队防御（与原实现等效：同队判定永远找不到攻击者）
+                MBList<Agent> nearby = BufferPool.GetMBList(1);
+                mission.GetNearbyEnemyAgents(defender.Position.AsVec2, BehaviorLodScheduler.L3MeleeRadius, defender.Team, nearby);
+
+                Agent attacker = null;
+                float bestD = float.MaxValue;
+                for (int j = 0; j < nearby.Count; j++)
+                {
+                    Agent e = nearby[j];
+                    if (e == null || !e.IsActive()) continue;
+                    float d = VecMath.DistSq(defender.Position.x, defender.Position.y, e.Position.x, e.Position.y);
+                    if (d < bestD)
+                    {
+                        bestD = d;
+                        attacker = e;
+                    }
+                }
                 if (attacker == null) continue;
 
                 AttackStats stats = GetAttackStats(attacker.Index);
@@ -808,23 +829,8 @@ namespace CombatBrain.Ai
             return best;
         }
 
-        private static Agent FindNearestEnemyAgent(Agent a, List<Agent> candidates)
-        {
-            Agent best = null;
-            float bestD = BehaviorLodScheduler.L3MeleeRadius;
-            Team at = a.Team;
-            foreach (Agent c in candidates)
-            {
-                if (c == a || c.Team == at || !c.IsActive()) continue;
-                float d = VecMath.Dist(a.Position.x, a.Position.y, c.Position.x, c.Position.y);
-                if (d <= bestD)
-                {
-                    bestD = d;
-                    best = c;
-                }
-            }
-            return best;
-        }
+        // P2-② 原 FindNearestEnemyAgent（L3 列表内 O(n²) 扫描，攻击者须为 L3）已删除，
+        // 由 TickBlock 内 Mission.GetNearbyEnemyAgents 引擎空间查询取代（见该方法注释）。
 
         private FighterProfile GetProfile(Agent agent)
         {
