@@ -74,6 +74,9 @@ namespace OfflineTests
             Console.WriteLine("== T3 AttackSuppressionState ==");
             TestAttackSuppression();
 
+            Console.WriteLine("== T4 WindowCache ==");
+            TestWindowCache();
+
             Console.WriteLine();
             if (_failures == 0)
             {
@@ -680,6 +683,26 @@ namespace OfflineTests
             Check(s.Count == 2, "two suppressed tracked");
             s.ClearAll();
             Check(s.Count == 0, "ClearAll empties");
+        }
+
+        // T4 0.5s 窗口缓存（WindowCache，带锁）
+        private static void TestWindowCache()
+        {
+            var wc = new WindowCache<float>(0.5f);
+            float v;
+            Check(!wc.TryGet(1, 0f, out v), "first read misses (stale)");
+            wc.Set(1, 0.8f);
+            Check(wc.TryGet(1, 0.3f, out v) && Math.Abs(v - 0.8f) < 1e-6f, "within window -> hit 0.8");
+            Check(wc.TryGet(1, 0.49f, out v), "within 0.5s window still hit");
+            Check(!wc.TryGet(1, 0.51f, out v), "past 0.5s window -> miss/recompute");
+            wc.Set(1, 0.5f);
+            Check(wc.TryGet(1, 1.0f, out v) && Math.Abs(v - 0.5f) < 1e-6f, "re-set after expiry cached 0.5");
+            wc.Clear();
+            Check(!wc.TryGet(1, 1.1f, out v), "Clear dismisses cache");
+            // 时间回拨（跨战役/时钟异常）应立即失效
+            wc.Set(2, 0.3f);
+            Check(!wc.TryGet(2, 0.2f, out v), "time rewind invalidates");
+            Check(wc.Count == 0, "rewind cleared entries");
         }
 
         private static int idxDefend()

@@ -97,6 +97,12 @@ namespace CombatBrain.Ai
         // 当前仅建立 OnAgentRemoved 生命周期清理挂点；实际抑制/恢复由 H3/H4 决策点调用。
         private readonly AttackSuppression _attackSuppression = new AttackSuppression();
 
+        // T4 性能工具箱：编队层敌中心聚合复用缓冲（零每帧分配，BufferPool 池化；随 LOD tick 重建复用）
+        private readonly Dictionary<int, List<Vec2>> _enemyCenters = new Dictionary<int, List<Vec2>>();
+
+        // T4 性能工具箱：0.5s 窗口缓存（带锁）——缓存编队实射比等编队层统计聚合（WindowCache.cs）
+        private readonly WindowCache<float> _firingRatioCache = new WindowCache<float>();
+
         public override void OnBehaviorInitialize()
         {
             base.OnBehaviorInitialize();
@@ -228,10 +234,11 @@ namespace CombatBrain.Ai
             Team playerTeam = mission.PlayerTeam;
             Vec2 playerCenter = playerTeam != null ? GetTeamCenter(playerTeam) : Vec2.Zero;
 
-            var enemyCenters = new Dictionary<int, List<Vec2>>();
+            // T4 零每帧分配：复用模块域字典 + BufferPool 池化 List<Vec2>，不新建 Dictionary/List
+            _enemyCenters.Clear();
             foreach (TeamState state in _states.Values)
             {
-                enemyCenters[state.Team.TeamIndex] = CollectEnemyCenters(state.Team);
+                _enemyCenters[state.Team.TeamIndex] = CollectEnemyCenters(state.Team, state.Team.TeamIndex & (BufferPool.SlotCount - 1));
             }
 
             foreach (Agent agent in mission.Agents)
@@ -241,7 +248,7 @@ namespace CombatBrain.Ai
                 if (t == null) continue;
 
                 List<Vec2> enemies;
-                if (!enemyCenters.TryGetValue(t.TeamIndex, out enemies)) enemies = null;
+                if (!_enemyCenters.TryGetValue(t.TeamIndex, out enemies)) enemies = null;
 
                 float dp = VecMath.Dist(agent.Position.x, agent.Position.y, playerCenter.x, playerCenter.y);
                 float de = NearestDistance(agent.Position.x, agent.Position.y, enemies);
@@ -368,8 +375,13 @@ namespace CombatBrain.Ai
 
         // 编队"实际在射"比例：FormationQuerySystem.MakingRangedAttackRatio 按人数加权均值（引擎缓存）。
         // 弹药告罄的射手不再射击 → 该比例自然衰减，作为弹药余量的可观察代理（非逐兵读取）。
-        private static float FormationFiringRatio(Team team)
+        // T4：0.5s 窗口缓存（带锁 WindowCache，键=队索引），避免同窗口内对同一队重复迭代编队聚合。
+        private float FormationFiringRatio(Team team)
         {
+            int teamIndex = team.TeamIndex;
+            float cached;
+            if (_firingRatioCache.TryGet(teamIndex, _elapsed, out cached)) return cached;
+
             float sum = 0f;
             int total = 0;
             foreach (Formation f in team.FormationsIncludingEmpty)
@@ -379,7 +391,9 @@ namespace CombatBrain.Ai
                 sum += f.QuerySystem.MakingRangedAttackRatio * f.CountOfUnits;
                 total += f.CountOfUnits;
             }
-            return total > 0 ? sum / total : 0f;
+            float ratio = total > 0 ? sum / total : 0f;
+            _firingRatioCache.Set(teamIndex, ratio);
+            return ratio;
         }
 
         private static float ComputePenB(TeamState state)
@@ -490,7 +504,8 @@ namespace CombatBrain.Ai
             if (_blockTimer > 0f) return;
             _blockTimer = 0.1f;
 
-            var l3 = new List<Agent>();
+            // T4 零每帧分配：L3 候选列表从 [ThreadStatic] BufferPool 复用（仅本方法内使用）
+            List<Agent> l3 = BufferPool.GetAgentList(0);
             foreach (Agent agent in mission.Agents)
             {
                 if (agent == null || !agent.IsActive()) continue;
@@ -627,9 +642,10 @@ namespace CombatBrain.Ai
             return 0;
         }
 
-        private List<Vec2> CollectEnemyCenters(Team own)
+        private List<Vec2> CollectEnemyCenters(Team own, int poolSlot)
         {
-            var list = new List<Vec2>();
+            // T4 零每帧分配：从 [ThreadStatic] BufferPool 取 List<Vec2> 复用，不清空复用
+            List<Vec2> list = BufferPool.GetVec2List(poolSlot);
             foreach (TeamState state in _states.Values)
             {
                 if (state.Team == own) continue;
