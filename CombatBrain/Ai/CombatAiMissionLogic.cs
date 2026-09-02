@@ -662,7 +662,14 @@ namespace CombatBrain.Ai
 
             if (affectorAgent == null || affectedAgent == null) return;
 
-            AttackDir dir = MapAttackDir(affectorAgent.AttackDirection);
+            // P2-⑤ 方向源修复（review-findings P2）：改读入参 attackCollisionData.AttackDirection
+            // （碰撞时刻的方向快照）。v1.4.8 已核实：AttackCollisionData.cs L120 定义、私有 ctor L194
+            // 在碰撞数据构造时赋值；引擎同款消费 MissionCombatMechanicsHelper.cs L143（读
+            // collisionData.AttackDirection 判定方向类特性）。原读 affectorAgent.AttackDirection 是
+            // 命中回调时刻的实时原生状态（Agent.cs L714 → IMBAgent.GetAttackDirectionUsage），
+            // 攻击动作命中结算/下一拍可复位或推进 → PredictiveBlock 攻击方向统计源存在系统性
+            // 时机噪声；改用入参快照后统计源可信（评估结论：修复，不接受噪声）。
+            AttackDir dir = MapAttackDir(attackCollisionData.AttackDirection);
             if (dir == AttackDir.None) return;
 
             GetAttackStats(affectorAgent.Index).Record(dir);
