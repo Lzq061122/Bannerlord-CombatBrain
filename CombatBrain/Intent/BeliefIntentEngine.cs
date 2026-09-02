@@ -15,9 +15,11 @@ namespace CombatBrain.Intent
         private float _currentScore;
         private float _holdTimer;
 
-        // counter 与 weights 同源（TacticManual 静态矩阵），评分经 TacticManual.CombinedScore
-        // 统一走静态 Counter；此处仅保留对称签名（F2 胶水传 BuildCounter()）。
-        public BeliefIntentEngine(float[][] weights, float[][] counter, float switchMargin = 0.15f, float holdTime = 6f)
+        // P2-④：删除死参数 counter（review-findings-2026-09-01 P2）——原参数从未存储/使用：
+        // 评分经 TacticManual.CombinedScore 统一走静态 Counter 矩阵（与 weights 同源，均来自
+        // TacticManual 静态矩阵），传入的 BuildCounter() 实参无任何效果。构造调用点已同步
+        // （CombatAiMissionLogic L28、OfflineTests F2 段）。
+        public BeliefIntentEngine(float[][] weights, float switchMargin = 0.15f, float holdTime = 6f)
         {
             _weights = weights;
             _switchMargin = switchMargin;

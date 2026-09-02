@@ -25,7 +25,7 @@ namespace CombatBrain.Ai
             public PerceptionPipeline Perception;
             public readonly KnowledgeView View = new KnowledgeView(25f, 0.08f, 0.15f);
             // F2：信念增强引擎（score = ΣV·W + ΣB·C；belief==null 时退化为 F1 纯反应式）
-            public readonly BeliefIntentEngine Engine = new BeliefIntentEngine(TacticManual.BuildMatrix(), TacticManual.BuildCounter());
+            public readonly BeliefIntentEngine Engine = new BeliefIntentEngine(TacticManual.BuildMatrix()); // P2-④ 死参数 counter 已删
             public SituationVector LastVector;
             public IntentType LastIntent = IntentType.Defend;
             public float InitialCount = -1f;

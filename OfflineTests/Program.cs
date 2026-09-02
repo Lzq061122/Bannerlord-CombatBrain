@@ -544,19 +544,19 @@ namespace OfflineTests
             // ---- BeliefIntentEngine：belief==null 与 F1 等价 + 信念注入 + 防抖 ----
             var vHigh = new SituationVector { Arc = 0.9f, EnemCav = 0.8f, FlankEx = 0.7f };
             var ie = new IntentEngine(TacticManual.BuildMatrix(), holdTime: 0f);
-            var be = new BeliefIntentEngine(TacticManual.BuildMatrix(), TacticManual.BuildCounter(), holdTime: 0f);
+            var be = new BeliefIntentEngine(TacticManual.BuildMatrix(), holdTime: 0f);
             IntentType a, b;
             ie.Evaluate(vHigh, 0.5f, out a);
             be.Evaluate(vHigh, null, 0.5f, out b);
             Check(a == b && b == IntentType.ProtectArcher, "belief null == reactionary (F1 semantics)");
 
-            var bi = new BeliefIntentEngine(TacticManual.BuildMatrix(), TacticManual.BuildCounter(), holdTime: 0f);
+            var bi = new BeliefIntentEngine(TacticManual.BuildMatrix(), holdTime: 0f);
             var bFrontWk = new float[] { 0.9f, 0f, 0f, 0f, 0f, 0.1f };
             IntentType chosen;
             bi.Evaluate(new SituationVector(), bFrontWk, 0.5f, out chosen);
             Check(chosen == IntentType.BraceFormation, "high-Frontal belief -> BraceFormation (C anchor)");
 
-            var de = new BeliefIntentEngine(TacticManual.BuildMatrix(), TacticManual.BuildCounter());
+            var de = new BeliefIntentEngine(TacticManual.BuildMatrix());
             IntentType tmp;
             Check(!de.Evaluate(new SituationVector(), null, 0.5f, out tmp) && de.Current == IntentType.Defend, "debounce baseline Defend");
             bool switched = false;
