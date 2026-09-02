@@ -147,7 +147,7 @@ namespace CombatBrain.Ai
                 CombatLog.Log(string.Format(
                     "[F8] 骑兵编队(team {0}) {1} → {2}", formation.Team.TeamIndex, state, next));
                 InGameFeedback.NotifyTactical("骑兵", // 游戏内反馈：编队级全量（FSM 跃迁一次性事件，正常模式显示）
-                    string.Format("[F8] Team {0} 骑兵 {1} → {2}", formation.Team.TeamIndex, state, next),
+                    string.Format("{0}骑兵 {1}→{2}", FeedbackText.Faction(formation.Team), FeedbackText.Cavalry(state), FeedbackText.Cavalry(next)),
                     InGameFeedback.FormationColor);
             }
         }

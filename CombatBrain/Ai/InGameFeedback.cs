@@ -76,7 +76,7 @@ namespace CombatBrain.Ai
         }
 
         // 个体级事件计数（Debug 模式专用聚合）：逐兵事件只计数，该类别距上次汇总
-        // ≥ AggregatePeriodSeconds 时由本次调用触发输出「[聚合] 类别 × N 次/3s」。
+        // ≥ AggregatePeriodSeconds 时由本次调用触发输出「近3秒：类别 N 次」（纯中文通俗文案）。
         // 正常模式（DebugMode=false）直接 return：零计数零输出零开销。
         public static void Count(string category)
         {
@@ -107,7 +107,7 @@ namespace CombatBrain.Ai
                 lock (_sync) { allowed = AllowRateLocked(now); }
                 if (allowed)
                     InformationManager.DisplayMessage(new InformationMessage(
-                        string.Format("[聚合] {0} × {1} 次/{2:F0}s", category, n, AggregatePeriodSeconds),
+                        string.Format("近{1:F0}秒：{0} {2} 次", category, AggregatePeriodSeconds, n),
                         Color.FromUint(AggregateColor)));
             }
             catch { }

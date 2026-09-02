@@ -331,7 +331,7 @@ namespace CombatBrain.Ai
                 _cAdvance, _cStepBack, _cStrafe, _cRetreat, _cHold, _cSkipped, _cJitter));
             // 游戏内反馈：个体级聚合的周期汇总（仅 DebugMode 显示，正常模式静默；防逐兵刷屏）
             InGameFeedback.NotifyIndividual("走位",
-                string.Format("[F6] 走位 冲={0} 退步={1} 侧移={2} 撤={3} 守={4} 跳={5}",
+                string.Format("近5秒走位：前进{0} 后退{1} 侧移{2} 撤退{3} 坚守{4}（跳过{5}）",
                     _cAdvance, _cStepBack, _cStrafe, _cRetreat, _cHold, _cSkipped),
                 InGameFeedback.AggregateColor);
             _cAdvance = 0;

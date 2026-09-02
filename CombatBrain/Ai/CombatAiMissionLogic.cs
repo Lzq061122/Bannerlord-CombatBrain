@@ -350,7 +350,7 @@ namespace CombatBrain.Ai
                         "Team {0} 意图切换 → {1}  [{2}]",
                         own.TeamIndex, newIntent, v.ToString()));
                     InGameFeedback.NotifyTactical("意图", // 游戏内反馈：战术级全量（0.5s 拍低频事件，正常模式显示）
-                        string.Format("[意图] Team {0} → {1}", own.TeamIndex, newIntent),
+                        string.Format("{0}改变战术：{1}", FeedbackText.Faction(own), FeedbackText.Intent(newIntent)),
                         InGameFeedback.TacticalColor);
                 }
             }

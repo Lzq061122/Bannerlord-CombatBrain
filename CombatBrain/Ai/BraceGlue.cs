@@ -81,21 +81,21 @@ namespace CombatBrain.Ai
                 {
                     _episode[team.TeamIndex] = true; // 意图驱动：直接架枪
                     if (!ep) InGameFeedback.NotifyTactical("架枪", // 游戏内反馈：编队级边沿（激活一次性）
-                        string.Format("[F4] Team {0} 架枪激活（意图驱动）", team.TeamIndex), InGameFeedback.FormationColor);
+                        string.Format("{0}步兵架枪迎敌（奉命）", FeedbackText.Faction(team)), InGameFeedback.FormationColor);
                     Execute(team, mission);
                 }
                 else if (hasCav && (ep ? !BracePlan.ShouldRelease(d) : BracePlan.ShouldBrace(d, prev)))
                 {
                     _episode[team.TeamIndex] = true; // 威胁驱动：武装或维持剧集
                     if (!ep) InGameFeedback.NotifyTactical("架枪", // 游戏内反馈：编队级边沿（激活一次性）
-                        string.Format("[F4] Team {0} 架枪激活（敌骑逼近 {1:F0}m）", team.TeamIndex, d), InGameFeedback.FormationColor);
+                        string.Format("{0}步兵架枪迎敌（敌骑距{1:F0}米）", FeedbackText.Faction(team), d), InGameFeedback.FormationColor);
                     Execute(team, mission);
                 }
                 else
                 {
                     _episode[team.TeamIndex] = false; // 释放，交回正常 AI
                     if (ep) InGameFeedback.NotifyTactical("架枪", // 游戏内反馈：编队级边沿（释放一次性）
-                        string.Format("[F4] Team {0} 架枪释放，交回原版 AI", team.TeamIndex), InGameFeedback.FormationColor);
+                        string.Format("{0}解除架枪，恢复推进", FeedbackText.Faction(team)), InGameFeedback.FormationColor);
                     Release(team);
                 }
             }
@@ -147,7 +147,7 @@ namespace CombatBrain.Ai
             _episode[team.TeamIndex] = false;
             _prevCavDist[team.TeamIndex] = -1f; // 距离基线复位（回场后按首次观测重新武装）
             InGameFeedback.NotifyTactical("架枪", // 游戏内反馈：剧场外释放边沿（上方 IsBracing 保证一次性）
-                string.Format("[F4] Team {0} 架枪释放（剧场外，交回原版 AI）", team.TeamIndex), InGameFeedback.FormationColor);
+                string.Format("{0}解除架枪（超出战场）", FeedbackText.Faction(team)), InGameFeedback.FormationColor);
             foreach (Formation f in team.FormationsIncludingEmpty)
             {
                 if (f == null || f.CountOfUnits == 0) continue;
