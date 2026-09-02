@@ -696,13 +696,31 @@ namespace CombatBrain.Ai
 
         // ---------- helpers ----------
 
+        // P1-③ 敌队识别：按引擎真实敌对关系判定，不再取「第一个非己队」（3+ 队混战会把盟友当敌人）。
+        // v1.4.8 API 已核实（官方反编译源 Team.cs）：
+        //   public bool IsEnemyOf(Team otherTeam)（L629-631，转 MBTeam.IsEnemyOf）；
+        //   引擎惯例：遍历 Teams 过滤 MBTeam.IsValid && IsEnemyOf（同 L783-785 GetAveragePositionOfEnemies）。
+        // 多敌队时取编队中心距己最近者（拟人：打最近的敌人）；无敌队返回 null（调用方已有防御）。
+        // O(队数×编队数)，仅 0.5s 意图拍/事件驱动调用，与原实现同阶；敌队关系为引擎公开 API（反作弊闸不变）。
         private Team GetEnemyTeam(Team own)
         {
+            if (own == null) return null;
+            Team best = null;
+            float bestDist = float.MaxValue;
+            Vec2 oc = GetTeamCenter(own);
             foreach (TeamState state in _states.Values)
             {
-                if (state.Team != own) return state.Team;
+                Team t = state.Team;
+                if (t == own || !t.MBTeam.IsValid || !t.IsEnemyOf(own)) continue;
+                Vec2 tc = GetTeamCenter(t);
+                float d = VecMath.Dist(tc.x, tc.y, oc.x, oc.y);
+                if (d < bestDist)
+                {
+                    bestDist = d;
+                    best = t;
+                }
             }
-            return null;
+            return best;
         }
 
         // F10 输入：给定队索引 → 其敌队存活数（意图反制判定）
@@ -723,7 +741,8 @@ namespace CombatBrain.Ai
             List<Vec2> list = BufferPool.GetVec2List(poolSlot);
             foreach (TeamState state in _states.Values)
             {
-                if (state.Team == own) continue;
+                // P1-③ 只收集真实敌队（IsEnemyOf，Team.cs L629 已核实）：多队混战不再把盟友中心当敌中心
+                if (state.Team == own || !state.Team.MBTeam.IsValid || !state.Team.IsEnemyOf(own)) continue;
                 foreach (Formation f in state.Team.FormationsIncludingEmpty)
                 {
                     if (f == null || f.CountOfUnits == 0) continue;
