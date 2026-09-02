@@ -20,6 +20,12 @@ namespace CombatBrain.Perception
             _refreshInterval = refreshInterval;
         }
 
+        // P1-① 共享真实地形查表（开战构建后一次性注入转发给 VisibilityOracle；保持可逆）
+        public void SetTerrain(TerrainSampler terrain)
+        {
+            _oracle.SetTerrain(terrain);
+        }
+
         public void Update(float now, Vec2 observer, IEnumerable<Agent> agents)
         {
             if (now - _lastRefresh < _refreshInterval) return;

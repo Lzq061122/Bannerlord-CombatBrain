@@ -103,6 +103,16 @@ namespace CombatBrain.Ai
         // T4 性能工具箱：0.5s 窗口缓存（带锁）——缓存编队实射比等编队层统计聚合（WindowCache.cs）
         private readonly WindowCache<float> _firingRatioCache = new WindowCache<float>();
 
+        // P1-① 真实地形预缓存：开战一次性采样为只读查表，战中 O(1) 查询（禁实时射线/逐兵采样）。
+        // TerrainStub 合成正弦假地形已删除（review-findings-2026-09-01 #7「假数据比没数据更糟」）。
+        // null = 尚未构建或构建失败（不可用）→ Height 维降级中性 0.5（宁缺毋假）。
+        private TerrainSampler _terrain;
+        private bool _terrainBuilt;
+
+        // 采样预算：己方中心 ±300m、8m 网格 → 76×76≈5.8k 点，开战一次性完成（战前填好，战中只读=T0 线程安全）
+        private const float TerrainHalfExtent = 300f;
+        private const float TerrainCellSize = 8f;
+
         public override void OnBehaviorInitialize()
         {
             base.OnBehaviorInitialize();
@@ -264,6 +274,9 @@ namespace CombatBrain.Ai
             if (_intentTimer > 0f) return;
             _intentTimer = 0.5f;
 
+            // P1-① 开战一次性预采样真实地形（战前填好；失败不重试，降级中性 0.5）
+            EnsureTerrainCache(mission);
+
             foreach (TeamState state in _states.Values)
             {
                 Team own = state.Team;
@@ -340,7 +353,12 @@ namespace CombatBrain.Ai
             v.Dist = VecMath.Clamp01(VecMath.Dist(oc.x, oc.y, ec.x, ec.y) / 80f);
 
             // Height: 地形优劣 = 己方中心相对敌方中心的高度优势
-            float hDiff = TerrainStub.Height(oc.x, oc.y) - TerrainStub.Height(ec.x, ec.y);
+            // P1-①：真实地形查表（开战预缓存，O(1)）；无表（未就绪/构建失败）→ hDiff=0 → 中性 0.5，宁缺毋假
+            float hDiff = 0f;
+            if (_terrain != null)
+            {
+                hDiff = _terrain.Height(oc.x, oc.y) - _terrain.Height(ec.x, ec.y);
+            }
             v.Height = VecMath.Clamp01(0.5f + hDiff * 0.15f);
 
             // Line: 阵线宽度对比——己方是否被拉散（编队离散度 vs 敌方）
@@ -370,6 +388,63 @@ namespace CombatBrain.Ai
             {
                 v.Cav = 0.5f;
                 v.Arc = 0.5f;
+            }
+        }
+
+        // P1-① 真实地形预缓存（开战一次性，主线程）：
+        // v1.4.8 API 已核实（官方反编译源 Scene.cs L1089-1092）：
+        //   public float GetTerrainHeight(Vec2 position, bool checkHoles = true)
+        // 引用证据：Team.cs L561 `Mission.Scene.GetTerrainHeight(averagePositionOfUnits)`（编队均值位置查地形，
+        // 与本模块同型）；Mission.cs L1089 `public Scene Scene { get; private set; }`。
+        // 采样：锚点=玩家队（无玩家→第一个队）编队中心 ±300m、8m 网格 ≈5.8k 点，一次性 <10ms 量级；
+        // 战中只读查表 O(1)，无实时射线。T0：数组战前填好后只读，无锁共享线程安全。
+        private void EnsureTerrainCache(Mission mission)
+        {
+            if (_terrainBuilt) return;
+
+            Team anchor = mission.PlayerTeam;
+            if (anchor == null)
+            {
+                foreach (TeamState st in _states.Values)
+                {
+                    anchor = st.Team;
+                    break;
+                }
+            }
+            if (anchor == null)
+            {
+                _terrainBuilt = true; // 无队可锚定：不再重试，Height 维降级中性 0.5
+                return;
+            }
+
+            Vec2 c = GetTeamCenter(anchor);
+            if (c == Vec2.Zero && _elapsed < 5f) return; // 编队未就绪（部署中）：延迟重试，5s 后按当前值兜底
+            _terrainBuilt = true;
+
+            var scene = mission.Scene;
+            if (scene == null)
+            {
+                CombatLog.Log("TerrainSampler: Mission.Scene 不可用，Height 维降级中性 0.5");
+                return;
+            }
+
+            try
+            {
+                _terrain = TerrainSampler.Build(
+                    c.x, c.y, TerrainHalfExtent, TerrainCellSize,
+                    (x, y) => scene.GetTerrainHeight(new Vec2(x, y)));
+                foreach (TeamState st in _states.Values)
+                {
+                    st.Perception.SetTerrain(_terrain); // 与态势向量共用同一查表（感知停用中，接线保持可逆）
+                }
+                CombatLog.Log(string.Format(
+                    "TerrainSampler 就绪: center=({0:F0},{1:F0}) extent={2}m cell={3:F1}m points={4}",
+                    c.x, c.y, TerrainHalfExtent, _terrain.Step, _terrain.Points));
+            }
+            catch (Exception e)
+            {
+                _terrain = null; // 宁缺毋假：构建失败 → Height 维中性 0.5
+                CombatLog.Log("TerrainSampler 构建失败（Height 维降级中性 0.5）: " + e.Message);
             }
         }
 

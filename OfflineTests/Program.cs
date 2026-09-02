@@ -9,6 +9,7 @@ using CombatBrain.Compliance;
 using CombatBrain.Morale;
 using CombatBrain.Experience;
 using CombatBrain.Intent;
+using CombatBrain.Perception;
 using CombatBrain.Ai;
 
 namespace OfflineTests
@@ -76,6 +77,9 @@ namespace OfflineTests
 
             Console.WriteLine("== T4 WindowCache ==");
             TestWindowCache();
+
+            Console.WriteLine("== P1-1 TerrainSampler ==");
+            TestTerrainSampler();
 
             Console.WriteLine();
             if (_failures == 0)
@@ -703,6 +707,38 @@ namespace OfflineTests
             wc.Set(2, 0.3f);
             Check(!wc.TryGet(2, 0.2f, out v), "time rewind invalidates");
             Check(wc.Count == 0, "rewind cleared entries");
+        }
+
+        // P1-① 真实地形高度查表（TerrainSampler，纯逻辑零依赖：采样函数由胶水注入）
+        private static void TestTerrainSampler()
+        {
+            // 平面 h = 0.5x + 2y：网格节点精确、双线性对平面无插值误差
+            TerrainSampler ts = TerrainSampler.Build(100f, 200f, 40f, 10f,
+                (x, y) => 0.5f * x + 2f * y);
+            Check(ts.GridSize == 9, "grid 80m/10m -> 9 points per axis");
+            CheckApprox(ts.Height(60f, 160f), 0.5f * 60f + 2f * 160f, "grid node exact (origin corner)");
+            CheckApprox(ts.Height(140f, 240f), 0.5f * 140f + 2f * 240f, "grid node exact (far corner)");
+            CheckApprox(ts.Height(100f, 200f), 0.5f * 100f + 2f * 200f, "grid node exact (center)");
+            CheckApprox(ts.Height(65f, 165f), 0.5f * 65f + 2f * 165f, "bilinear exact on plane");
+
+            // 越界取边缘（优雅降级，无零高度断崖）
+            CheckApprox(ts.Height(-500f, 200f), 0.5f * 60f + 2f * 200f, "out-of-range x clamps to edge");
+            CheckApprox(ts.Height(100f, 900f), 0.5f * 100f + 2f * 240f, "out-of-range y clamps to edge");
+
+            // 单调地形：高处点查得更高（态势 Height 维方向正确）
+            TerrainSampler hill = TerrainSampler.Build(0f, 0f, 100f, 10f, (x, y) => -0.01f * (x * x + y * y));
+            Check(hill.Height(0f, 0f) > hill.Height(80f, 0f), "hill top reads higher than flank");
+
+            // 战中查表确定性（只读缓存：同点两次一致，T0 无锁共享）
+            Check(hill.Height(30f, -40f) == hill.Height(30f, -40f), "table read deterministic (read-only)");
+
+            // 开战一次性预算：±300m / 8m → 76×76 点，实际间距不超请求值
+            TerrainSampler wide = TerrainSampler.Build(0f, 0f, 300f, 8f, (x, y) => 0f);
+            Check(wide.Points == 76 * 76, "battlefield 600m/8m -> 76x76 points (one-shot budget)");
+            Check(Math.Abs(wide.Step - 8f) < 1e-4f, "actual step honors requested cellSize");
+
+            // 远越界仍返回边缘值（平地=0），不抛异常
+            Check(Math.Abs(wide.Height(1e6f, 1e6f)) < 1e-6f, "far out-of-range returns edge value");
         }
 
         private static int idxDefend()
