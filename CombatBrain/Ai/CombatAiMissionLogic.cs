@@ -70,6 +70,9 @@ namespace CombatBrain.Ai
         // F8 骑兵波次胶水：0.5s 编队级周期，冲锋→回撤→重整→再冲（见 CavalryGlue.cs）
         private readonly CavalryGlue _cavalry = new CavalryGlue();
 
+        // T5 骑射游击胶水：0.5s 编队级周期，骑射消耗/游击/夹击（绝不冲锋；见 SkirmishGlue.cs）
+        private readonly SkirmishGlue _skirmish = new SkirmishGlue();
+
         // F11 士气传导/分阶段撤退胶水：0.5s 编队级周期，邻队崩盘传染 + 请求→批准→脱离（见 MoraleGlue.cs）
         private readonly MoraleGlue _morale = new MoraleGlue();
 
@@ -217,6 +220,10 @@ namespace CombatBrain.Ai
             _bench.BeginSection("cavalry");
             TickCavalry(mission, dt);
             _bench.EndSection("cavalry");
+
+            _bench.BeginSection("skirmish");
+            TickSkirmish(mission, dt);
+            _bench.EndSection("skirmish");
 
             _bench.BeginSection("morale");
             TickMorale(mission, dt);
@@ -505,9 +512,9 @@ namespace CombatBrain.Ai
                         : qs.IsRangedFormation ? "射手"
                         : "步兵";
                     Vec2 pos = TeamGeometry.GetFormationPosition(f, TeamPosKind.CachedMedian);
-                    CombatLog.Log(string.Format("  └ {0}x{1}@({2:F0},{3:F0}) 骑FSM={4} 士FSM={5}",
+                    CombatLog.Log(string.Format("  └ {0}x{1}@({2:F0},{3:F0}) 骑FSM={4} 士FSM={5} 游={6}",
                         kind, f.CountOfUnits, pos.x, pos.y,
-                        _cavalry.GetStateName(f), _morale.GetStateName(f)));
+                        _cavalry.GetStateName(f), _morale.GetStateName(f), _skirmish.GetModeName(f)));
                 }
             }
         }
@@ -583,6 +590,15 @@ namespace CombatBrain.Ai
             Team playerTeam = mission.PlayerTeam;
             Vec2 playerCenter = playerTeam != null ? GetTeamCenter(playerTeam) : Vec2.Zero;
             _cavalry.Tick(mission, dt, playerCenter, GetTeamIntent);
+        }
+
+        // ---------- T5 骑射游击（编队级） ----------
+
+        private void TickSkirmish(Mission mission, float dt)
+        {
+            Team playerTeam = mission.PlayerTeam;
+            Vec2 playerCenter = playerTeam != null ? GetTeamCenter(playerTeam) : Vec2.Zero;
+            _skirmish.Tick(mission, dt, playerCenter, i => _protect.IsProtecting(i)); // F3 激活时让位
         }
 
         // ---------- F11 士气传导 + 分阶段撤退（编队级） ----------

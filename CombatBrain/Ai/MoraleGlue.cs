@@ -94,7 +94,8 @@ namespace CombatBrain.Ai
                 foreach (Formation f in team.FormationsIncludingEmpty)
                 {
                     if (f == null || f.CountOfUnits == 0) continue;
-                    if (f.QuerySystem == null || f.QuerySystem.IsCavalryFormation) continue;
+                    // t55：骑射（IsRangedCavalryFormation）归 SkirmishGlue 游击分域，F11 不再对其下令（命令不互踩）
+                    if (f.QuerySystem == null || f.QuerySystem.IsCavalryFormation || f.QuerySystem.IsRangedCavalryFormation) continue;
                     Vec2 med = TeamGeometry.GetFormationPosition(f, TeamPosKind.CachedMedian); // P1-④ 统一入口
                     if (VecMath.Dist(med.x, med.y, playerCenter.x, playerCenter.y) > DriveRadius)
                     {
