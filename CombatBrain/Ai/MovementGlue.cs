@@ -39,6 +39,8 @@ namespace CombatBrain.Ai
         private const float AllySearchRadius = 4f;     // 后撤时友军搜索半径
         private const float DefaultReach = 1.0f;       // 无武器/空手默认有效距离(米)
         private const float RetreatFallbackDist = 5f;  // 无友军可退时的退点距离
+        private const float RetreatCooldown = 2f;      // t52 后撤冷却：被围撤退后 2s 内不重复后退（压制为原地防御）
+        private const int StrafePeriod = 4;            // t52 绕侧占空比：死区内每 4 拍（0.8s）允许一次滑步，其余站定
         private const float ReportInterval = 10f;      // 决策直方图上报间隔
 
         private float _sinceTick;
@@ -55,6 +57,9 @@ namespace CombatBrain.Ai
         // P0-① 抖动时间基准：每 agent「上次调用 ShouldAct 的时刻」，用于算真实决策间隔（now - last）。
         // 调用点被节流(0.2s)+跳帧，传帧 dt 会让维持期/疲劳慢 6~20 倍；此处按真实经过时间计。
         private readonly Dictionary<int, float> _lastJitterTime = new Dictionary<int, float>();
+
+        // t52 后撤冷却基准：每 agent「上次被围撤退时刻」（now - last < RetreatCooldown 内压制后退）
+        private readonly Dictionary<int, float> _lastRetreatTime = new Dictionary<int, float>();
 
         // 决策直方图（仅日志观测，10s 一报）
         private int _cAdvance;
@@ -167,6 +172,36 @@ namespace CombatBrain.Ai
             }
 
             MovementDecision d2 = MovementController.Decide(ctx);
+
+            // t52 后处理修复（用户实测 P1：adv=1214 back=35 strafe=1086 retreat=977 hold=9，hold≈0、
+            // retreat+strafe 是 advance 的 1.7 倍，步兵持续后退不站定）。根因与修复决策：
+            //   根因1：纯逻辑 Decide 在死区内对 FlankAware≥0.4 者永远输出 Strafe（MovementController.cs
+            //     L88-102 无 Hold 分支），高绕侧意识编队（老兵/精锐）死区内 0 站定 → hold=9/3321。
+            //     修：绕侧滑步改 1/4 拍占空比（(agent.Index+_phase)%4==0 的拍允许，0.8s 一次），
+            //     其余拍压制为 Hold——绕侧保留为间歇战术，站定成为常态。
+            //   根因2：IsSurrounded（1.6m 内≥2 敌）在贴身混战近乎常驻 → RetreatToAllies 占比 29%，
+            //     步兵持续小碎步后退（画面=站太后）。
+            //     修：后撤 2s 冷却——冷却期内被围压制为原地防御（Hold，交原版攻击逻辑主导），
+            //     冷却后仍被围再退；被围撤退从「常驻小碎步」变为「间歇脱身」。
+            //   纯逻辑 MovementController 零改动（OfflineTests F6 断言零影响，252 基线不动）。
+            if (d2.Action == MoveAction.RetreatToAllies)
+            {
+                float lastRetreat;
+                if (_lastRetreatTime.TryGetValue(agent.Index, out lastRetreat) && now - lastRetreat < RetreatCooldown)
+                    d2.Action = MoveAction.Hold; // 冷却期：站定防御，不再后退
+                else
+                    _lastRetreatTime[agent.Index] = now;
+            }
+            else if ((d2.Action == MoveAction.StrafeLeft || d2.Action == MoveAction.StrafeRight)
+                && ((agent.Index + _phase) % StrafePeriod) != 0)
+            {
+                d2.Action = MoveAction.Hold; // 非绕侧拍：站定（死区内不再永久侧移）
+            }
+            if (d2.Action == MoveAction.Hold)
+            {
+                d2.MoveX = 0f;
+                d2.MoveY = 0f; // 压制为站定时必须清零移动向量，否则计数 Hold 实际仍在滑步
+            }
 
             // P0-① 真实决策间隔：now - last（跨节流+跳帧的空拍也在内，维持期/疲劳按真实战斗时间走）；
             // 首次近似为一个节流周期；时钟异常（elapsed<=0）兜底为节流周期。
@@ -294,6 +329,7 @@ namespace CombatBrain.Ai
         {
             _jitter.Remove(agentIndex);
             _lastJitterTime.Remove(agentIndex);
+            _lastRetreatTime.Remove(agentIndex); // t52 后撤冷却随 Agent 生命周期清理
         }
 
         private void CountAction(MoveAction action)
