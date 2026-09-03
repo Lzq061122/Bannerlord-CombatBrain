@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using TaleWorlds.Engine;
 using TaleWorlds.Library;
 using TaleWorlds.MountAndBlade;
 using CombatBrain.Cavalry;
@@ -38,6 +39,10 @@ namespace CombatBrain.Ai
                                                        // 150m 与步兵 70m 区分；150m 外仅暂停驱动（不删状态不下命令）。
         private const float ReleaseRadius = 300f;      // 兜底：远离战场 2×剧场 → 完整释放（删状态+Advance 交回原版，
                                                        // 保留 P0-⑤ 防命令泄漏语义；正常冲锋不会到 300m 外）
+        private const float ShieldwayDist = 10f;       // t58 盾墙挡路判定：己方步兵中心距冲锋线垂距 <10m 视为挡路
+        private const float BypassClearance = 12f;     // t58 绕行侧偏余量：绕行点在挡路步兵对侧再让开 12m
+        private const float BypassArriveDist = 8f;     // t58 到达绕行点判定距离（到位即正式冲锋）
+        private const float BypassTimeout = 6f;        // t58 绕行超时兜底：超时直接转正式冲锋（防绕行卡死）
         private const float ImpactRadius = 6f;   // CHARGE 触敌判定半径（贴脸即回撤，防卡死）
         private const float RallyDistance = 30f; // RECALL 回撤达标距离
         private const float ChargeTimeout = 12f; // 各状态超时兜底（防任何卡死）
@@ -48,6 +53,11 @@ namespace CombatBrain.Ai
         private float _sinceTick;
         private readonly Dictionary<Formation, CavalryState> _states = new Dictionary<Formation, CavalryState>();
         private readonly Dictionary<Formation, float> _stateElapsed = new Dictionary<Formation, float>();
+
+        // t58 绕行子步骤状态：Charge 状态内先侧移绕开己方盾墙（到位/超时再正式冲锋）
+        private readonly Dictionary<Formation, Formation> _pendingChargeTarget = new Dictionary<Formation, Formation>();
+        private readonly Dictionary<Formation, Vec2> _pendingChargePt = new Dictionary<Formation, Vec2>();
+        private readonly Dictionary<Formation, float> _pendingChargeElapsed = new Dictionary<Formation, float>();
 
         // 日志明细用：骑兵 FSM 当前状态名（无记录 → "-"，只读）
         public string GetStateName(Formation formation)
@@ -106,6 +116,9 @@ namespace CombatBrain.Ai
             if (!_states.ContainsKey(formation)) return;
             _states.Remove(formation);
             _stateElapsed.Remove(formation);
+            _pendingChargeTarget.Remove(formation); // t58 绕行子步骤随释放清理
+            _pendingChargePt.Remove(formation);
+            _pendingChargeElapsed.Remove(formation);
             formation.SetMovementOrder(MovementOrder.MovementOrderAdvance); // 交回原版默认推进（MovementOrder.cs L59，v1.4.8 核实）
         }
 
@@ -123,6 +136,28 @@ namespace CombatBrain.Ai
 
             float elapsed = _stateElapsed[formation];
             _stateElapsed[formation] = elapsed + dt;
+
+            // t58 绕行子步骤：Charge 状态下先侧移绕开己方盾墙（用户实测 P0：直线冲锋穿己方盾墙冲乱阵型）。
+            // 到位/超时/目标消失 → 正式冲锋（楔形 Skein+ChargeToTarget）；绕行期间不做触敌/超时回撤
+            // 判定（尚未接触敌军，ImpactFinished 无意义）。
+            Formation pendingTarget;
+            if (_pendingChargeTarget.TryGetValue(formation, out pendingTarget))
+            {
+                float pElapsed = _pendingChargeElapsed.TryGetValue(formation, out pElapsed) ? pElapsed : 0f;
+                pElapsed += dt;
+                _pendingChargeElapsed[formation] = pElapsed;
+                Vec2 pt = _pendingChargePt[formation];
+                Vec2 cur = TeamGeometry.GetFormationPosition(formation, TeamPosKind.CachedMedian);
+                bool targetAlive = pendingTarget != null && pendingTarget.CountOfUnits > 0 && pendingTarget.QuerySystem != null;
+                if (VecMath.Dist(cur.x, cur.y, pt.x, pt.y) <= BypassArriveDist || pElapsed > BypassTimeout || !targetAlive)
+                {
+                    _pendingChargeTarget.Remove(formation);
+                    _pendingChargeElapsed.Remove(formation);
+                    _pendingChargePt.Remove(formation);
+                    IssueChargeOrder(formation, targetAlive ? pendingTarget : null);
+                }
+                return; // 绕行推进中：本拍结束
+            }
 
             FormationQuerySystem enemy = formation.QuerySystem.ClosestSignificantlyLargeEnemyFormation;
 
@@ -155,7 +190,14 @@ namespace CombatBrain.Ai
             {
                 _states[formation] = next;
                 _stateElapsed[formation] = 0f;
-                IssueOrder(formation, next, enemy != null ? enemy.Formation : null);
+                if (next == CavalryState.Charge)
+                {
+                    BeginCharge(formation, enemy != null ? enemy.Formation : null); // t58：先判定盾墙挡路→绕行或直冲
+                }
+                else
+                {
+                    IssueOrder(formation, next, enemy != null ? enemy.Formation : null);
+                }
                 DecisionObservatory.Observe(DecisionObservatory.BCavChange); // T1 决策分支计数：编队 FSM 转移
                 CombatLog.Log(string.Format(
                     "[F8] 骑兵编队(team {0}) {1} → {2}", formation.Team.TeamIndex, state, next));
@@ -163,6 +205,80 @@ namespace CombatBrain.Ai
                     string.Format("{0}骑兵 {1}→{2}", FeedbackText.Faction(formation.Team), FeedbackText.Cavalry(state), FeedbackText.Cavalry(next)),
                     InGameFeedback.FormationColor);
             }
+        }
+
+        // t58 冲锋发起：先查己方步兵盾墙是否挡在冲锋线上——挡路则先侧移绕行（pending 登记，
+        // 到位/超时后正式冲锋）；不挡路则直接楔形+ChargeToTarget。
+        private void BeginCharge(Formation formation, Formation target)
+        {
+            Vec2 bypass;
+            if (target != null && TryGetBypassPoint(formation, target, out bypass))
+            {
+                IssueMoveBypass(formation, bypass);
+                _pendingChargeTarget[formation] = target;
+                _pendingChargePt[formation] = bypass;
+                _pendingChargeElapsed[formation] = 0f;
+                return;
+            }
+            IssueChargeOrder(formation, target);
+        }
+
+        // 绕行判定：己方步兵编队中心投影落在冲锋线中段（t∈[0.2,0.85]）且垂距 < ShieldwayDist → 挡路。
+        // 绕行点 = 冲锋线中点 + 背离步兵侧的法向偏移（清距 = 垂距不足量 + BypassClearance）。
+        // 反作弊闸：仅用可观察位置/编队分类。
+        private bool TryGetBypassPoint(Formation formation, Formation target, out Vec2 bypass)
+        {
+            bypass = Vec2.Zero;
+            Vec2 cav = TeamGeometry.GetFormationPosition(formation, TeamPosKind.CachedMedian);
+            Vec2 tgt = TeamGeometry.GetFormationPosition(target, TeamPosKind.CachedMedian);
+            float dx = tgt.x - cav.x;
+            float dy = tgt.y - cav.y;
+            float len = (float)Math.Sqrt(dx * dx + dy * dy);
+            if (len < 1e-3f) return false;
+            float ux = dx / len;
+            float uy = dy / len;
+            float nx = -uy;
+            float ny = ux;
+            foreach (Formation f in formation.Team.FormationsIncludingEmpty)
+            {
+                if (f == null || f.CountOfUnits == 0 || f.QuerySystem == null) continue;
+                if (!f.QuerySystem.IsInfantryFormation) continue; // 盾墙=己方步兵
+                Vec2 fp = TeamGeometry.GetFormationPosition(f, TeamPosKind.CachedMedian);
+                float wx = fp.x - cav.x;
+                float wy = fp.y - cav.y;
+                float t = wx * ux + wy * uy;
+                if (t < len * 0.2f || t > len * 0.85f) continue; // 不在冲锋线中段：不挡路
+                float px = wx - ux * t;
+                float py = wy - uy * t;
+                float perp = (float)Math.Sqrt(px * px + py * py);
+                if (perp >= ShieldwayDist) continue; // 离冲锋线够远：不算挡路
+                float side = (px * nx + py * ny) >= 0f ? 1f : -1f; // 步兵在法向哪侧
+                float clear = (ShieldwayDist - perp) + BypassClearance; // 补足垂距差 + 余量
+                bypass = new Vec2(cav.x + ux * len * 0.5f - nx * side * clear,
+                                  cav.y + uy * len * 0.5f - ny * side * clear);
+                return true;
+            }
+            return false;
+        }
+
+        // 绕行移动（ProtectGlue.IssueMove 同款已核实模式）；无导航点时静默失败 → BypassTimeout 兜底转冲锋
+        private static void IssueMoveBypass(Formation formation, Vec2 target)
+        {
+            WorldPosition wp = formation.CachedMedianPosition;
+            wp.SetVec2(target);
+            if (wp.GetNavMesh() == UIntPtr.Zero) return;
+            formation.SetMovementOrder(MovementOrder.MovementOrderMove(wp));
+        }
+
+        // 正式冲锋命令（楔形冲击阵型 + 指定目标）。
+        // t58：v1.4.8 ArrangementOrder 8 成员核实（ArrangementOrder.cs L32-46）——楔形=Skein（无 Wedge 命名），
+        // Charge 换 Skein 冲击阵（Recall/Reform 由 IssueOrder 恢复 FallBack/Column，Setup 恢复 Line）。
+        private static void IssueChargeOrder(Formation formation, Formation target)
+        {
+            formation.SetArrangementOrder(ArrangementOrder.ArrangementOrderSkein); // 楔形冲击阵
+            formation.SetMovementOrder(target != null
+                ? MovementOrder.MovementOrderChargeToTarget(target)
+                : MovementOrder.MovementOrderCharge);
         }
 
         // F2 意图 → 机会窗映射（t48 拓宽）：进攻性意图均可触发冲锋——
@@ -205,9 +321,7 @@ namespace CombatBrain.Ai
                     formation.SetArrangementOrder(ArrangementOrder.ArrangementOrderLine); // 列阵
                     break;
                 case CavalryState.Charge:
-                    formation.SetMovementOrder(targetFormation != null
-                        ? MovementOrder.MovementOrderChargeToTarget(targetFormation)
-                        : MovementOrder.MovementOrderCharge);
+                    IssueChargeOrder(formation, targetFormation); // t58：楔形冲击阵+冲锋命令（含绕行后的正式冲锋）
                     break;
                 case CavalryState.Recall:
                     formation.SetMovementOrder(MovementOrder.MovementOrderFallBack); // 后撤脱离
