@@ -55,6 +55,25 @@ namespace CombatBrain.Ai
             }
         }
 
+        // t62 战术层态势摘要：9 意图各配一句预设短语（随战术名一同播报，让玩家知道「为什么打这个战术」）。
+        // 纯静态映射只读；短语 ≤12 字，与战术名拼后整条 ≤20 字。
+        public static string TacticBrief(IntentType intent)
+        {
+            switch (intent)
+            {
+                case IntentType.Attack: return "正面压上，全线接敌";
+                case IntentType.Defend: return "就地固守，稳住阵线";
+                case IntentType.Retreat: return "全线后撤，脱离接敌";
+                case IntentType.Flank: return "敌侧翼暴露，骑兵绕后";
+                case IntentType.Harass: return "骑兵游击，消耗敌射手";
+                case IntentType.Reform: return "收拢队伍，恢复建制";
+                case IntentType.Pursue: return "敌军已溃，追击残敌";
+                case IntentType.ProtectArcher: return "敌射手威胁大，全军护射";
+                case IntentType.BraceFormation: return "敌骑逼近，步兵架枪";
+                default: return string.Empty;
+            }
+        }
+
         // 阵营中文名：文化 StringId → 中文（CultureId 士兵多数决，见下）。
         // 读不到 → 我军/敌军兜底；未映射文化原样展示（仍比 Team 1 可读）。
         public static string Faction(Team team)

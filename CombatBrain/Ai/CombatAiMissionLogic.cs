@@ -356,8 +356,10 @@ namespace CombatBrain.Ai
                     CombatLog.Log(string.Format(
                         "Team {0} 意图切换 → {1}  [{2}]",
                         own.TeamIndex, newIntent, v.ToString()));
-                    InGameFeedback.NotifyTactical("意图", // 游戏内反馈：战术级全量（0.5s 拍低频事件，正常模式显示）
-                        string.Format("{0}改变战术：{1}", FeedbackText.Faction(own), FeedbackText.Intent(newIntent)),
+                    InGameFeedback.NotifyTactical("意图", // t62 战术层播报：阵营+战术名+态势摘要（正常模式显示；
+                        // hold 6s 天然限频 + NotifyTactical 3s 去重/速率上限防刷屏；编队级跃迁仍为细节行）
+                        string.Format("{0}战术：{1}——{2}",
+                            FeedbackText.Faction(own), FeedbackText.Intent(newIntent), FeedbackText.TacticBrief(newIntent)),
                         InGameFeedback.TacticalColor);
                 }
             }
