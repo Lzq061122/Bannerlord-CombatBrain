@@ -21,11 +21,20 @@ namespace CombatBrain.Ai
 
         private sealed class TeamState
         {
+            // t69：cultureId 开战缓存一次（FeedbackText.CultureId 是 O(兵数) 遍历，严禁放 0.5s TickIntent）
+            public TeamState(Team team, string cultureId)
+            {
+                Team = team;
+                CultureId = cultureId;
+                Engine = new BeliefIntentEngine(TacticManual.BuildMatrix(), cultureId); // 文化分表（null=默认表=帝国）
+            }
+
             public Team Team;
             public PerceptionPipeline Perception;
             public readonly KnowledgeView View = new KnowledgeView(25f, 0.08f, 0.15f);
+            public readonly string CultureId; // t69：开战缓存文化（日志/未来消费可读）
             // F2：信念增强引擎（score = ΣV·W + ΣB·C；belief==null 时退化为 F1 纯反应式）
-            public readonly BeliefIntentEngine Engine = new BeliefIntentEngine(TacticManual.BuildMatrix()); // P2-④ 死参数 counter 已删
+            public readonly BeliefIntentEngine Engine;
             public SituationVector LastVector;
             public IntentType LastIntent = IntentType.Defend;
             public float InitialCount = -1f;
@@ -140,7 +149,8 @@ namespace CombatBrain.Ai
             foreach (Team team in mission.Teams)
             {
                 if (team == null) continue;
-                var state = new TeamState { Team = team };
+                // t69：cultureId 开战缓存一次（O(兵数) 士兵多数决，Init 仅跑一次；严禁放 0.5s TickIntent）
+                var state = new TeamState(team, FeedbackText.CultureId(team));
                 state.Perception = new PerceptionPipeline(state.View, 60f, 1.0f);
                 _states[team.TeamIndex] = state;
             }

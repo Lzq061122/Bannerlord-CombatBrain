@@ -85,6 +85,9 @@ namespace OfflineTests
             Console.WriteLine("== T1-01 FormationIntegrity ==");
             TestFormationIntegrity();
 
+            Console.WriteLine("== T26-01 CultureTables ==");
+            TestCultureTables();
+
             Console.WriteLine();
             if (_failures == 0)
             {
@@ -802,6 +805,47 @@ namespace OfflineTests
                 "grade 20~39 -> Severe");
             Check(FormationIntegrity.Grade(19f) == FormationIntegrityGrade.Collapsed && FormationIntegrity.Grade(0f) == FormationIntegrityGrade.Collapsed,
                 "grade <20 -> Collapsed");
+        }
+
+        // T26-01 文化战术模板（六文化 9×12 权重表，源文档 §2.2）
+        private static void TestCultureTables()
+        {
+            // 默认回落：null/空/未知/帝国/掠夺者 → 现有 Matrix（引用相同=逐行相等，零回归）
+            Check(ReferenceEquals(TacticManual.MatrixFor(null), TacticManual.BuildMatrix()), "null culture -> default matrix");
+            Check(ReferenceEquals(TacticManual.MatrixFor(""), TacticManual.BuildMatrix()), "empty culture -> default matrix");
+            Check(ReferenceEquals(TacticManual.MatrixFor("unknown"), TacticManual.BuildMatrix()), "unknown culture -> default matrix");
+            Check(ReferenceEquals(TacticManual.MatrixFor("empire"), TacticManual.BuildMatrix()), "empire -> default matrix");
+            Check(ReferenceEquals(TacticManual.MatrixFor("looter"), TacticManual.BuildMatrix()), "looter -> default matrix");
+
+            // 5 套分表：独立实例（非默认引用）且差异 ≥3 行（§2.2 每文化 8~9 处 patch，跨 8 行以上）
+            string[] cultures = { "vlandia", "sturgia", "battania", "khuzait", "aserai" };
+            float[][] def = TacticManual.BuildMatrix();
+            foreach (string cid in cultures)
+            {
+                float[][] t = TacticManual.MatrixFor(cid);
+                Check(t != null && !ReferenceEquals(t, def), cid + " -> own culture table");
+                int diffRows = 0;
+                for (int r = 0; r < t.Length; r++)
+                {
+                    bool rowDiff = false;
+                    for (int d = 0; d < 12; d++) if (t[r][d] != def[r][d]) rowDiff = true;
+                    if (rowDiff) diffRows++;
+                }
+                Check(diffRows >= 3, cid + " differs from default in >=3 rows");
+            }
+
+            // 行为方向：库赛特表下 Flank 评分高于默认表（§10.8 包抄优先；与 SkirmishGlue/骑兵绕行同向联动）
+            var vk = new SituationVector { Cav = 0.4f, FlankEx = 0.6f, Gap = 0.5f, Dist = 0.9f };
+            int idxFlank = Array.IndexOf(TacticManual.Order, IntentType.Flank);
+            Check(TacticManual.CombinedScoreFor("khuzait", vk, null, idxFlank) > TacticManual.CombinedScore(vk, null, idxFlank),
+                "khuzait table boosts Flank vs default");
+
+            // 引擎级：khuzait 文化引擎构造 + Evaluate 正常出意图（分表路径走通）
+            var ke = new BeliefIntentEngine(TacticManual.BuildMatrix(), "khuzait", holdTime: 0f);
+            IntentType kChosen;
+            ke.Evaluate(vk, null, 0.5f, out kChosen);
+            Check(kChosen == IntentType.Flank || kChosen == IntentType.Harass || kChosen == IntentType.Pursue,
+                "khuzait engine picks aggressive intent (t69)");
         }
 
         private static int idxDefend()

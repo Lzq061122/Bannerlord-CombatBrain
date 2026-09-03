@@ -9,6 +9,7 @@ namespace CombatBrain.Intent
     public sealed class BeliefIntentEngine
     {
         private readonly float[][] _weights;
+        private readonly string _cultureId;    // t69：文化战术模板（null=默认表=帝国）
         private readonly float _switchMargin;  // 15%
         private readonly float _holdTime;      // 6s（与 F1 一致）
         private IntentType _current;
@@ -19,9 +20,13 @@ namespace CombatBrain.Intent
         // 评分经 TacticManual.CombinedScore 统一走静态 Counter 矩阵（与 weights 同源，均来自
         // TacticManual 静态矩阵），传入的 BuildCounter() 实参无任何效果。构造调用点已同步
         // （CombatAiMissionLogic L28、OfflineTests F2 段）。
-        public BeliefIntentEngine(float[][] weights, float switchMargin = 0.15f, float holdTime = 6f)
+        // t69：新增可选 cultureId（null=默认表，向后兼容）——非空时 Evaluate 走
+        // TacticManual.CombinedScoreFor(cultureId,...)（文化分表 §2.2 六文化权重），
+        // 防抖/C 矩阵/信念注入语义不变。
+        public BeliefIntentEngine(float[][] weights, string cultureId = null, float switchMargin = 0.15f, float holdTime = 6f)
         {
             _weights = weights;
+            _cultureId = cultureId;
             _switchMargin = switchMargin;
             _holdTime = holdTime;
             _current = IntentType.Defend;
@@ -41,7 +46,10 @@ namespace CombatBrain.Intent
             float bestScore = float.MinValue;
             for (int i = 0; i < TacticManual.IntentCount; i++)
             {
-                float s = TacticManual.CombinedScore(v, belief, i);
+                // t69：文化分表评分（cultureId=null 走默认表=帝国）
+                float s = _cultureId == null
+                    ? TacticManual.CombinedScore(v, belief, i)
+                    : TacticManual.CombinedScoreFor(_cultureId, v, belief, i);
                 if (s > bestScore)
                 {
                     bestScore = s;
