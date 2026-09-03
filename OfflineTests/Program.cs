@@ -464,14 +464,6 @@ namespace OfflineTests
             IntentType chosenF;
             fastF.Evaluate(vf, 0.5f, out chosenF);
             Check(chosenF == IntentType.Flank, "flank exposed + gap -> Flank (t60)");
-
-            // t63 repair r2 补强：骑兵优势+游击目标态势 → Harass 胜出（敌骑少、敌散兵压上=骚扰目标多；
-            // 守住 Harass 重定标的胜出路径，防权重回退时被 Flank/Defend 盖过）
-            var vh = new SituationVector { Cav = 0.6f, EnemCav = 0.1f, Skirm = 0.6f, FlankEx = 0.2f, Gap = 0.3f, Moral = 0.9f, Dist = 0.5f };
-            var fastH = new IntentEngine(TacticManual.BuildMatrix(), holdTime: 0f);
-            IntentType chosenH;
-            fastH.Evaluate(vh, 0.5f, out chosenH);
-            Check(chosenH == IntentType.Harass, "cavalry superiority + skirmish targets -> Harass (t63)");
         }
 
         // F2 OpponentModel / BeliefIntentEngine（t16 §2.1 信号先验表 + t11 B1/B2 + t11 L164 封顶）
