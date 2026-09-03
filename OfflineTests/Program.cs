@@ -450,6 +450,20 @@ namespace OfflineTests
             var fast = new IntentEngine(TacticManual.BuildMatrix(), holdTime: 0f);
             fast.Evaluate(vec, 0.5f, out chosen);
             Check(chosen == IntentType.ProtectArcher, "high Arc+EnemCav+FlankEx -> ProtectArcher");
+
+            // t60 夹击/绕后触发：FlankEx/Gap 为 Flank 正触发（修复原 -0.20 反向权重），Harass 骑兵优骚扰
+            int idxFlank = Array.IndexOf(TacticManual.Order, IntentType.Flank);
+            int idxHarass = Array.IndexOf(TacticManual.Order, IntentType.Harass);
+            CheckApprox(m[idxFlank][9], 0.60f, "Flank FlankEx +0.60 (t60)");
+            CheckApprox(m[idxFlank][10], 0.45f, "Flank Gap +0.45 (t60)");
+            Check(m[idxHarass][9] > 0f && m[idxHarass][10] > 0f, "Harass FlankEx/Gap positive (t60)");
+            Check(m[idxHarass][8] < 0f, "Harass EnemCav negative (t60, avoid enemy cavalry)");
+            // 侧翼暴露+缺口态势 → Flank 胜出（不再只打正面；配合 hold 6s 防抖与 15% 切换余量）
+            var vf = new SituationVector { FlankEx = 0.6f, Gap = 0.5f, Cav = 0.3f, Moral = 0.9f, Dist = 0.5f };
+            var fastF = new IntentEngine(TacticManual.BuildMatrix(), holdTime: 0f);
+            IntentType chosenF;
+            fastF.Evaluate(vf, 0.5f, out chosenF);
+            Check(chosenF == IntentType.Flank, "flank exposed + gap -> Flank (t60)");
         }
 
         // F2 OpponentModel / BeliefIntentEngine（t16 §2.1 信号先验表 + t11 B1/B2 + t11 L164 封顶）
