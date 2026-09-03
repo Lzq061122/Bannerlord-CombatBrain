@@ -81,7 +81,7 @@ namespace CombatBrain.Ai
 
             foreach (Team team in mission.Teams)
             {
-                if (team == null || team.IsPlayerTeam) continue; // P0-④ 玩家队豁免：玩家骑兵归玩家指挥，不接管波次
+                if (team == null || (CombatBrainSettings.PlayerTeamExemptionEnabled && team.IsPlayerTeam)) continue; // P0-④ 玩家队豁免（MCM 可开关 t66）：玩家骑兵归玩家指挥，不接管波次
                 IntentType intent = getIntent != null ? getIntent(team) : IntentType.Attack;
 
                 foreach (Formation formation in team.FormationsIncludingEmpty)

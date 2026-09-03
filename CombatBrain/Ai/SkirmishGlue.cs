@@ -58,7 +58,7 @@ namespace CombatBrain.Ai
 
             foreach (Team team in mission.Teams)
             {
-                if (team == null || team.IsPlayerTeam) continue; // P0-④ 玩家队豁免：玩家骑射归玩家指挥
+                if (team == null || (CombatBrainSettings.PlayerTeamExemptionEnabled && team.IsPlayerTeam)) continue; // P0-④ 玩家队豁免（MCM 可开关 t66）：玩家骑射归玩家指挥
                 if (isTeamProtected != null && isTeamProtected(team.TeamIndex)) continue; // F3 保护激活：骑射听 F3
 
                 foreach (Formation formation in team.FormationsIncludingEmpty)

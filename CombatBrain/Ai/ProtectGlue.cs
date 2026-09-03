@@ -51,7 +51,7 @@ namespace CombatBrain.Ai
 
             foreach (Team team in mission.Teams)
             {
-                if (team == null || team.IsPlayerTeam) continue; // P0-④ 玩家队豁免：不对玩家编队下令（与玩家指挥打架）
+                if (team == null || (CombatBrainSettings.PlayerTeamExemptionEnabled && team.IsPlayerTeam)) continue; // P0-④ 玩家队豁免（MCM 可开关 t66）：不对玩家编队下令（与玩家指挥打架）
                 IntentType intent = getIntent != null ? getIntent(team) : IntentType.Attack;
                 bool active = intent == IntentType.ProtectArcher || HasPressedRanged(team); // F2 目标识别 or 受压自保
                 if (!active)
@@ -191,7 +191,7 @@ namespace CombatBrain.Ai
             int n = 0;
             foreach (Team team in mission.Teams)
             {
-                if (team == null || team == own || team.IsPlayerTeam) continue; // P0-④ 玩家队不纳入敌队聚合（玩家领域）
+                if (team == null || team == own || (CombatBrainSettings.PlayerTeamExemptionEnabled && team.IsPlayerTeam)) continue; // P0-④ 玩家队不纳入敌队聚合（MCM 可开关 t66：豁免关闭=玩家队正常纳入敌队聚合）
                 foreach (Formation f in team.FormationsIncludingEmpty)
                 {
                     if (f == null || f.CountOfUnits == 0) continue;

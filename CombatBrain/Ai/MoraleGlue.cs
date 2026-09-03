@@ -85,7 +85,7 @@ namespace CombatBrain.Ai
 
             foreach (Team team in mission.Teams)
             {
-                if (team == null || team.IsPlayerTeam) continue; // P0-④ 玩家队豁免：不接管玩家编队士气/撤退
+                if (team == null || (CombatBrainSettings.PlayerTeamExemptionEnabled && team.IsPlayerTeam)) continue; // P0-④ 玩家队豁免（MCM 可开关 t66）：不接管玩家编队士气/撤退
                 IntentType intent = getIntent != null ? getIntent(team) : IntentType.Attack;
                 float teamMoral = getMorale != null ? getMorale(team) : 0.5f;
 

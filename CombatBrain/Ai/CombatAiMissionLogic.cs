@@ -329,7 +329,7 @@ namespace CombatBrain.Ai
                 // IntentSwitched（否则 F10 把自家引擎输出当玩家套路，循环自证；玩家队也不消费本层
                 // 意图，4 个编队层 Glue 已同步豁免）。态势向量/士气照算（LastVector 仍供 GetMorale
                 // 消费），仅跳过决策与事件发布。IsPlayerTeam @ Team.cs L40（v1.4.8 已核实）。
-                if (own.IsPlayerTeam) continue;
+                if (CombatBrainSettings.PlayerTeamExemptionEnabled && own.IsPlayerTeam) continue; // P0-④（MCM 可开关 t66）：豁免关闭=意图决策也接管玩家队
 
                 IntentType newIntent;
                 if (state.Engine.Evaluate(v, belief, 0.5f, out newIntent))
