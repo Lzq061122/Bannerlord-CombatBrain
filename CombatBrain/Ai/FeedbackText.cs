@@ -1,5 +1,6 @@
 namespace CombatBrain.Ai
 {
+    using System.Collections.Generic;
     using CombatBrain.Cavalry;
     using CombatBrain.Morale;
     using TaleWorlds.MountAndBlade;
@@ -54,18 +55,11 @@ namespace CombatBrain.Ai
             }
         }
 
-        // 阵营中文名：通用（GeneralAgent）所属文化 StringId → 中文。
+        // 阵营中文名：文化 StringId → 中文（CultureId 士兵多数决，见下）。
         // 读不到 → 我军/敌军兜底；未映射文化原样展示（仍比 Team 1 可读）。
         public static string Faction(Team team)
         {
-            string sid = null;
-            try
-            {
-                Agent general = team != null ? team.GeneralAgent : null;
-                if (general != null && general.Character != null && general.Character.Culture != null)
-                    sid = general.Character.Culture.StringId;
-            }
-            catch { }
+            string sid = CultureId(team);
             switch (sid)
             {
                 case "empire": return "帝国";
@@ -78,6 +72,51 @@ namespace CombatBrain.Ai
             }
             if (sid != null) return sid;
             return team != null && team.IsPlayerTeam ? "我军" : "敌军";
+        }
+
+        // t54 阵营判定（士兵文化多数决）：GeneralAgent 文化在自定义战斗不可靠——可为 null 或
+        // 与士兵不同阵营（实测选帝国显示瓦兰迪亚、日志读空 阵营=-）。改为遍历各编队士兵统计
+        // 文化票数取多数；无兵 → GeneralAgent 兜底 → null（调用方自行再兜底）。
+        // 反作弊闸：文化=公开只读属性；调用均为事件驱动低频（FSM 跃迁/意图切换），O(兵数) 可接受。
+        // API 核实（v1.4.8 反编译源 Formation.cs L1166）：GetUnitsWithoutDetachedOnes() 枚举全部士兵。
+        public static string CultureId(Team team)
+        {
+            if (team == null) return null;
+            string best = null;
+            int bestVotes = 0;
+            Dictionary<string, int> votes = new Dictionary<string, int>();
+            try
+            {
+                foreach (Formation f in team.FormationsIncludingEmpty)
+                {
+                    if (f == null || f.CountOfUnits == 0) continue;
+                    foreach (Agent a in f.GetUnitsWithoutDetachedOnes())
+                    {
+                        if (a == null || a.Character == null || a.Character.Culture == null) continue;
+                        string sid = a.Character.Culture.StringId;
+                        if (string.IsNullOrEmpty(sid)) continue;
+                        int v;
+                        votes.TryGetValue(sid, out v);
+                        v++;
+                        votes[sid] = v;
+                        if (v > bestVotes)
+                        {
+                            bestVotes = v;
+                            best = sid;
+                        }
+                    }
+                }
+            }
+            catch { }
+            if (best != null) return best;
+            try
+            {
+                Agent general = team.GeneralAgent; // 兜底：无活兵时才用将军文化
+                if (general != null && general.Character != null && general.Character.Culture != null)
+                    return general.Character.Culture.StringId;
+            }
+            catch { }
+            return null;
         }
     }
 }

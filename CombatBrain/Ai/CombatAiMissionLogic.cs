@@ -469,20 +469,13 @@ namespace CombatBrain.Ai
         }
 
         // 日志增强：单队身份行（Side/阵营名/与玩家关系），开战一次。
-        // 阵营名取通用（GeneralAgent）所属文化 StringId（empire/battania 等，与验收示例 Empire/Battania 对应）。
-        // 不用 BasicCultureObject.Name：其为 TextObject（TaleWorlds.Localization 未引用，CS0012）；
-        // StringId 来自 MBObjectBase（TaleWorlds.ObjectSystem 已引用）。只读公开属性（反作弊闸不变）。
+        // 阵营名 = FeedbackText.CultureId（t54 士兵文化多数决；GeneralAgent 文化自定义战斗不可靠——
+        // 实测选帝国读空/误读）。StringId 来自 MBObjectBase（TaleWorlds.ObjectSystem 已引用；
+        // 不用 TextObject/Localization）。
         private void LogTeamIdentity(Team team)
         {
             if (team == null) return;
-            string culture = "-";
-            try
-            {
-                Agent general = team.GeneralAgent;
-                if (general != null && general.Character != null && general.Character.Culture != null)
-                    culture = general.Character.Culture.StringId;
-            }
-            catch { }
+            string culture = FeedbackText.CultureId(team) ?? "-";
             string relation = Mission.PlayerTeam == null ? "-"
                 : (team.IsPlayerTeam ? "玩家" : team.IsPlayerAlly ? "玩家盟友" : "敌方");
             CombatLog.Log(string.Format("  Team {0}: Side={1} 阵营={2} 关系={3}",
