@@ -34,14 +34,21 @@ namespace CombatBrain.Intent
 
         // 维度顺序：Power, Line, Cav, Height, Moral, Arc, PenB, Dist, EnemCav, FlankEx, Gap, Skirm
         // 后 4 列（EnemCav/FlankEx/Gap/Skirm）为 F2 事件采集维度的冷启动权重（建议值，可调）。
+        // t60 夹击/绕后触发修正（用户实测 P0：整场只有 Defend/Brace/Protect，从不 Flank/Harass）：
+        //   * Flank 行原 FlankEx=-0.20 为反向权重 bug（敌侧翼暴露=包抄核心触发信号，却在扣分）；
+        //     修正 FlankEx=+0.60、Gap=+0.45——敌侧翼暴露/阵线缺口达标时 Flank 可靠胜出（配合
+        //     防抖 hold 6s 与 15% 切换余量，需持续暴露才会真正切换，不抖动）。
+        //   * Harass 行重定标为「骑兵优骚扰消耗」：Cav↑/EnemCav↓（敌骑多不骚扰）/FlankEx/Gap/Skirm↑
+        //     （侧翼暴露、缺口、敌散兵压上=骚扰目标多）；Arc↓（不再以我方射手为主，骑兵为主）。
+        //   * 其余行（含 ProtectArcher/BraceFormation t16 建议值）不动，C 反制矩阵不动。
         private static readonly float[][] Matrix =
         {
             //                 Power   Line   Cav  Height Moral  Arc   PenB   Dist  EnemCav FlankEx  Gap   Skirm
             new float[] {      0.30f, 0.10f, 0.10f, 0.05f, 0.20f, 0.20f, 0.30f,-0.40f, -0.10f, -0.10f, 0.10f, 0.10f }, // Attack
             new float[] {     -0.10f, 0.40f, 0.00f, 0.30f, 0.10f, 0.10f,-0.30f, 0.20f,  0.10f,  0.10f,-0.10f, 0.05f }, // Defend
             new float[] {     -0.50f, 0.00f,-0.10f, 0.10f,-0.40f,-0.10f,-0.40f, 0.50f, -0.20f,  0.20f, 0.10f, 0.05f }, // Retreat
-            new float[] {      0.10f,-0.20f, 0.50f,-0.10f, 0.05f, 0.10f, 0.10f, 0.05f, -0.10f, -0.20f, 0.15f, 0.05f }, // Flank
-            new float[] {     -0.10f,-0.10f, 0.30f, 0.10f, 0.05f, 0.50f, 0.00f, 0.40f, -0.10f, -0.10f, 0.00f, 0.15f }, // Harass
+            new float[] {      0.05f,-0.25f, 0.50f,-0.10f, 0.05f, 0.10f, 0.10f, 0.05f, -0.10f,  0.60f, 0.45f, 0.05f }, // Flank（t60）
+            new float[] {     -0.10f,-0.10f, 0.45f, 0.10f, 0.05f, 0.35f, 0.00f, 0.25f, -0.25f,  0.30f, 0.25f, 0.35f }, // Harass（t60）
             new float[] {      0.10f,-0.40f, 0.00f, 0.05f,-0.30f, 0.00f, 0.20f, 0.05f, -0.10f, -0.10f, 0.20f, 0.00f }, // Reform
             new float[] {      0.20f, 0.00f, 0.20f, 0.00f, 0.10f, 0.10f, 0.50f,-0.10f, -0.10f, -0.15f, 0.05f, 0.15f }, // Pursue
             // 新意图（t16 §1.2 建议值）：
