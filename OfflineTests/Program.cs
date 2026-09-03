@@ -10,6 +10,7 @@ using CombatBrain.Morale;
 using CombatBrain.Experience;
 using CombatBrain.Intent;
 using CombatBrain.Perception;
+using CombatBrain.Formations;
 using CombatBrain.Ai;
 
 namespace OfflineTests
@@ -80,6 +81,9 @@ namespace OfflineTests
 
             Console.WriteLine("== P1-1 TerrainSampler ==");
             TestTerrainSampler();
+
+            Console.WriteLine("== T1-01 FormationIntegrity ==");
+            TestFormationIntegrity();
 
             Console.WriteLine();
             if (_failures == 0)
@@ -756,6 +760,48 @@ namespace OfflineTests
 
             // 远越界仍返回边缘值（平地=0），不抛异常
             Check(Math.Abs(wide.Height(1e6f, 1e6f)) < 1e-6f, "far out-of-range returns edge value");
+        }
+
+        // T1-01 编队阵型完整度（FormationIntegrity，纯逻辑零依赖：官方聚合值由胶水层喂入）
+        private static void TestFormationIntegrity()
+        {
+            // 空编队=100（无事可测，非 0 防误报崩溃）
+            Check(FormationIntegrity.Compute(12f, 20f, 0f, 0f, 0) == 100f, "empty formation -> 100");
+
+            // 线性映射锚点：≤3m=100、≥15m=0、中点 9m=50、6m=75（全员同速 ratio=1 不打折）
+            Check(FormationIntegrity.Compute(3f, 3f, 1f, 1f, 40) == 100f, "deviation 3m -> 100");
+            Check(FormationIntegrity.Compute(15f, 15f, 1f, 1f, 40) == 0f, "deviation 15m -> 0");
+            Check(FormationIntegrity.Compute(9f, 9f, 1f, 1f, 40) == 50f, "deviation 9m -> 50 (linear midpoint)");
+            Check(FormationIntegrity.Compute(6f, 6f, 1f, 1f, 40) == 75f, "deviation 6m -> 75");
+
+            // 线性单调：偏差越大分越低
+            float s6 = FormationIntegrity.Compute(6f, 6f, 1f, 1f, 40);
+            float s9 = FormationIntegrity.Compute(9f, 9f, 1f, 1f, 40);
+            float s12 = FormationIntegrity.Compute(12f, 12f, 1f, 1f, 40);
+            Check(s6 > s9 && s9 > s12, "linear monotonic decreasing");
+
+            // 合并 0.6*平均+0.4*最大：平均完美+单兵掉队(最大 15m) → 60 而非 0（防单兵掉队拉爆；0.6f 有浮点误差用 CheckApprox）
+            CheckApprox(FormationIntegrity.Compute(3f, 15f, 0f, 0f, 40), 60f, "single straggler -> 60 (max weight 0.4)");
+
+            // 速度归一化：半速移动 ratio=0.5 → 50*0.85=42.5；满速移动不打折；驻停不归一
+            Check(FormationIntegrity.Compute(9f, 9f, 2f, 4f, 40) == 42.5f, "half-speed movement -> 42.5 (velocity normalize)");
+            Check(FormationIntegrity.Compute(9f, 9f, 4f, 4f, 40) == 50f, "full-speed movement -> no extra penalty");
+            Check(FormationIntegrity.Compute(9f, 9f, 0f, 0f, 40) == 50f, "standing formation -> skip velocity normalize");
+
+            // 骑兵机动不误判：偏差 10m 但全员同速（ratio=1）→ 41.67（中度而非崩溃）
+            CheckApprox(FormationIntegrity.Compute(10f, 10f, 5f, 5f, 40), 41.6667f, "cavalry cohesive maneuver -> ~41.7");
+
+            // 分档边界（阈值表勿改）：80/60/40/20
+            Check(FormationIntegrity.Grade(100f) == FormationIntegrityGrade.Full && FormationIntegrity.Grade(80f) == FormationIntegrityGrade.Full,
+                "grade >=80 -> Full");
+            Check(FormationIntegrity.Grade(79f) == FormationIntegrityGrade.Slight && FormationIntegrity.Grade(60f) == FormationIntegrityGrade.Slight,
+                "grade 60~79 -> Slight");
+            Check(FormationIntegrity.Grade(59f) == FormationIntegrityGrade.Moderate && FormationIntegrity.Grade(40f) == FormationIntegrityGrade.Moderate,
+                "grade 40~59 -> Moderate");
+            Check(FormationIntegrity.Grade(39f) == FormationIntegrityGrade.Severe && FormationIntegrity.Grade(20f) == FormationIntegrityGrade.Severe,
+                "grade 20~39 -> Severe");
+            Check(FormationIntegrity.Grade(19f) == FormationIntegrityGrade.Collapsed && FormationIntegrity.Grade(0f) == FormationIntegrityGrade.Collapsed,
+                "grade <20 -> Collapsed");
         }
 
         private static int idxDefend()
