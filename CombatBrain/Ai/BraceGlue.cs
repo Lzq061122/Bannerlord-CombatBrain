@@ -9,8 +9,8 @@ namespace CombatBrain.Ai
 {
     // F4 BraceGlue 架枪反骑阵地（H3，P3 级）——BraceFormation 意图执行层（pipeline §三 F4）。
     // 目标：敌骑逼近时步兵架枪站定。
-    // 触发：本队意图 == BraceFormation（F1/F2 目标识别）或敌骑编队 ≤55m 且净接近
-    //   （编队级可观察运动学，防御自保）；剧集内站定（MovementOrderStop），退出（>70m/无敌骑）后交回正常 AI。
+    // 触发：敌骑编队 ≤55m 且净接近（编队级可观察运动学，防御自保；本队意图 == BraceFormation 时
+    //   亦须过同一距离守卫，t71 敌骑尚远不站定）；剧集内站定（MovementOrderStop），退出（>70m/无敌骑）后交回正常 AI。
     // 动作：
     //   * 步兵编队 → 剧集武装沿统计架枪可用占比（多数兵零扫描：GetCountOfUnitsWithCondition 一次）
     //     达标 → 每拍站定（Stop）；引擎对静止持枪兵自动架枪（架枪是武器 usage 引擎行为，非 AI 命令）。
@@ -77,18 +77,18 @@ namespace CombatBrain.Ai
                 _prevCavDist[team.TeamIndex] = hasCav ? d : -1f;
 
                 bool ep = IsBracing(team.TeamIndex);
-                if (intent == IntentType.BraceFormation)
+                bool intentBrace = intent == IntentType.BraceFormation;
+                // t71：意图驱动不再绕过距离守卫——统一走 BracePlan.ShouldBrace（≤55m 且净接近才武装；
+                //       首拍仅记录基线不武装），敌骑尚远时即使意图选 Brace 也不站定。
+                bool arm = (intentBrace || hasCav) && (ep ? !BracePlan.ShouldRelease(d) : BracePlan.ShouldBrace(d, prev));
+                if (arm)
                 {
-                    _episode[team.TeamIndex] = true; // 意图驱动：直接架枪
+                    _episode[team.TeamIndex] = true; // 武装或维持剧集（意图/威胁驱动，均经距离守卫）
                     if (!ep) InGameFeedback.NotifyTactical("架枪", // 游戏内反馈：编队级边沿（激活一次性）
-                        string.Format("{0}步兵架枪迎敌（奉命）", FeedbackText.Faction(team)), InGameFeedback.FormationColor);
-                    Execute(team, mission);
-                }
-                else if (hasCav && (ep ? !BracePlan.ShouldRelease(d) : BracePlan.ShouldBrace(d, prev)))
-                {
-                    _episode[team.TeamIndex] = true; // 威胁驱动：武装或维持剧集
-                    if (!ep) InGameFeedback.NotifyTactical("架枪", // 游戏内反馈：编队级边沿（激活一次性）
-                        string.Format("{0}步兵架枪迎敌（敌骑距{1:F0}米）", FeedbackText.Faction(team), d), InGameFeedback.FormationColor);
+                        intentBrace
+                            ? string.Format("{0}步兵架枪迎敌（奉命）", FeedbackText.Faction(team))
+                            : string.Format("{0}步兵架枪迎敌（敌骑距{1:F0}米）", FeedbackText.Faction(team), d),
+                        InGameFeedback.FormationColor);
                     Execute(team, mission);
                 }
                 else

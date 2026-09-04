@@ -18,13 +18,13 @@ namespace CombatBrain.Intent
 
         /// <summary>
         /// 触发判定：敌骑最近距离在 (minMelee, range] 内且本拍净接近（上拍距离 - 本拍 ≥ closing）。
-        /// prevDist &lt; 0（首拍未知）→ 只要在范围内即触发（初始武装，宁可早站定）。
+        /// prevDist &lt; 0（首拍未知）→ 不触发（仅记录基线，需后续净接近才武装，t71 修复过早架枪）。
         /// </summary>
         public static bool ShouldBrace(float dist, float prevDist,
             float range = TriggerRange, float minMelee = MinMeleeDist, float closing = ClosingSpeed)
         {
             if (float.IsNaN(dist) || dist <= minMelee || dist > range) return false;
-            if (prevDist < 0f) return true; // 首拍
+            if (prevDist < 0f) return false; // 首拍：仅记录基线，不武装（t71）
             return prevDist - dist >= closing;
         }
 

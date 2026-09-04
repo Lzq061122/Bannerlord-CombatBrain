@@ -430,8 +430,17 @@ namespace OfflineTests
             CheckApprox(m[idxProtect][5], 0.40f, "ProtectArcher Arc 0.40");
             CheckApprox(m[idxProtect][8], 0.35f, "ProtectArcher EnemCav 0.35");
             CheckApprox(m[idxProtect][9], 0.30f, "ProtectArcher FlankEx 0.30");
-            CheckApprox(m[idxBrace][7], 0.30f, "BraceFormation Dist 0.30");
+            CheckApprox(m[idxBrace][7], -0.30f, "BraceFormation Dist -0.30 (t71)");
             CheckApprox(m[idxBrace][8], 0.50f, "BraceFormation EnemCav 0.50");
+            // t71 架枪过早触发：敌骑远(Dist=1.0) Brace 非最高分；敌骑近且多(Dist~0.1+EnemCav 高) Brace 最高分
+            var vBraceFar = new SituationVector { Dist = 1.0f };
+            int bestBraceFar = 0; float bestBraceFarScore = TacticManual.Score(vBraceFar, 0);
+            for (int i = 1; i < TacticManual.IntentCount; i++) { float s = TacticManual.Score(vBraceFar, i); if (s > bestBraceFarScore) { bestBraceFarScore = s; bestBraceFar = i; } }
+            Check(bestBraceFar != idxBrace, "Dist=1.0 -> Brace not highest (t71)");
+            var vBraceCloseCav = new SituationVector { Dist = 0.1f, EnemCav = 1.0f };
+            int bestBraceClose = 0; float bestBraceCloseScore = TacticManual.Score(vBraceCloseCav, 0);
+            for (int i = 1; i < TacticManual.IntentCount; i++) { float s = TacticManual.Score(vBraceCloseCav, i); if (s > bestBraceCloseScore) { bestBraceCloseScore = s; bestBraceClose = i; } }
+            Check(bestBraceClose == idxBrace, "Dist~0.1 + EnemCav high -> Brace highest (t71)");
 
             // C 矩阵：9×6 边界 + 方向正确（t11 B2 锚点 + t16 §1.3 新行）
             float[][] c = TacticManual.BuildCounter();
@@ -646,7 +655,8 @@ namespace OfflineTests
             Check(!BracePlan.ShouldBrace(8f, 9f), "in melee (<=8m) no brace");
             Check(!BracePlan.ShouldBrace(30f, 30f), "no closing (delta 0) no trigger");
             Check(BracePlan.ShouldBrace(30f, 31.5f), "closing 1.5m/s triggers");
-            Check(BracePlan.ShouldBrace(30f, -1f), "first observation arms immediately");
+            Check(!BracePlan.ShouldBrace(30f, -1f), "first observation records baseline only (no arm, t71)");
+            Check(!BracePlan.ShouldBrace(60f, -1f), "first observation far distance no arm (t71)");
             Check(!BracePlan.ShouldBrace(float.NaN, 0f), "NaN distance no trigger");
 
             // ---- 退出：>70m 或无敌骑 ----
