@@ -31,6 +31,9 @@ namespace CombatBrain.Ai
             if (_state.TrySave(agent.Index, agent.AgentDrivenProperties.AIAttackOnDecideChance))
             {
                 agent.AgentDrivenProperties.AIAttackOnDecideChance = 0f;
+                // X2 协调：登记抑制标记，手活模型（CombatBrainAgentStatCalculateModel.UpdateAgentStats）
+                // 对该索引跳过 AIAttackOnDecideChance 覆盖（保持 0），避免模型刷新基准把抑制冲掉。
+                CombatBrainAgentStatCalculateModel.MarkAttackSuppressed(agent.Index);
             }
         }
 
@@ -42,6 +45,7 @@ namespace CombatBrain.Ai
             if (_state.TryRestore(agent.Index, out saved))
             {
                 agent.AgentDrivenProperties.AIAttackOnDecideChance = saved;
+                CombatBrainAgentStatCalculateModel.UnmarkAttackSuppressed(agent.Index); // X2 协调：解除抑制标记
             }
         }
 
@@ -55,6 +59,7 @@ namespace CombatBrain.Ai
         public void Remove(int agentIndex)
         {
             _state.Clear(agentIndex);
+            CombatBrainAgentStatCalculateModel.UnmarkAttackSuppressed(agentIndex); // X2 协调：清理抑制标记
         }
 
         public void ClearAll()

@@ -1,5 +1,6 @@
 using System;
 using System.Reflection;
+using TaleWorlds.Core;
 using TaleWorlds.MountAndBlade;
 using CombatBrain.Ai;
 
@@ -12,6 +13,22 @@ namespace CombatBrain
             base.OnSubModuleLoad();
             TryAttachMcm(); // t73：MCM 可选集成（无 MCM 静默用默认豁免）
             CombatLog.Log("CombatBrain 子模块已加载");
+        }
+
+        // X2 手活属性模型注册：MissionGameModels 链式取最后一个 GameModel（GetGameModel<T> 倒序遍历），
+        // 引擎自动把原版模型设为我们的 BaseModel（MBGameModel<T> L3-5），转发即保原版行为；零 Harmony。
+        protected override void OnGameStart(Game game, IGameStarter gameStarterObject)
+        {
+            base.OnGameStart(game, gameStarterObject);
+            try
+            {
+                gameStarterObject.AddModel(new CombatBrainAgentStatCalculateModel());
+                CombatLog.Log("CombatBrain 手活属性模型已注册（X2）");
+            }
+            catch (System.Exception ex)
+            {
+                CombatLog.Log("注册手活属性模型失败: " + ex.Message);
+            }
         }
 
         // t73：MCM 可选集成。先探测 AppDomain 是否已加载 MCMv5 程序集；

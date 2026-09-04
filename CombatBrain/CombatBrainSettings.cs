@@ -17,5 +17,11 @@ namespace CombatBrain
         // 1=现状拟人（F12 抖动 + hold 6s + 15% 余量），中间线性。默认 1=现状。
         // MCM 装载后可在「通用」组里热切（RequireRestart=false，bool 快档：果断/拟人）。
         public static float DecisionDelayStrength = 1f;
+
+        // X2 手活属性强度（观感补强 §X2）：0=原版现值（不覆盖 AI 手活）、1=满效果（格挡/招架×2 顶到
+        // 原版最高难度上限、射击误差按技能、防守方向随机化减半、攻击概率×1.5）。
+        // 能力参数非信息（反作弊闸不违规）；只对 IsAIControlled 人类单位生效（玩家手控不覆盖）。
+        // 默认 1=满效果；MCM 装载后可在「通用」组里热切（RequireRestart=false）。
+        public static float HandSkillStrength = 1f;
     }
 }
