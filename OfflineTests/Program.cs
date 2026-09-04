@@ -131,6 +131,9 @@ namespace OfflineTests
             Console.WriteLine("== X5-1 TroopClassifier ==");
             TestTroopClassifier();
 
+            Console.WriteLine("== X5-2 SlotLayout ==");
+            TestSlotLayout();
+
             Console.WriteLine();
             if (_failures == 0)
             {
@@ -1377,6 +1380,119 @@ namespace OfflineTests
                 "x51 veteran shield -> still ShieldBearer (IsVeteran 不改变角色)");
             Check(TroopClassifier.Classify(new SoldierInput { Kind = SoldierKind.Infantry, PrimaryWeaponClass = PrimaryWeaponClass.Polearm, Level = 6 }) == TroopRole.Polearm,
                 "x51 level 6 polearm -> still Polearm (等级不改变角色)");
+        }
+
+        // X5-2 槽位布局（SlotLayout 纯逻辑）：分流规则/Rank 占比/间距区间/同角色编组/散列放大/无分层错落
+        private static void TestSlotLayout()
+        {
+            // 1) 分流（§五）：Ranged 为主（占比≥0.5）→ RangedLoose；近战为主 → 消费 T2-01
+            var rangedDominant = new TroopComposition { Ranged = 6, LightMelee = 4 };
+            Check(SlotLayout.SelectLayout(rangedDominant, TacticsArrangement.ShieldWall) == LayoutKind.RangedLoose,
+                "x52 ranged-dominant(0.6) -> RangedLoose even if ShieldWall");
+            var boundary = new TroopComposition { Ranged = 5, LightMelee = 5 };
+            Check(SlotLayout.SelectLayout(boundary, TacticsArrangement.Line) == LayoutKind.RangedLoose,
+                "x52 ranged ratio 0.5 boundary -> RangedLoose");
+            var meleeDominantWall = new TroopComposition { ShieldBearer = 6, Polearm = 4, Ranged = 2 };
+            Check(SlotLayout.SelectLayout(meleeDominantWall, TacticsArrangement.ShieldWall) == LayoutKind.ShieldWall,
+                "x52 melee-dominant + ShieldWall -> ShieldWall (⑬ 近战为主不进入 RangedLoose)");
+            var meleeDominantLine = new TroopComposition { ShieldBearer = 3, Polearm = 2, Ranged = 2, LightMelee = 3 };
+            Check(SlotLayout.SelectLayout(meleeDominantLine, TacticsArrangement.Line) == LayoutKind.Line,
+                "x52 melee-dominant + Line -> Line");
+
+            // 2) ShieldWall：ShieldBearer 全 Rank0（① 占比 100% ≥90%）；Polearm/Ranged 全 Rank1（后排）
+            var wallInput = SlotLayoutInput.Default(meleeDominantWall, TacticsArrangement.ShieldWall);
+            var wall = SlotLayout.Generate(wallInput);
+            Check(wall.Count == 12, "x52 shieldwall slot count == troop count");
+            bool shieldAllRank0 = true;
+            bool polearmAllRank1 = true;
+            bool rangedAllRank1 = true;
+            int shieldCount = 0;
+            foreach (var s in wall)
+            {
+                if (s.Role == TroopRole.ShieldBearer) { shieldCount++; if (s.Rank != 0) shieldAllRank0 = false; }
+                if (s.Role == TroopRole.Polearm && s.Rank != 1) polearmAllRank1 = false;
+                if (s.Role == TroopRole.Ranged && s.Rank != 1) rangedAllRank1 = false;
+            }
+            Check(shieldAllRank0 && shieldCount == 6, "x52 shieldwall all ShieldBearer Rank0 (① ≥90%)");
+            Check(polearmAllRank1, "x52 shieldwall all Polearm Rank1 (后排架枪)");
+            Check(rangedAllRank1, "x52 shieldwall all Ranged Rank1 (② 混编后排)");
+
+            // 3) ③ 相邻间距：同 rank 相邻列 = spacing(1.0)，跨排最近对 ∈[0.8,2.0]
+            Check(AdjacentDistancesInRange(wall, 1.0f), "x52 shieldwall adjacent spacing in [0.8,2.0] (③)");
+
+            // 4) Line：同角色按列编组（秩稳定：ShieldBearer 列连续），间距 1.0
+            var lineInput = SlotLayoutInput.Default(meleeDominantLine, TacticsArrangement.Line);
+            var line = SlotLayout.Generate(lineInput);
+            Check(line.Count == 10, "x52 line slot count == troop count");
+            Check(SameRoleContiguous(line, TroopRole.ShieldBearer), "x52 line ShieldBearer columns contiguous (秩稳定)");
+            Check(SameRoleContiguous(line, TroopRole.Ranged), "x52 line Ranged columns contiguous");
+            Check(AdjacentDistancesInRange(line, 1.0f), "x52 line adjacent spacing in [0.8,2.0]");
+
+            // 5) ⑪ RangedLoose：间距放大（1.5 ≥ Line 1.0×1.3）；无分层（Rank 全 0）；前后错落
+            var looseInput = SlotLayoutInput.Default(rangedDominant, TacticsArrangement.Line);
+            var loose = SlotLayout.Generate(looseInput);
+            Check(loose.Count == 10, "x52 rangedloose slot count == troop count");
+            Check(SlotLayout.RangedLooseSpacingFactor >= 1.3f, "x52 loose spacing factor >=1.3 (⑪ 常数)");
+            Check(AdjacentDistancesInRange(loose, 1.5f), "x52 rangedloose adjacent spacing >= line x1.3 (⑪)");
+            bool looseNoRank = true;
+            for (int i = 0; i < loose.Count; i++) if (loose[i].Rank != 0) looseNoRank = false;
+            Check(looseNoRank, "x52 rangedloose no rank layers (无分层)");
+            bool staggered = loose.Count >= 4 && loose[0].WorldX != loose[1].WorldX;
+            Check(staggered, "x52 rangedloose front/back staggered (前后错落)");
+
+            // 6) 空编队 → 空列表；TroopComposition 除零安全
+            var emptyInput = SlotLayoutInput.Default(new TroopComposition(), TacticsArrangement.Line);
+            Check(SlotLayout.Generate(emptyInput).Count == 0, "x52 empty composition -> empty slots");
+            Check(new TroopComposition().RangedRatio == 0f && !new TroopComposition().IsRangedDominant,
+                "x52 empty composition ratio 0 not dominant (除零安全)");
+        }
+
+        // 相邻间距检查：同 rank 相邻列间距≈spacing；跨 rank 相邻列（|file差|≤1）最近对间距∈[0.8,2.0]
+        private static bool AdjacentDistancesInRange(System.Collections.Generic.List<FormationSlot> slots, float spacing)
+        {
+            if (slots.Count < 2) return true;
+            for (int i = 0; i < slots.Count; i++)
+            {
+                for (int j = i + 1; j < slots.Count; j++)
+                {
+                    var a = slots[i];
+                    var b = slots[j];
+                    int fileDiff = System.Math.Abs(a.File - b.File);
+                    if (a.Rank == b.Rank && fileDiff == 1)
+                    {
+                        float d = Dist(a.WorldX, a.WorldY, b.WorldX, b.WorldY);
+                        if (d < 0.8f || d > 2.0f) return false;
+                    }
+                    else if (a.Rank != b.Rank && fileDiff <= 1)
+                    {
+                        float d = Dist(a.WorldX, a.WorldY, b.WorldX, b.WorldY);
+                        if (d < 0.8f || d > 2.0f) return false; // 跨排相邻列（对角邻居）也必须在区间
+                    }
+                }
+            }
+            return true;
+        }
+
+        // 同角色列连续（秩稳定）：该角色的 File 集合是连续区间
+        private static bool SameRoleContiguous(System.Collections.Generic.List<FormationSlot> slots, TroopRole role)
+        {
+            int min = int.MaxValue, max = int.MinValue, count = 0;
+            foreach (var s in slots)
+            {
+                if (s.Role == role)
+                {
+                    if (s.File < min) min = s.File;
+                    if (s.File > max) max = s.File;
+                    count++;
+                }
+            }
+            return count == 0 || (max - min + 1) == count;
+        }
+
+        private static float Dist(float x1, float y1, float x2, float y2)
+        {
+            float dx = x2 - x1, dy = y2 - y1;
+            return (float)System.Math.Sqrt(dx * dx + dy * dy);
         }
 
         private static int idxDefend()

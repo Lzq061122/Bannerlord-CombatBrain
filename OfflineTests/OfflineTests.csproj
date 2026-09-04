@@ -45,6 +45,9 @@
     <Compile Include="..\CombatBrain\Ai\FrameReleaseGlue.cs" Link="Ai\FrameReleaseGlue.cs" />
     <Compile Include="..\CombatBrain\Formation\TroopRole.cs" Link="Formation\TroopRole.cs" />
     <Compile Include="..\CombatBrain\Formation\TroopClassifier.cs" Link="Formation\TroopClassifier.cs" />
+    <Compile Include="..\CombatBrain\Formation\FormationSlot.cs" Link="Formation\FormationSlot.cs" />
+    <Compile Include="..\CombatBrain\Formation\TroopComposition.cs" Link="Formation\TroopComposition.cs" />
+    <Compile Include="..\CombatBrain\Formation\SlotLayout.cs" Link="Formation\SlotLayout.cs" />
   </ItemGroup>
 
 </Project>
