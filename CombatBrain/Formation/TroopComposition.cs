@@ -40,5 +40,9 @@ namespace CombatBrain.Formations
 
         /// <summary>近战合计（ShieldBearer+Polearm+HeavyMelee+LightMelee；Cavalry 不计——骑乘走骑兵波次 F8）。</summary>
         public int MeleeTotal { get { return ShieldBearer + Polearm + HeavyMelee + LightMelee; } }
+
+        /// <summary>非骑乘合计（ShieldBearer+Polearm+Ranged+HeavyMelee+LightMelee）——X5 布局人数口径
+        /// （Cavalry 由 F8 骑兵波次管，不占 X5 槽位；SlotLayoutInput.Default 用它定 Count）。</summary>
+        public int NonCavalryTotal { get { return Total - Cavalry; } }
     }
 }

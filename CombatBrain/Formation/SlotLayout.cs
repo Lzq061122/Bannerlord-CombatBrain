@@ -38,7 +38,7 @@ namespace CombatBrain.Formations
             {
                 Composition = composition,
                 Arrangement = arrangement,
-                Count = composition.Total,
+                Count = composition.NonCavalryTotal, // X5 布局人数口径：非骑乘（Cavalry 走 F8 骑兵波次，不占槽位）
                 CenterX = 0f,
                 CenterY = 0f,
                 FacingX = 1f,
@@ -106,24 +106,24 @@ namespace CombatBrain.Formations
             int frontStart = System.Math.Max(0, (cols - c.ShieldBearer) / 2);
             for (int i = 0; i < c.ShieldBearer; i++)
             {
-                slots.Add(MakeSlot(0, frontStart + i, input, spacing, TroopRole.ShieldBearer));
+                slots.Add(MakeSlot(0, frontStart + i, cols, input, spacing, TroopRole.ShieldBearer));
             }
 
             // Rank1：Polearm 优先（后排架枪），Ranged/HeavyMelee/LightMelee 补位
             int rearStart = System.Math.Max(0, (cols - (c.Polearm + c.Ranged + c.HeavyMelee + c.LightMelee)) / 2);
             int fi = 0;
-            fi = FillRear(slots, input, spacing, rearStart, ref fi, c.Polearm, TroopRole.Polearm);
-            fi = FillRear(slots, input, spacing, rearStart, ref fi, c.Ranged, TroopRole.Ranged);
-            fi = FillRear(slots, input, spacing, rearStart, ref fi, c.HeavyMelee, TroopRole.HeavyMelee);
-            fi = FillRear(slots, input, spacing, rearStart, ref fi, c.LightMelee, TroopRole.LightMelee);
+            fi = FillRear(slots, input, spacing, cols, rearStart, ref fi, c.Polearm, TroopRole.Polearm);
+            fi = FillRear(slots, input, spacing, cols, rearStart, ref fi, c.Ranged, TroopRole.Ranged);
+            fi = FillRear(slots, input, spacing, cols, rearStart, ref fi, c.HeavyMelee, TroopRole.HeavyMelee);
+            fi = FillRear(slots, input, spacing, cols, rearStart, ref fi, c.LightMelee, TroopRole.LightMelee);
         }
 
         private static int FillRear(System.Collections.Generic.List<FormationSlot> slots, SlotLayoutInput input,
-            float spacing, int start, ref int fi, int count, TroopRole role)
+            float spacing, int cols, int start, ref int fi, int count, TroopRole role)
         {
             for (int i = 0; i < count; i++)
             {
-                slots.Add(MakeSlot(1, start + fi, input, spacing, role));
+                slots.Add(MakeSlot(1, start + fi, cols, input, spacing, role));
                 fi++;
             }
             return fi;
@@ -135,20 +135,21 @@ namespace CombatBrain.Formations
         {
             TroopComposition c = input.Composition;
             float spacing = input.Spacing > 0f ? input.Spacing : DefaultSpacing;
+            int cols = input.Count; // Line 单排：列数=布局人数（file 0..Count-1，居中基准=Count 与旧行为一致）
             int fi = 0;
-            fi = FillLine(slots, input, spacing, ref fi, c.ShieldBearer, TroopRole.ShieldBearer);
-            fi = FillLine(slots, input, spacing, ref fi, c.Polearm, TroopRole.Polearm);
-            fi = FillLine(slots, input, spacing, ref fi, c.HeavyMelee, TroopRole.HeavyMelee);
-            fi = FillLine(slots, input, spacing, ref fi, c.LightMelee, TroopRole.LightMelee);
-            fi = FillLine(slots, input, spacing, ref fi, c.Ranged, TroopRole.Ranged);
+            fi = FillLine(slots, input, spacing, cols, ref fi, c.ShieldBearer, TroopRole.ShieldBearer);
+            fi = FillLine(slots, input, spacing, cols, ref fi, c.Polearm, TroopRole.Polearm);
+            fi = FillLine(slots, input, spacing, cols, ref fi, c.HeavyMelee, TroopRole.HeavyMelee);
+            fi = FillLine(slots, input, spacing, cols, ref fi, c.LightMelee, TroopRole.LightMelee);
+            fi = FillLine(slots, input, spacing, cols, ref fi, c.Ranged, TroopRole.Ranged);
         }
 
         private static int FillLine(System.Collections.Generic.List<FormationSlot> slots, SlotLayoutInput input,
-            float spacing, ref int fi, int count, TroopRole role)
+            float spacing, int cols, ref int fi, int count, TroopRole role)
         {
             for (int i = 0; i < count; i++)
             {
-                slots.Add(MakeSlot(0, fi, input, spacing, role));
+                slots.Add(MakeSlot(0, fi, cols, input, spacing, role));
                 fi++;
             }
             return fi;
@@ -166,15 +167,16 @@ namespace CombatBrain.Formations
             {
                 // 前后错落：奇偶列沿朝向交替 ±LooseStagger/2
                 float stagger = (i % 2 == 0) ? -LooseStagger * 0.5f : LooseStagger * 0.5f;
-                FormationSlot slot = MakeSlot(0, i, input, spacing, TroopRole.Ranged);
+                FormationSlot slot = MakeSlot(0, i, n, input, spacing, TroopRole.Ranged);
                 slot.WorldX += input.FacingX * stagger;
                 slot.WorldY += input.FacingY * stagger;
                 slots.Add(slot);
             }
         }
 
-        // 构造槽位：列居中于编队中心，Rank0 沿朝向 -RankSpacing/2、Rank1 +RankSpacing/2（前后两排）
-        private static FormationSlot MakeSlot(int rank, int file, SlotLayoutInput input,
+        // 构造槽位：列以「该排实际列数 cols」为居中基准（ShieldWall 双排各自居中，消除 (Count-cols)/2 整体偏移），
+        // Rank0 沿朝向 -RankSpacing/2、Rank1 +RankSpacing/2（前后两排）。
+        private static FormationSlot MakeSlot(int rank, int file, int cols, SlotLayoutInput input,
             float spacing, TroopRole role)
         {
             float fx = input.FacingX, fy = input.FacingY;
@@ -183,7 +185,8 @@ namespace CombatBrain.Formations
             else { fx = 1f; fy = 0f; }
             // 侧向（垂直朝向）
             float px = -fy, py = fx;
-            float half = ((input.Count > 0 ? input.Count : 1) - 1) * 0.5f;
+            int effectiveCols = cols > 0 ? cols : 1; // 居中基准 = 该排实际列数（修复：不再用总人数 Count）
+            float half = (effectiveCols - 1) * 0.5f;
             float side = (file - half) * spacing;
             float depth = rank == 0 ? -RankSpacing * 0.5f : RankSpacing * 0.5f;
             return new FormationSlot(

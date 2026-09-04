@@ -1417,6 +1417,21 @@ namespace OfflineTests
             Check(polearmAllRank1, "x52 shieldwall all Polearm Rank1 (后排架枪)");
             Check(rangedAllRank1, "x52 shieldwall all Ranged Rank1 (② 混编后排)");
 
+            // 修复① 绝对居中：编队中心（所有 slot 均值）≈ 输入中心（容差 0.1m），不再整体横向偏移
+            Check(AbsCenterWithin(wall, wallInput.CenterX, wallInput.CenterY, 0.1f),
+                "x52fix shieldwall 12 兵 6 列 centered (均值≈Center 0.1m)");
+            var bigWallInput = SlotLayoutInput.Default(
+                new TroopComposition { ShieldBearer = 40, Polearm = 30 }, TacticsArrangement.ShieldWall);
+            var bigWall = SlotLayout.Generate(bigWallInput);
+            Check(bigWall.Count == 70, "x52fix shieldwall 40+30 slot count == 70");
+            Check(AbsCenterWithin(bigWall, bigWallInput.CenterX, bigWallInput.CenterY, 0.1f),
+                "x52fix shieldwall 40 盾+30 后排 centered (旧偏移 15m → 0)");
+
+            // 修复② low：Default.Count 走非骑乘口径（Cavalry 由 F8 骑兵波次管，不占 X5 槽位）
+            var withCav = new TroopComposition { ShieldBearer = 4, Cavalry = 6 };
+            Check(SlotLayoutInput.Default(withCav, TacticsArrangement.ShieldWall).Count == 4,
+                "x52fix default count excludes cavalry (NonCavalryTotal)");
+
             // 3) ③ 相邻间距：同 rank 相邻列 = spacing(1.0)，跨排最近对 ∈[0.8,2.0]
             Check(AdjacentDistancesInRange(wall, 1.0f), "x52 shieldwall adjacent spacing in [0.8,2.0] (③)");
 
@@ -1487,6 +1502,22 @@ namespace OfflineTests
                 }
             }
             return count == 0 || (max - min + 1) == count;
+        }
+
+        // 绝对居中检查：所有槽位 WorldX/WorldY 均值 ≈ (centerX, centerY)，容差 tol
+        private static bool AbsCenterWithin(System.Collections.Generic.List<FormationSlot> slots,
+            float centerX, float centerY, float tol)
+        {
+            if (slots.Count == 0) return true;
+            float sumX = 0f, sumY = 0f;
+            foreach (var s in slots)
+            {
+                sumX += s.WorldX;
+                sumY += s.WorldY;
+            }
+            float meanX = sumX / slots.Count;
+            float meanY = sumY / slots.Count;
+            return System.Math.Abs(meanX - centerX) <= tol && System.Math.Abs(meanY - centerY) <= tol;
         }
 
         private static float Dist(float x1, float y1, float x2, float y2)
