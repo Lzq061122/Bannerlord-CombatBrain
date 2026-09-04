@@ -51,6 +51,7 @@
     <Compile Include="..\CombatBrain\Formation\TerrainWarp.cs" Link="Formation\TerrainWarp.cs" />
     <Compile Include="..\CombatBrain\Formation\SlotAssigner.cs" Link="Formation\SlotAssigner.cs" />
     <Compile Include="..\CombatBrain\Formation\FormationDisciplineController.cs" Link="Formation\FormationDisciplineController.cs" />
+    <Compile Include="..\CombatBrain\Formation\X5ExecutionPolicy.cs" Link="Formation\X5ExecutionPolicy.cs" />
   </ItemGroup>
 
 </Project>

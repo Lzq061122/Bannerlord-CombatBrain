@@ -71,6 +71,7 @@ namespace CombatBrain.Ai
         private float _formationLogTimer; // 日志增强：编队明细快照 5s 节拍
         private float _anomalyTimer;       // T39-01 异常检测节拍（0.5s 低频，O(队数×编队数)）
         private float _tacticsTimer;       // T2-01 阵型三态节拍（0.5s 编队级）
+        private float _formationSlotsTimer; // X5-6 槽位布局节拍（0.5s 编队级，TickFormationTactics 之后）
         private float _rangedPosTimer;     // T3-01 射手射击阵地节拍（0.5s 编队级）
         private readonly Dictionary<Formation, RangedPositionReason> _rangedPosReason = new Dictionary<Formation, RangedPositionReason>(); // T3-01 每编队上次转移原因（防抖）
         private float _unitPreservationTimer; // T8-01 骑射保存有生力量节拍（0.5s 编队级）
@@ -122,6 +123,9 @@ namespace CombatBrain.Ai
 
         // F8 骑兵波次胶水：0.5s 编队级周期，冲锋→回撤→重整→再冲（见 CavalryGlue.cs）
         private readonly CavalryGlue _cavalry = new CavalryGlue();
+
+        // X5-6 槽位布局胶水：0.5s 编队级，串联 X5-1..5 全链（归类→分流→布局→地形→纪律→指派→L3 个体补位）
+        private readonly FormationSlotGlue _formationSlots = new FormationSlotGlue();
 
         // T5 骑射游击胶水：0.5s 编队级周期，骑射消耗/游击/夹击（绝不冲锋；见 SkirmishGlue.cs）
         private readonly SkirmishGlue _skirmish = new SkirmishGlue();
@@ -267,6 +271,10 @@ namespace CombatBrain.Ai
             _bench.BeginSection("tactics");
             TickFormationTactics(mission, dt);
             _bench.EndSection("tactics");
+
+            _bench.BeginSection("slotlayout");
+            TickFormationSlots(mission, dt);
+            _bench.EndSection("slotlayout");
 
             _bench.BeginSection("rangedpos");
             TickRangedPosition(mission, dt);
@@ -876,6 +884,7 @@ namespace CombatBrain.Ai
                 _attackStats.Remove(affectedAgent.Index); // P2-① 预测格挡统计随 Agent 生命周期清理（否则字典只增不减，GetAttackStats 会重建）
                 _attackSuppression.Remove(affectedAgent.Index); // T3 攻击抑制 Agent 生命周期清理
                 _frameReleaseCooldown.Remove(affectedAgent.Index); // X4 解阵框冷却随 Agent 生命周期清理
+                _formationSlots.RemoveAgent(affectedAgent.Index); // X5-6 个体补位冷却随 Agent 生命周期清理
                 _morale.RecordCasualty(affectedAgent.Formation, _elapsed); // F11 脱阵窗口（事件驱动）
             }
         }
@@ -970,6 +979,30 @@ namespace CombatBrain.Ai
             if (o == ArrangementOrder.ArrangementOrderShieldWall) return FormationArrangementKind.ShieldWall;
             if (o == ArrangementOrder.ArrangementOrderLine) return FormationArrangementKind.Line;
             return FormationArrangementKind.Other;
+        }
+
+        // X5-6 槽位布局胶水（0.5s 编队级，TickFormationTactics 之后）：X5 全链落地——TroopClassifier 归类
+        // → TroopComposition 分流 → SlotLayout 生成 → TerrainWarp 形变 → Discipline 四态门控 →
+        // SlotAssigner 指派 → L3 个体补位（X4 冷却模式）。MCM 总开关 + 玩家豁免 + Bench 回退闸在
+        // FormationSlotGlue 内（X5Enabled/IndividualLegEnabled 静态开关，无 MCM 静默默认开）。
+        // 反作弊闸：只读己方编队聚合 + 公开地形；不 SetArrangementOrder（红线 1）/不新增解阵（红线 2）。
+        private void TickFormationSlots(Mission mission, float dt)
+        {
+            _formationSlotsTimer -= dt;
+            if (_formationSlotsTimer > 0f) return;
+            _formationSlotsTimer = 0.5f;
+
+            _formationSlots.Tick(mission, dt, _elapsed, GetLod, GetFormationIntegrity, _terrain);
+        }
+
+        // 编队完整度（Discipline 门控输入；与 TickFormationTactics L949-951 同口径，纯聚合）
+        private float GetFormationIntegrity(Formation f)
+        {
+            if (f == null || f.CountOfUnits == 0 || f.QuerySystem == null) return 100f;
+            var ig = f.CachedFormationIntegrityData;
+            float avgSpeed = VecMath.Dist(0f, 0f, ig.AverageVelocityExcludeFarAgents.x, ig.AverageVelocityExcludeFarAgents.y);
+            return FormationIntegrity.Compute(ig.DeviationOfPositionsExcludeFarAgents, ig.MaxDeviationOfPositionExcludeFarAgents,
+                avgSpeed, ig.AverageMaxUnlimitedSpeedExcludeFarAgents, f.CountOfUnits);
         }
 
         // T3-01 射手射击阵地转移（0.5s 编队级，O(队数×编队数)）：仅在 7 种允许原因下转移，只发 Move 不动阵型。

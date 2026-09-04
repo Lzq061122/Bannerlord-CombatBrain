@@ -143,6 +143,9 @@ namespace OfflineTests
             Console.WriteLine("== X5-5 FormationDiscipline ==");
             TestFormationDiscipline();
 
+            Console.WriteLine("== X5-6 ExecutionPolicy ==");
+            TestX5ExecutionPolicy();
+
             Console.WriteLine();
             if (_failures == 0)
             {
@@ -1746,6 +1749,38 @@ namespace OfflineTests
                 && FormationDisciplineController.Evaluate(70f).MaxRankDiff == 1
                 && FormationDisciplineController.Evaluate(50f).MaxRankDiff == 1,
                 "x55 maxRankDiff full(0) < slight/moderate(1) 与 X5-4 门控一致");
+        }
+
+        // X5-6 执行策略（X5ExecutionPolicy 纯逻辑）：L3 个体腿开关/Bench 回退闸/Discipline 门控/补位冷却
+        private static void TestX5ExecutionPolicy()
+        {
+            // 1) L3 个体补位开关：仅 L3；玩家豁免/已解阵/超预算任一命中 → 跳过
+            Check(X5ExecutionPolicy.ShouldRunIndividualLeg(3, false, false, false), "x56 L3 normal -> run individual leg");
+            Check(!X5ExecutionPolicy.ShouldRunIndividualLeg(2, false, false, false), "x56 L2 -> skip (剧场闸)");
+            Check(!X5ExecutionPolicy.ShouldRunIndividualLeg(3, true, false, false), "x56 exempted -> skip (玩家豁免)");
+            Check(!X5ExecutionPolicy.ShouldRunIndividualLeg(3, false, true, false), "x56 frame-disabled -> skip (X4 解阵)");
+            Check(!X5ExecutionPolicy.ShouldRunIndividualLeg(3, false, false, true), "x56 budget over -> skip (Bench 回退)");
+
+            // 2) Bench 回退闸：avgAi 超 5ms → 回退个体腿（铁律② 500 人红线）
+            Check(!X5ExecutionPolicy.IsIndividualOverBudget(4.9f), "x56 avgAi 4.9ms -> keep individual leg");
+            Check(X5ExecutionPolicy.IsIndividualOverBudget(5.1f), "x56 avgAi 5.1ms -> rollback individual leg");
+            Check(!X5ExecutionPolicy.IsIndividualOverBudget(5.0f), "x56 avgAi 5.0ms boundary -> keep (≤5)");
+
+            // 3) Discipline 门控（x5-discipline-assigner-redundancy 接线）：MaintainSlots=false → 跳过刷新
+            Check(X5ExecutionPolicy.ShouldRefreshSlots(FormationDisciplineController.Evaluate(90f)), "x56 full -> refresh slots");
+            Check(X5ExecutionPolicy.ShouldRefreshSlots(FormationDisciplineController.Evaluate(50f)), "x56 moderate -> refresh slots");
+            Check(!X5ExecutionPolicy.ShouldRefreshSlots(FormationDisciplineController.Evaluate(30f)), "x56 stopped -> skip refresh (交 F6)");
+
+            // 4) 补位冷却字典（X4 FrameReleaseCooldown 同款模式）：无记录放行/窗内拦截/超窗放行/Remove 清理
+            var cd = new X5SlotCooldown();
+            Check(cd.CanRelease(5, 0f), "x56 cooldown initial allows");
+            cd.MarkReleased(5, 10f);
+            Check(!cd.CanRelease(5, 11.9f), "x56 cooldown blocks within 2s window");
+            Check(cd.CanRelease(5, 12f), "x56 cooldown allows at 2s boundary");
+            cd.MarkReleased(5, 12f);
+            cd.Remove(5);
+            Check(cd.CanRelease(5, 13f), "x56 cooldown allows after Remove (agent removed)");
+            Check(cd.CanRelease(6, 20f), "x56 cooldown per-agent: unmarked other agent allows");
         }
 
         private static int idxDefend()
