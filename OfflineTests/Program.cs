@@ -113,6 +113,9 @@ namespace OfflineTests
             Console.WriteLine("== t89 FormationTacticsTakeover ==");
             TestFormationTacticsTakeover();
 
+            Console.WriteLine("== X0 DecisionDelay ==");
+            TestDecisionDelay();
+
             Console.WriteLine();
             if (_failures == 0)
             {
@@ -1115,6 +1118,24 @@ namespace OfflineTests
             Check(threatTarget == TacticsArrangement.ShieldWall, "takeover Threatened -> ShieldWall target");
             Check(FormationTactics.ShouldOverride(FormationArrangementKind.Circle, marchTarget), "takeover Circle + March -> rewrite to Line");
             Check(FormationTactics.ShouldOverride(FormationArrangementKind.Circle, threatTarget), "takeover Circle + Threatened -> rewrite to ShieldWall");
+        }
+
+        // X0 决策延迟开关（强度 0/1/0.5 的 hold/余量/抖动缩放）
+        private static void TestDecisionDelay()
+        {
+            CheckApprox(DecisionDelay.HoldTime(0f), 1.5f, "decisiondelay hold strength 0 -> 1.5s");
+            CheckApprox(DecisionDelay.HoldTime(1f), 6f, "decisiondelay hold strength 1 -> 6s");
+            CheckApprox(DecisionDelay.HoldTime(0.5f), 3.75f, "decisiondelay hold strength 0.5 -> 3.75s");
+            CheckApprox(DecisionDelay.SwitchMargin(0f), 0f, "decisiondelay margin strength 0 -> 0%");
+            CheckApprox(DecisionDelay.SwitchMargin(1f), 0.15f, "decisiondelay margin strength 1 -> 15%");
+
+            var p = new ComplianceProfile { HesitateProb = 0.5f, DelayBase = 0.8f, Wobble = 0.6f };
+            var zero = DecisionDelay.ScaleProfile(p, 0f);
+            Check(zero.HesitateProb == 0f && zero.DelayBase == 0f && zero.Wobble == 0f, "decisiondelay strength 0 -> no jitter");
+            var full = DecisionDelay.ScaleProfile(p, 1f);
+            Check(full.HesitateProb == 0.5f && full.DelayBase == 0.8f && full.Wobble == 0.6f, "decisiondelay strength 1 -> unchanged");
+            var half = DecisionDelay.ScaleProfile(p, 0.5f);
+            Check(half.HesitateProb == 0.25f && half.DelayBase == 0.4f && half.Wobble == 0.3f, "decisiondelay strength 0.5 -> half jitter");
         }
 
         private static int idxDefend()

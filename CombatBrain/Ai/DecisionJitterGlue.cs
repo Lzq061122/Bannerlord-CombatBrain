@@ -70,6 +70,8 @@ namespace CombatBrain.Ai
             float fatigue = Math.Min(1f, s.ActiveTime / FatigueCapSeconds);
 
             ComplianceProfile profile = DecisionJitter.ComputeProfile(discipline, fatigue, morale);
+            // X0 决策延迟开关：强度 0=果断（无犹豫/无延迟/无走形），1=现状，中间线性
+            profile = DecisionDelay.ScaleProfile(profile, CombatBrainSettings.DecisionDelayStrength);
             JitterResult result = DecisionJitter.Apply(s.Rng, profile);
 
             if (result.Hesitate)

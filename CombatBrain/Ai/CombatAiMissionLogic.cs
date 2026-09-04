@@ -30,7 +30,10 @@ namespace CombatBrain.Ai
             {
                 Team = team;
                 CultureId = cultureId;
-                Engine = new BeliefIntentEngine(TacticManual.BuildMatrix(), cultureId); // 文化分表（null=默认表=帝国）
+                // X0 决策延迟开关：hold 6s→1.5s、切换余量 15%→0% 按强度线性缩放（果断~拟人）
+                Engine = new BeliefIntentEngine(TacticManual.BuildMatrix(), cultureId,
+                    DecisionDelay.SwitchMargin(CombatBrainSettings.DecisionDelayStrength),
+                    DecisionDelay.HoldTime(CombatBrainSettings.DecisionDelayStrength));
             }
 
             public Team Team;

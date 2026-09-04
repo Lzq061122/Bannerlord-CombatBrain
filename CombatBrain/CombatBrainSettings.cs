@@ -12,5 +12,10 @@ namespace CombatBrain
         // false=mod 正常接管/扫描玩家队（编队层下令、意图决策、敌队聚合均纳入玩家队）。
         // 默认 true=保持现状；MCM 装载后可在「通用」组里热切（RequireRestart=false）。
         public static bool PlayerTeamExemptionEnabled = true;
+
+        // X0 决策延迟强度（观感补强 §X0）：0=果断（无犹豫/无延迟、意图 hold 1.5s、切换余量 0%）、
+        // 1=现状拟人（F12 抖动 + hold 6s + 15% 余量），中间线性。默认 1=现状。
+        // MCM 装载后可在「通用」组里热切（RequireRestart=false，bool 快档：果断/拟人）。
+        public static float DecisionDelayStrength = 1f;
     }
 }

@@ -38,6 +38,7 @@
     <Compile Include="..\CombatBrain\Ai\RallyPointSelector.cs" Link="Ai\RallyPointSelector.cs" />
     <Compile Include="..\CombatBrain\Ai\UnitPreservation.cs" Link="Ai\UnitPreservation.cs" />
     <Compile Include="..\CombatBrain\Ai\StalemateDetector.cs" Link="Ai\StalemateDetector.cs" />
+    <Compile Include="..\CombatBrain\Ai\DecisionDelay.cs" Link="Ai\DecisionDelay.cs" />
   </ItemGroup>
 
 </Project>

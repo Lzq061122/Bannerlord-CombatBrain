@@ -26,5 +26,13 @@ namespace CombatBrain.Mcm
             get => CombatBrainSettings.PlayerTeamExemptionEnabled;
             set => CombatBrainSettings.PlayerTeamExemptionEnabled = value;
         }
+
+        [SettingPropertyBool("果断模式（关闭拟人延迟）", RequireRestart = false)]
+        [SettingPropertyGroup("通用")]
+        public bool DecisiveMode
+        {
+            get => CombatBrainSettings.DecisionDelayStrength <= 0f;
+            set => CombatBrainSettings.DecisionDelayStrength = value ? 0f : 1f;
+        }
     }
 }
