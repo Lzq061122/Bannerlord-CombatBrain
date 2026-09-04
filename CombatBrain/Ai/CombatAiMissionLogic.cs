@@ -70,6 +70,9 @@ namespace CombatBrain.Ai
         private float _tacticsTimer;       // T2-01 阵型三态节拍（0.5s 编队级）
         private float _rangedPosTimer;     // T3-01 射手射击阵地节拍（0.5s 编队级）
         private readonly Dictionary<Formation, RangedPositionReason> _rangedPosReason = new Dictionary<Formation, RangedPositionReason>(); // T3-01 每编队上次转移原因（防抖）
+        private float _unitPreservationTimer; // T8-01 骑射保存有生力量节拍（0.5s 编队级）
+        private readonly Dictionary<Formation, int> _rangedCavInitial = new Dictionary<Formation, int>(); // T8-01 骑射编队初始兵力（分档基准）
+        private readonly Dictionary<Formation, PreservationBand> _unitPreservationBand = new Dictionary<Formation, PreservationBand>(); // T8-01 每编队上次分档（边沿）
 
         // P0-③ 感知管线停用开关（用户裁决「先停用止损」）：KnowledgeView.TryGet 无消费者（全仓库仅定义处），
         // TickPerception 每 1s 对每队全图遍历 mission.Agents 白烧性能（违反「禁全图」）。
@@ -238,6 +241,10 @@ namespace CombatBrain.Ai
             _bench.BeginSection("rangedpos");
             TickRangedPosition(mission, dt);
             _bench.EndSection("rangedpos");
+
+            _bench.BeginSection("unitpreserve");
+            TickUnitPreservation(mission, dt);
+            _bench.EndSection("unitpreserve");
 
             _bench.BeginSection("movement");
             TickMovement(mission, dt);
@@ -995,6 +1002,49 @@ namespace CombatBrain.Ai
             wp.SetVec2(target);
             if (wp.GetNavMesh() == UIntPtr.Zero) return;
             f.SetMovementOrder(MovementOrder.MovementOrderMove(wp));
+        }
+
+        // T8-01 骑射编队兵力保存（0.5s 编队级）：按当前/初始兵力比例五档分档，撤离档(<20%)下发 FallBack。
+        // 分域：只骑射编队（IsRangedCavalryFormation，与 Skirmish 同域）；个体级 SurvivalGlue 不管本层；玩家队豁免保留。
+        private void TickUnitPreservation(Mission mission, float dt)
+        {
+            _unitPreservationTimer -= dt;
+            if (_unitPreservationTimer > 0f) return;
+            _unitPreservationTimer = 0.5f;
+
+            foreach (TeamState state in _states.Values)
+            {
+                Team own = state.Team;
+                if (own == null || (CombatBrainSettings.PlayerTeamExemptionEnabled && own.IsPlayerTeam)) continue; // P0-④ 玩家队豁免
+
+                foreach (Formation f in own.FormationsIncludingEmpty)
+                {
+                    if (f == null || f.CountOfUnits == 0 || f.QuerySystem == null) continue;
+                    if (!f.QuerySystem.IsRangedCavalryFormation) continue; // 只骑射（反作弊闸：CountOfUnits 可观察）
+
+                    int initial;
+                    if (!_rangedCavInitial.TryGetValue(f, out initial))
+                    {
+                        initial = f.CountOfUnits; // 首次观测记初始兵力（分档基准）
+                        _rangedCavInitial[f] = initial;
+                    }
+                    if (initial <= 0) continue;
+                    float ratio = (float)f.CountOfUnits / initial;
+                    PreservationBand band = UnitPreservation.ClassifyBand(ratio);
+
+                    PreservationBand last;
+                    if (!_unitPreservationBand.TryGetValue(f, out last)) last = PreservationBand.Normal;
+                    if (band != last)
+                    {
+                        _unitPreservationBand[f] = band; // 分档边沿才动作（防每拍刷命令）
+                        if (band == PreservationBand.Withdraw)
+                        {
+                            f.SetMovementOrder(MovementOrder.MovementOrderFallBack); // 撤离档：脱离战场（交原版由后续 feature 决定）
+                        }
+                        // 中间档（谨慎/减接战/优先保存）行为建议由 UnitPreservation.ActionFor 提供，SkirmishGlue 后续接线消费
+                    }
+                }
+            }
         }
 
         // T38-01 战斗结束一次性落盘 %TEMP%\CombatBrain.telemetry.json + 汇总日志（幂等，非每帧 IO）。

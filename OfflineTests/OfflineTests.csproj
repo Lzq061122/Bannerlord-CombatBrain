@@ -36,6 +36,7 @@
     <Compile Include="..\CombatBrain\Ai\FormationTactics.cs" Link="Ai\FormationTactics.cs" />
     <Compile Include="..\CombatBrain\Ai\RangedPosition.cs" Link="Ai\RangedPosition.cs" />
     <Compile Include="..\CombatBrain\Ai\RallyPointSelector.cs" Link="Ai\RallyPointSelector.cs" />
+    <Compile Include="..\CombatBrain\Ai\UnitPreservation.cs" Link="Ai\UnitPreservation.cs" />
   </ItemGroup>
 
 </Project>
