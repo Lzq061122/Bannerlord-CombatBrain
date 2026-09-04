@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.IO;
 using TaleWorlds.Core;
 using TaleWorlds.Library;
 using TaleWorlds.MountAndBlade;
@@ -10,6 +11,7 @@ using CombatBrain.Events;
 using CombatBrain.Intent;
 using CombatBrain.Lod;
 using CombatBrain.Perception;
+using CombatBrain.Telemetry;
 
 namespace CombatBrain.Ai
 {
@@ -54,6 +56,8 @@ namespace CombatBrain.Ai
         private readonly CombatEventBus _bus = new CombatEventBus();
         private ReplayRecorder _replay;
         private readonly BattleBenchmark _bench = new BattleBenchmark();
+        private readonly BattleTelemetry _telemetry = new BattleTelemetry(); // T38-01 战斗遥测计数器（事件驱动累加，战斗结束一次落盘）
+        private bool _telemetrySaved; // 落盘幂等守卫（OnMissionStateFinalized/OnClearScene 双钩子只写一次）
 
         private float _lodTimer;
         private float _intentTimer;
@@ -142,6 +146,7 @@ namespace CombatBrain.Ai
             if (DecisionObservatory.Instance != null) DecisionObservatory.Instance.CheckHygiene();
 
             _replay = new ReplayRecorder(_bus);
+            _bus.SubscribeAll(OnTelemetryEvent); // T38-01 遥测：事件驱动累加（勿轮询勿每帧）
 
             var mission = Mission;
             if (mission == null) return;
@@ -808,12 +813,49 @@ namespace CombatBrain.Ai
         {
             base.OnMissionStateFinalized();
             _experience.OnMissionEnd();
+            SaveTelemetry();
         }
 
         public override void OnClearScene()
         {
             base.OnClearScene();
             _experience.OnMissionEnd();
+            SaveTelemetry();
+        }
+
+        // T38-01 遥测事件分发：仅映射已有事件 → 计数（各计数点的详细调用留给后续 feature 各自补，
+        // 勿在此堆砌每帧/复杂逻辑）。FormationBroken 等事件发布点由后续 feature 补，届时在此增补映射。
+        private void OnTelemetryEvent(CombatEvent e)
+        {
+            if (e == null) return;
+            switch (e.Kind)
+            {
+                case CombatEventKind.IntentSwitched:
+                    if (e.IntValue == (int)IntentType.Retreat) _telemetry.Increment(TelemetryKind.RetreatCount);
+                    break;
+                case CombatEventKind.FormationBroken:
+                    _telemetry.Increment(TelemetryKind.FormationBreakCount);
+                    break;
+                // AgentDown/AttackObserved/ChargeContact 等 → 待后续 feature 定义语义后在此增补
+            }
+        }
+
+        // T38-01 战斗结束一次性落盘 %TEMP%\CombatBrain.telemetry.json + 汇总日志（幂等，非每帧 IO）
+        private void SaveTelemetry()
+        {
+            if (_telemetrySaved) return;
+            _telemetrySaved = true;
+            _telemetry.SetBattleDuration(_elapsed);
+            try
+            {
+                string path = Path.Combine(Path.GetTempPath(), "CombatBrain.telemetry.json");
+                File.WriteAllText(path, _telemetry.ToJson());
+                CombatLog.Log("[遥测] 落盘: " + path + " | " + _telemetry.Summary());
+            }
+            catch (Exception ex)
+            {
+                CombatLog.Log("[遥测] 落盘失败: " + ex.Message);
+            }
         }
 
         // ---------- helpers ----------

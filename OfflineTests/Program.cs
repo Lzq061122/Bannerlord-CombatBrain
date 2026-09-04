@@ -12,6 +12,7 @@ using CombatBrain.Intent;
 using CombatBrain.Perception;
 using CombatBrain.Formations;
 using CombatBrain.Ai;
+using CombatBrain.Telemetry;
 
 namespace OfflineTests
 {
@@ -87,6 +88,9 @@ namespace OfflineTests
 
             Console.WriteLine("== T26-01 CultureTables ==");
             TestCultureTables();
+
+            Console.WriteLine("== T38-01 BattleTelemetry ==");
+            TestBattleTelemetry();
 
             Console.WriteLine();
             if (_failures == 0)
@@ -856,6 +860,44 @@ namespace OfflineTests
             ke.Evaluate(vk, null, 0.5f, out kChosen);
             Check(kChosen == IntentType.Flank || kChosen == IntentType.Harass || kChosen == IntentType.Pursue,
                 "khuzait engine picks aggressive intent (t69)");
+        }
+
+        // T38-01 战斗遥测计数器（20 项：累加/清零/边界/序列化 roundtrip）
+        private static void TestBattleTelemetry()
+        {
+            var t = new BattleTelemetry();
+            Check(t.Count(TelemetryKind.RetreatCount) == 0, "telemetry init zero");
+
+            t.Increment(TelemetryKind.RetreatCount);
+            t.Increment(TelemetryKind.RetreatCount);
+            t.Increment(TelemetryKind.FormationBreakCount);
+            Check(t.Count(TelemetryKind.RetreatCount) == 2, "telemetry increment accumulates");
+            Check(t.Count(TelemetryKind.FormationBreakCount) == 1, "telemetry distinct counters independent");
+
+            t.Increment(TelemetryKind.BattleDuration); // 边界：非计数项 Increment 为无操作
+            t.Increment(TelemetryKind.IdleUnitTime);
+            Check(t.Count(TelemetryKind.BattleDuration) == 0, "telemetry float kind increment no-op");
+
+            t.SetBattleDuration(123.5f);
+            t.SetHorseArcherLossRate(0.25f);
+            t.AddIdleUnitTime(1.25f);
+            t.AddIdleUnitTime(0.5f);
+
+            string json = t.ToJson();
+            Check(json.Contains("\"RetreatCount\":2"), "telemetry json has counter value");
+            Check(json.Contains("\"FormationBreakCount\":1"), "telemetry json has distinct counter value");
+            Check(json.Contains("\"BattleDuration\":123.5"), "telemetry json has float duration");
+            Check(json.Contains("\"HorseArcherLossRate\":0.25"), "telemetry json has loss rate");
+            Check(json.Contains("\"IdleUnitTime\":1.75"), "telemetry json accumulates idle time");
+
+            string summary = t.Summary();
+            Check(summary.Contains("FormationBreakCount=1"), "telemetry summary has counter");
+            Check(summary.Contains("BattleDuration=123.5"), "telemetry summary has duration");
+
+            t.Reset();
+            Check(t.Count(TelemetryKind.RetreatCount) == 0, "telemetry reset clears counters");
+            Check(t.ToJson().Contains("\"FormationBreakCount\":0"), "telemetry reset zero json");
+            Check(t.ToJson().Contains("\"BattleDuration\":0"), "telemetry reset zero float");
         }
 
         private static int idxDefend()
