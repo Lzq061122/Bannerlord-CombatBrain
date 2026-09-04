@@ -125,6 +125,9 @@ namespace OfflineTests
             Console.WriteLine("== X3 FacingCorrection ==");
             TestFacingCorrection();
 
+            Console.WriteLine("== X4 FrameRelease ==");
+            TestFrameRelease();
+
             Console.WriteLine();
             if (_failures == 0)
             {
@@ -1282,6 +1285,44 @@ namespace OfflineTests
             Check(FacingCorrection.ShouldExempt(true, true), "x3 exempt player team when switch on");
             Check(!FacingCorrection.ShouldExempt(true, false), "x3 no exempt when switch off");
             Check(!FacingCorrection.ShouldExempt(false, true), "x3 no exempt for AI team");
+        }
+
+        // X4 接敌解阵框（FrameReleaseGlue 纯逻辑）：命令判定/距离规模双闸/≤25 人关闭/L3 闸门/冷却字典/跳过态/豁免
+        private static void TestFrameRelease()
+        {
+            // 1) 命令判定：Charge(2)/ChargeToTarget(3) 触发，其它命令不触发
+            Check(FrameReleaseRules.IsChargeOrder(2), "x4 charge(2) is charge order");
+            Check(FrameReleaseRules.IsChargeOrder(3), "x4 chargeToTarget(3) is charge order");
+            Check(!FrameReleaseRules.IsChargeOrder(10), "x4 advance(10) not charge order");
+
+            // 2) 编队级触发边界：dist≤25m 触发，>25m 不触发；规模>25 才启用，≤25 关闭
+            Check(FrameReleaseRules.ShouldReleaseFormation(true, 25f, 40), "x4 dist 25m boundary triggers");
+            Check(!FrameReleaseRules.ShouldReleaseFormation(true, 25.01f, 40), "x4 dist 25.01m does not trigger");
+            Check(!FrameReleaseRules.ShouldReleaseFormation(false, 10f, 40), "x4 non-charge order never triggers");
+            Check(!FrameReleaseRules.ShouldReleaseFormation(true, 10f, 25), "x4 count<=25 disables");
+            Check(FrameReleaseRules.ShouldReleaseFormation(true, 10f, 26), "x4 count>25 enables");
+
+            // 3) 剧场闸门：仅 L3（玩家可见区），L0-L2 交原版
+            Check(FrameReleaseRules.IsReleaseLod(3), "x4 L3 gate allows");
+            Check(!FrameReleaseRules.IsReleaseLod(2), "x4 L2 gate blocks");
+            Check(!FrameReleaseRules.IsReleaseLod(0), "x4 L0 gate blocks");
+
+            // 4) 跳过态：F7 求生/F9 后撤/原版逃跑任一命中即跳过；全不命中才放行
+            Check(FrameReleaseRules.ShouldSkipAgent(true, false, false), "x4 survival retreat skips");
+            Check(FrameReleaseRules.ShouldSkipAgent(false, true, false), "x4 ranged fallback skips");
+            Check(FrameReleaseRules.ShouldSkipAgent(false, false, true), "x4 running away skips");
+            Check(!FrameReleaseRules.ShouldSkipAgent(false, false, false), "x4 normal agent not skipped");
+
+            // 5) 冷却字典：无记录放行；5s 窗内拦截；超窗放行；Remove 后放行（OnAgentRemoved 清理）
+            var cd = new FrameReleaseCooldown();
+            Check(cd.CanRelease(7, 0f), "x4 cooldown initial allows");
+            cd.MarkReleased(7, 10f);
+            Check(!cd.CanRelease(7, 14.9f), "x4 cooldown blocks within 5s window");
+            Check(cd.CanRelease(7, 15f), "x4 cooldown allows at 5s boundary");
+            cd.MarkReleased(7, 15f);
+            cd.Remove(7);
+            Check(cd.CanRelease(7, 16f), "x4 cooldown allows after Remove (agent removed)");
+            Check(cd.CanRelease(8, 20f), "x4 cooldown per-agent: unmarked other agent allows");
         }
 
         private static int idxDefend()

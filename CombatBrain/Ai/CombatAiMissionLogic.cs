@@ -97,6 +97,13 @@ namespace CombatBrain.Ai
         private readonly Dictionary<Formation, Vec2> _facingLastDir = new Dictionary<Formation, Vec2>(); // X3 每编队上次朝向方向（迟滞）
         private readonly Dictionary<Formation, float> _facingLastTime = new Dictionary<Formation, float>(); // X3 每编队上次朝向时刻（0.5s 缓存）
 
+        // X4 接敌解阵框：0.5s 编队级节拍（FrameReleaseGlue.cs 纯逻辑判定）+ 逐 agent 执行
+        // （Agent.SetFormationFrameDisabled，Agent.cs:2306-2308 已核实）。触发=编队 Charge/ChargeToTarget
+        // 且距 X1 t93 最显著敌编队 ≤25m；剧场闸门（硬性）仅 L3；编队 ≤25 人不启用；F7/F9/逃跑态跳过；
+        // 逐 agent 冷却字典限频（p3-1 设计，键=agent.Index，OnAgentRemoved 清理）。
+        private float _frameReleaseTimer; // X4 解阵框节拍
+        private readonly FrameReleaseCooldown _frameReleaseCooldown = new FrameReleaseCooldown();
+
         // P0-③ 感知管线停用开关（用户裁决「先停用止损」）：KnowledgeView.TryGet 无消费者（全仓库仅定义处），
         // TickPerception 每 1s 对每队全图遍历 mission.Agents 白烧性能（违反「禁全图」）。
         // 仅停用调用，Perception\KnowledgeView/VisibilityOracle/PerceptionPipeline 类保留供后续信息迷雾接线；
@@ -280,6 +287,10 @@ namespace CombatBrain.Ai
             _bench.BeginSection("facing");
             TickFacing(mission, dt);
             _bench.EndSection("facing");
+
+            _bench.BeginSection("framerelease");
+            TickFrameRelease(mission, dt);
+            _bench.EndSection("framerelease");
 
             _bench.BeginSection("movement");
             TickMovement(mission, dt);
@@ -864,6 +875,7 @@ namespace CombatBrain.Ai
                 _lastBlockJitter.Remove(affectedAgent.Index); // P0-① 清理时间基准
                 _attackStats.Remove(affectedAgent.Index); // P2-① 预测格挡统计随 Agent 生命周期清理（否则字典只增不减，GetAttackStats 会重建）
                 _attackSuppression.Remove(affectedAgent.Index); // T3 攻击抑制 Agent 生命周期清理
+                _frameReleaseCooldown.Remove(affectedAgent.Index); // X4 解阵框冷却随 Agent 生命周期清理
                 _morale.RecordCasualty(affectedAgent.Formation, _elapsed); // F11 脱阵窗口（事件驱动）
             }
         }
@@ -1267,6 +1279,67 @@ namespace CombatBrain.Ai
                         f.SetFacingOrder(FacingOrder.FacingOrderLookAtDirection(new Vec2(dx, dy)));
                         _facingLastDir[f] = new Vec2(dx, dy);
                         _facingLastTime[f] = _elapsed;
+                    }
+                }
+            }
+        }
+
+        // X4 接敌解阵框（0.5s 编队级，逐 agent 执行）：编队 MovementOrder 为 Charge/ChargeToTarget（
+        //   MovementOrder.cs:16-17 已核实）且距 X1 t93 最显著敌编队 ≤25m 时，对 L3（玩家可见区）的
+        //   士兵调 Agent.SetFormationFrameDisabled()（Agent.cs:2306-2308 已核实，Agent 级 API）——
+        //   脱离刚性阵型槽位自由接敌，战线从直线变犬牙交错（RBM OverrideFormation 同款）。
+        // 判定走 FrameReleaseGlue.cs 纯逻辑（可离线测）：命令/距离/规模三闸 + L3 剧场闸 + F7/F9/逃跑
+        //   跳过态 + 逐 agent 冷却字典限频（p3-1 设计，键=agent.Index，OnAgentRemoved 清理）。
+        // 反作弊闸：只解除自身阵框约束（能力非信息），不改信息获取；玩家队豁免（MCM）。
+        // 分域：不动 Formation 排列/阵深（T2-01 领地）、不动 ArrangementOrder、零 Harmony。
+        private void TickFrameRelease(Mission mission, float dt)
+        {
+            _frameReleaseTimer -= dt;
+            if (_frameReleaseTimer > 0f) return;
+            _frameReleaseTimer = 0.5f;
+
+            foreach (TeamState state in _states.Values)
+            {
+                Team own = state.Team;
+                if (own == null || FrameReleaseRules.ShouldExempt(own.IsPlayerTeam, CombatBrainSettings.PlayerTeamExemptionEnabled)) continue; // 玩家队豁免（P0-④）
+
+                foreach (Formation f in own.FormationsIncludingEmpty)
+                {
+                    if (f == null || f.CountOfUnits == 0 || f.QuerySystem == null) continue;
+
+                    // ① 命令判定：Charge/ChargeToTarget（GetReadonlyMovementOrderReference @ Formation.cs:932 已核实）
+                    int orderEnum = (int)f.GetReadonlyMovementOrderReference().OrderEnum;
+                    if (!FrameReleaseRules.IsChargeOrder(orderEnum)) continue;
+
+                    // ② 距最显著敌编队（X1 t93 目标源；无目标 → 不触发，交原版）
+                    TargetSelection sel;
+                    if (!TryGetFormationTarget(f, out sel)) continue;
+                    Vec2 fc = TeamGeometry.GetFormationPosition(f, TeamPosKind.CachedMedian); // 编队层下令系口径（P1-④）
+                    float dist = VecMath.Dist(fc.x, fc.y, sel.X, sel.Y);
+
+                    // ③ 规模闸门 + 距离闸门（纯逻辑）
+                    if (!FrameReleaseRules.ShouldReleaseFormation(true, dist, f.CountOfUnits)) continue;
+
+                    // 逐 agent 执行（本项为个体遍历例外：L3 闸门 + 冷却字典压规模）
+                    foreach (IFormationUnit unit in f.Arrangement.GetAllUnits())
+                    {
+                        Agent agent = unit as Agent;
+                        if (agent == null || !agent.IsActive() || !agent.IsAIControlled || !agent.IsHuman) continue;
+
+                        // 剧场闸门（硬性）：仅 L3（玩家可见区），L0-L2 交原版
+                        if (!FrameReleaseRules.IsReleaseLod((int)GetLod(agent.Index))) continue;
+
+                        // F7 求生/F9 后撤/原版逃跑态跳过（求生优先于散开）
+                        if (FrameReleaseRules.ShouldSkipAgent(
+                            _survival.IsRetreating(agent.Index),
+                            _ranged.IsFallingBack(agent.Index),
+                            agent.IsRunningAway)) continue;
+
+                        // 逐 agent 冷却限频（SetFormationFrameDisabled 一次性状态切换，冷却窗内不重发）
+                        if (!_frameReleaseCooldown.CanRelease(agent.Index, _elapsed)) continue;
+
+                        agent.SetFormationFrameDisabled(); // Agent.cs:2306-2308 已核实
+                        _frameReleaseCooldown.MarkReleased(agent.Index, _elapsed);
                     }
                 }
             }
