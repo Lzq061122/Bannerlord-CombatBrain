@@ -137,6 +137,9 @@ namespace OfflineTests
             Console.WriteLine("== X5-3 TerrainWarp ==");
             TestTerrainWarp();
 
+            Console.WriteLine("== X5-4 SlotAssigner ==");
+            TestSlotAssigner();
+
             Console.WriteLine();
             if (_failures == 0)
             {
@@ -1600,6 +1603,101 @@ namespace OfflineTests
             var edgeOut = TerrainWarp.Warp(edgeSlots, edgeTerrain);
             Check(!(edgeOut[0].WorldX >= 0f && edgeOut[0].WorldX <= 2f && edgeOut[0].WorldY >= 0f && edgeOut[0].WorldY <= 2f),
                 "x53 zone boundary included -> pushed out (边界含入)");
+        }
+
+        // X5-4 agent↔slot 稳定映射（SlotAssigner 纯逻辑）：就近占位/稳定保持/死亡补位/Full-Slight 分流/X4 跳过集
+        private static void TestSlotAssigner()
+        {
+            // 基础场景：3 个 ShieldBearer slot（Rank0 x=0/1/2）+ 2 个 agent（就近占位）
+            var slots = new System.Collections.Generic.List<FormationSlot>();
+            slots.Add(new FormationSlot(0, 0, 0f, 0f, 1f, 0f, TroopRole.ShieldBearer, SlotState.Occupied));
+            slots.Add(new FormationSlot(0, 1, 1f, 0f, 1f, 0f, TroopRole.ShieldBearer, SlotState.Occupied));
+            slots.Add(new FormationSlot(0, 2, 2f, 0f, 1f, 0f, TroopRole.ShieldBearer, SlotState.Occupied));
+            var agents = new System.Collections.Generic.List<AgentRoleEntry>();
+            agents.Add(new AgentRoleEntry(1, TroopRole.ShieldBearer, 0.2f, 0f)); // 离 slot0 最近
+            agents.Add(new AgentRoleEntry(2, TroopRole.ShieldBearer, 1.8f, 0f)); // 离 slot1/2 之间（1.8→slot2 距离0.2, slot1 距离0.8）
+            var input = new SlotAssignInput { Slots = slots, Agents = agents, Last = null, Integrity = 85f }; // Full
+            var out1 = SlotAssigner.Assign(input);
+            Check(out1.Count == 2, "x54 two agents assigned two slots");
+            bool agent1Near0 = false, agent2Near2 = false;
+            foreach (var a in out1)
+            {
+                if (a.AgentIndex == 1 && a.SlotIndex == 0) agent1Near0 = true;
+                if (a.AgentIndex == 2 && a.SlotIndex == 2) agent2Near2 = true;
+            }
+            Check(agent1Near0, "x54 nearest slot picked (agent1→slot0 0.2m)");
+            Check(agent2Near2, "x54 nearest slot picked (agent2→slot2 0.2m)");
+
+            // 稳定保持：同一输入 + 上一拍 → 保持原 slot（无抖动）
+            var last = new System.Collections.Generic.List<SlotAssignment>();
+            last.Add(new SlotAssignment(1, 1)); // 故意让 agent1 上拍在 slot1（非最近）
+            var input2 = new SlotAssignInput { Slots = slots, Agents = agents, Last = last, Integrity = 85f };
+            var out2 = SlotAssigner.Assign(input2);
+            bool kept1 = false;
+            foreach (var a in out2) if (a.AgentIndex == 1 && a.SlotIndex == 1) kept1 = true;
+            Check(kept1, "x54 stability: same agent keeps last slot (无抖动)");
+            Check(out2.Count == 2, "x54 stability: both assigned");
+
+            // 死亡补位：agent2 死亡（不在 agents 中）→ slot2 释放，新 agent3 就近补位
+            var agents3 = new System.Collections.Generic.List<AgentRoleEntry>();
+            agents3.Add(new AgentRoleEntry(1, TroopRole.ShieldBearer, 0.2f, 0f));
+            agents3.Add(new AgentRoleEntry(3, TroopRole.ShieldBearer, 1.5f, 0f)); // 死亡补位
+            var input3 = new SlotAssignInput { Slots = slots, Agents = agents3, Last = last, Integrity = 85f };
+            var out3 = SlotAssigner.Assign(input3);
+            Check(out3.Count == 2, "x54 replacement agent fills freed slot");
+            bool agent3Filled = false;
+            foreach (var a in out3) if (a.AgentIndex == 3) agent3Filled = true;
+            Check(agent3Filled, "x54 new agent assigned after death");
+
+            // Full 严格维持 vs Slight 邻位互换：agent 上拍 Rank0 slot 本拍角色失效（变 Polearm）→ 必须换位。
+            //   Full（maxRankDiff=0）：只补同 Rank 匹配 slot，Rank0 无匹配 → 不指派；
+            //   Slight（maxRankDiff=1）：可补 Rank1 邻位 → 指派。
+            var rankSlots = new System.Collections.Generic.List<FormationSlot>();
+            rankSlots.Add(new FormationSlot(0, 0, 0f, 0f, 1f, 0f, TroopRole.Polearm, SlotState.Occupied));   // Rank0 上拍 slot 变 Polearm（不匹配）
+            rankSlots.Add(new FormationSlot(1, 0, 0f, 1f, 1f, 0f, TroopRole.ShieldBearer, SlotState.Occupied)); // Rank1 匹配
+            var singleAgent = new System.Collections.Generic.List<AgentRoleEntry>();
+            singleAgent.Add(new AgentRoleEntry(1, TroopRole.ShieldBearer, 0.1f, 0f));
+            var lastRank = new System.Collections.Generic.List<SlotAssignment>();
+            lastRank.Add(new SlotAssignment(1, 0)); // 上拍 Rank0 slot0
+            var inputFullStrict = new SlotAssignInput { Slots = rankSlots, Agents = singleAgent, Last = lastRank, Integrity = 90f }; // Full
+            Check(SlotAssigner.Assign(inputFullStrict).Count == 0, "x54 full: no same-rank slot -> not assigned (跨 Rank 不补)");
+            var inputSlightSwap = new SlotAssignInput { Slots = rankSlots, Agents = singleAgent, Last = lastRank, Integrity = 70f }; // Slight
+            var outSlightSwap = SlotAssigner.Assign(inputSlightSwap);
+            Check(outSlightSwap.Count == 1, "x54 slight: rank-adjacent swap assigned");
+            bool swappedToRank1 = outSlightSwap.Count == 1 && rankSlots[outSlightSwap[0].SlotIndex].Rank == 1;
+            Check(swappedToRank1, "x54 slight: agent swapped to adjacent Rank1 slot");
+
+            // X4 跳过集：已解阵 agent 不参与指派
+            var frameDisabled = new System.Collections.Generic.HashSet<int>();
+            frameDisabled.Add(2);
+            var inputSkip = new SlotAssignInput { Slots = slots, Agents = agents, Last = null, Integrity = 85f, FrameDisabledAgents = frameDisabled };
+            var outSkip = SlotAssigner.Assign(inputSkip);
+            Check(outSkip.Count == 1, "x54 frame-disabled agent skipped");
+            bool noAgent2 = true;
+            foreach (var a in outSkip) if (a.AgentIndex == 2) noAgent2 = false;
+            Check(noAgent2, "x54 frame-disabled agent2 not assigned");
+
+            // 空输入：空 agents / 空 slots → 空列表
+            var emptyAgents = new SlotAssignInput { Slots = slots, Agents = new System.Collections.Generic.List<AgentRoleEntry>(), Integrity = 85f };
+            Check(SlotAssigner.Assign(emptyAgents).Count == 0, "x54 empty agents -> empty");
+            var emptySlots = new SlotAssignInput { Slots = new System.Collections.Generic.List<FormationSlot>(), Agents = agents, Integrity = 85f };
+            Check(SlotAssigner.Assign(emptySlots).Count == 0, "x54 empty slots -> empty");
+
+            // 角色不匹配：agent 角色无匹配 slot → 不指派
+            var rangedAgent = new System.Collections.Generic.List<AgentRoleEntry>();
+            rangedAgent.Add(new AgentRoleEntry(9, TroopRole.Ranged, 0.5f, 0f));
+            var inputNoMatch = new SlotAssignInput { Slots = slots, Agents = rangedAgent, Integrity = 85f };
+            Check(SlotAssigner.Assign(inputNoMatch).Count == 0, "x54 no matching role slot -> not assigned");
+
+            // slot 数量不足：3 agents 对 3 slots 全占；再加 1 agent → 第 4 个不指派
+            var fourAgents = new System.Collections.Generic.List<AgentRoleEntry>();
+            fourAgents.Add(new AgentRoleEntry(1, TroopRole.ShieldBearer, 0f, 0f));
+            fourAgents.Add(new AgentRoleEntry(2, TroopRole.ShieldBearer, 1f, 0f));
+            fourAgents.Add(new AgentRoleEntry(3, TroopRole.ShieldBearer, 2f, 0f));
+            fourAgents.Add(new AgentRoleEntry(4, TroopRole.ShieldBearer, 3f, 0f));
+            var inputCrowd = new SlotAssignInput { Slots = slots, Agents = fourAgents, Integrity = 85f };
+            var outCrowd = SlotAssigner.Assign(inputCrowd);
+            Check(outCrowd.Count == 3, "x54 slot shortage: only 3 assigned (1 per slot)");
         }
 
         private static int idxDefend()

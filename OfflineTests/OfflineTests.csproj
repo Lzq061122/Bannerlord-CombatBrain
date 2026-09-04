@@ -49,6 +49,7 @@
     <Compile Include="..\CombatBrain\Formation\TroopComposition.cs" Link="Formation\TroopComposition.cs" />
     <Compile Include="..\CombatBrain\Formation\SlotLayout.cs" Link="Formation\SlotLayout.cs" />
     <Compile Include="..\CombatBrain\Formation\TerrainWarp.cs" Link="Formation\TerrainWarp.cs" />
+    <Compile Include="..\CombatBrain\Formation\SlotAssigner.cs" Link="Formation\SlotAssigner.cs" />
   </ItemGroup>
 
 </Project>
