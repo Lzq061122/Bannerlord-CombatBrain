@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using TaleWorlds.Core;
+using TaleWorlds.Engine;
 using TaleWorlds.Library;
 using TaleWorlds.MountAndBlade;
 using CombatBrain;
@@ -67,6 +68,8 @@ namespace CombatBrain.Ai
         private float _formationLogTimer; // 日志增强：编队明细快照 5s 节拍
         private float _anomalyTimer;       // T39-01 异常检测节拍（0.5s 低频，O(队数×编队数)）
         private float _tacticsTimer;       // T2-01 阵型三态节拍（0.5s 编队级）
+        private float _rangedPosTimer;     // T3-01 射手射击阵地节拍（0.5s 编队级）
+        private readonly Dictionary<Formation, RangedPositionReason> _rangedPosReason = new Dictionary<Formation, RangedPositionReason>(); // T3-01 每编队上次转移原因（防抖）
 
         // P0-③ 感知管线停用开关（用户裁决「先停用止损」）：KnowledgeView.TryGet 无消费者（全仓库仅定义处），
         // TickPerception 每 1s 对每队全图遍历 mission.Agents 白烧性能（违反「禁全图」）。
@@ -231,6 +234,10 @@ namespace CombatBrain.Ai
             _bench.BeginSection("tactics");
             TickFormationTactics(mission, dt);
             _bench.EndSection("tactics");
+
+            _bench.BeginSection("rangedpos");
+            TickRangedPosition(mission, dt);
+            _bench.EndSection("rangedpos");
 
             _bench.BeginSection("movement");
             TickMovement(mission, dt);
@@ -900,6 +907,96 @@ namespace CombatBrain.Ai
             }
         }
 
+        // T3-01 射手射击阵地转移（0.5s 编队级，O(队数×编队数)）：仅在 7 种允许原因下转移，只发 Move 不动阵型。
+        // 分域：Protect 激活让位（不覆盖退后/殿后）；玩家队豁免（MCM）保留；骑射归 Skirmish（只步弓手）。
+        private void TickRangedPosition(Mission mission, float dt)
+        {
+            _rangedPosTimer -= dt;
+            if (_rangedPosTimer > 0f) return;
+            _rangedPosTimer = 0.5f;
+
+            foreach (TeamState state in _states.Values)
+            {
+                Team own = state.Team;
+                if (own == null || (CombatBrainSettings.PlayerTeamExemptionEnabled && own.IsPlayerTeam)) continue; // P0-④ 玩家队豁免
+                if (_protect.IsProtecting(own.TeamIndex)) continue; // 分域：Protect 激活让位
+
+                Team enemy = GetEnemyTeam(own);
+                bool hasTarget = enemy != null;
+
+                // 己方步兵线中心（射手射击阵地 = 步兵线后受保护位）
+                Vec2 ic = Vec2.Zero; int infCount = 0;
+                foreach (Formation f in own.FormationsIncludingEmpty)
+                {
+                    if (f == null || f.CountOfUnits == 0 || f.QuerySystem == null) continue;
+                    if (!f.QuerySystem.IsInfantryFormation) continue;
+                    Vec2 p = TeamGeometry.GetFormationPosition(f, TeamPosKind.CachedMedian);
+                    ic.x += p.x; ic.y += p.y; infCount++;
+                }
+                if (infCount == 0) ic = GetTeamCenter(own);
+                else { ic.x /= infCount; ic.y /= infCount; }
+
+                foreach (Formation f in own.FormationsIncludingEmpty)
+                {
+                    if (f == null || f.CountOfUnits == 0 || f.QuerySystem == null) continue;
+                    if (!f.QuerySystem.IsRangedFormation) continue; // 只步弓手（骑射归 Skirmish）
+
+                    // 敌骑最近距离/数量（聚合可观察，禁全图逐兵）
+                    float cavDist = -1f; int cavCount = 0;
+                    foreach (Team et in mission.Teams)
+                    {
+                        if (et == null || et == own || (CombatBrainSettings.PlayerTeamExemptionEnabled && et.IsPlayerTeam)) continue;
+                        foreach (Formation ef in et.FormationsIncludingEmpty)
+                        {
+                            if (ef == null || ef.CountOfUnits == 0 || ef.QuerySystem == null) continue;
+                            if (!ef.QuerySystem.IsCavalryFormation && !ef.QuerySystem.IsRangedCavalryFormation) continue;
+                            cavCount += ef.CountOfUnits;
+                            Vec2 ep = TeamGeometry.GetFormationPosition(ef, TeamPosKind.CachedMedian);
+                            Vec2 rp = TeamGeometry.GetFormationPosition(f, TeamPosKind.CachedMedian);
+                            float d = VecMath.Dist(ep.x, ep.y, rp.x, rp.y);
+                            if (cavDist < 0f || d < cavDist) cavDist = d;
+                        }
+                    }
+
+                    var ig = f.CachedFormationIntegrityData;
+                    float avgSpeed = VecMath.Dist(0f, 0f, ig.AverageVelocityExcludeFarAgents.x, ig.AverageVelocityExcludeFarAgents.y);
+                    float integrity = FormationIntegrity.Compute(ig.DeviationOfPositionsExcludeFarAgents, ig.MaxDeviationOfPositionExcludeFarAgents, avgSpeed, ig.AverageMaxUnlimitedSpeedExcludeFarAgents, f.CountOfUnits);
+
+                    var input = new RangedPositionInput();
+                    input.EnemyCavalryDistance = cavDist;
+                    input.EnemyCavalryCount = cavCount;
+                    input.FiringArcRatio = 1f;   // 射界计算后续 feature 接线（默认充足）
+                    input.HasTarget = hasTarget;
+                    input.FormationIntegrity = integrity;
+                    // CurrentPositionValue/TargetPositionValue/LineAdvanceDistance/TerrainValueDelta 后续 feature 接线（默认 0）
+
+                    RangedPositionReason reason = RangedPosition.Decide(input);
+                    if (reason == RangedPositionReason.None) continue;
+
+                    Vec2 cur = TeamGeometry.GetFormationPosition(f, TeamPosKind.CachedMedian);
+                    float drift = VecMath.Dist(cur.x, cur.y, ic.x, ic.y);
+
+                    RangedPositionReason last;
+                    if (!_rangedPosReason.TryGetValue(f, out last)) last = RangedPositionReason.None;
+                    if (!RangedPosition.ShouldIssueMove(reason, last, drift)) { _rangedPosReason[f] = reason; continue; }
+                    _rangedPosReason[f] = reason;
+
+                    IssueMoveToPosition(f, ic.x, ic.y, mission); // 只发 Move，不动 ArrangementOrder
+                }
+            }
+        }
+
+        // T3-01 下发阵地 Move（ProtectGlue.IssueMove 同款已核实模式：界内校验→导航点校验→MoveOrder）。
+        private static void IssueMoveToPosition(Formation f, float tx, float ty, Mission mission)
+        {
+            Vec2 target = new Vec2(tx, ty);
+            if (!mission.IsPositionInsideBoundaries(target)) return;
+            WorldPosition wp = f.CachedMedianPosition;
+            wp.SetVec2(target);
+            if (wp.GetNavMesh() == UIntPtr.Zero) return;
+            f.SetMovementOrder(MovementOrder.MovementOrderMove(wp));
+        }
+
         // T38-01 战斗结束一次性落盘 %TEMP%\CombatBrain.telemetry.json + 汇总日志（幂等，非每帧 IO）。
         // T39-01：合并 6 类异常计数（20 项遥测 + 6 项异常，扁平 JSON 对象）。
         private void SaveTelemetry()
@@ -909,7 +1006,7 @@ namespace CombatBrain.Ai
             _telemetry.SetBattleDuration(_elapsed);
             try
             {
-                string path = Path.Combine(Path.GetTempPath(), "CombatBrain.telemetry.json");
+                string path = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "CombatBrain.telemetry.json");
                 string telemetryJson = _telemetry.ToJson();
                 string anomalyJson = _anomaly.ToJson();
                 string combined = telemetryJson.Substring(0, telemetryJson.Length - 1) + "," + anomalyJson.Substring(1);
