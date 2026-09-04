@@ -128,6 +128,9 @@ namespace OfflineTests
             Console.WriteLine("== X4 FrameRelease ==");
             TestFrameRelease();
 
+            Console.WriteLine("== X5-1 TroopClassifier ==");
+            TestTroopClassifier();
+
             Console.WriteLine();
             if (_failures == 0)
             {
@@ -1323,6 +1326,57 @@ namespace OfflineTests
             cd.Remove(7);
             Check(cd.CanRelease(7, 16f), "x4 cooldown allows after Remove (agent removed)");
             Check(cd.CanRelease(8, 20f), "x4 cooldown per-agent: unmarked other agent allows");
+        }
+
+        // X5-1 兵种角色归类（TroopClassifier 纯函数）：规则表每分支 + 骑射/英雄/等级边界
+        private static void TestTroopClassifier()
+        {
+            // ① 骑乘（Kind=Cavalry，任意武器/盾）→ Cavalry
+            Check(TroopClassifier.Classify(new SoldierInput { Kind = SoldierKind.Cavalry, HasShield = true, PrimaryWeaponClass = PrimaryWeaponClass.OneHanded }) == TroopRole.Cavalry,
+                "x51 cavalry one-handed -> Cavalry");
+            Check(TroopClassifier.Classify(new SoldierInput { Kind = SoldierKind.Cavalry, PrimaryWeaponClass = PrimaryWeaponClass.Polearm }) == TroopRole.Cavalry,
+                "x51 cavalry polearm -> Cavalry (骑乘长杆归骑兵)");
+            // 边界：骑射手归 Cavalry（Enums.cs:44 胶水层归并惯例）
+            Check(TroopClassifier.Classify(new SoldierInput { Kind = SoldierKind.Cavalry, PrimaryWeaponClass = PrimaryWeaponClass.Bow }) == TroopRole.Cavalry,
+                "x51 horse archer -> Cavalry (Enums.cs:44 惯例)");
+
+            // ② 非骑乘 + 持盾 + 单手 → ShieldBearer（护甲无关；板甲也归盾兵——盾是角色轴第一特征）
+            Check(TroopClassifier.Classify(new SoldierInput { Kind = SoldierKind.Infantry, HasShield = true, PrimaryWeaponClass = PrimaryWeaponClass.OneHanded, Armor = ArmorGrade.Leather }) == TroopRole.ShieldBearer,
+                "x51 shield+one-handed leather -> ShieldBearer");
+            Check(TroopClassifier.Classify(new SoldierInput { Kind = SoldierKind.Infantry, HasShield = true, PrimaryWeaponClass = PrimaryWeaponClass.OneHanded, Armor = ArmorGrade.Plate }) == TroopRole.ShieldBearer,
+                "x51 shield+one-handed plate -> ShieldBearer (盾优先于板甲)");
+
+            // ③ 非骑乘 + 长杆主武器 → Polearm（持盾+长杆也归 Polearm——②要求单手，不满足则走③）
+            Check(TroopClassifier.Classify(new SoldierInput { Kind = SoldierKind.Infantry, PrimaryWeaponClass = PrimaryWeaponClass.Polearm }) == TroopRole.Polearm,
+                "x51 polearm -> Polearm");
+            Check(TroopClassifier.Classify(new SoldierInput { Kind = SoldierKind.Infantry, HasShield = true, PrimaryWeaponClass = PrimaryWeaponClass.Polearm }) == TroopRole.Polearm,
+                "x51 shield+polearm -> Polearm (②需单手)");
+
+            // ④ 非骑乘 + 弓/弩/投掷 → Ranged
+            Check(TroopClassifier.Classify(new SoldierInput { Kind = SoldierKind.Ranged, PrimaryWeaponClass = PrimaryWeaponClass.Bow }) == TroopRole.Ranged,
+                "x51 bow -> Ranged");
+            Check(TroopClassifier.Classify(new SoldierInput { Kind = SoldierKind.Infantry, PrimaryWeaponClass = PrimaryWeaponClass.Crossbow }) == TroopRole.Ranged,
+                "x51 crossbow -> Ranged (兵种不锁角色)");
+            Check(TroopClassifier.Classify(new SoldierInput { Kind = SoldierKind.Infantry, PrimaryWeaponClass = PrimaryWeaponClass.Thrown }) == TroopRole.Ranged,
+                "x51 thrown -> Ranged (投掷按远程惯例并入)");
+
+            // ⑤ 非骑乘 + 双手重武器 或 板甲+单手 → HeavyMelee
+            Check(TroopClassifier.Classify(new SoldierInput { Kind = SoldierKind.Infantry, PrimaryWeaponClass = PrimaryWeaponClass.TwoHanded, Armor = ArmorGrade.Chainmail }) == TroopRole.HeavyMelee,
+                "x51 two-handed chainmail -> HeavyMelee");
+            Check(TroopClassifier.Classify(new SoldierInput { Kind = SoldierKind.Infantry, PrimaryWeaponClass = PrimaryWeaponClass.OneHanded, Armor = ArmorGrade.Plate }) == TroopRole.HeavyMelee,
+                "x51 plate+one-handed (无盾) -> HeavyMelee");
+
+            // ⑥ 其余近战 → LightMelee（轻甲单手/徒手）
+            Check(TroopClassifier.Classify(new SoldierInput { Kind = SoldierKind.Infantry, PrimaryWeaponClass = PrimaryWeaponClass.OneHanded, Armor = ArmorGrade.Chainmail }) == TroopRole.LightMelee,
+                "x51 chainmail one-handed -> LightMelee");
+            Check(TroopClassifier.Classify(new SoldierInput { Kind = SoldierKind.Infantry, PrimaryWeaponClass = PrimaryWeaponClass.None }) == TroopRole.LightMelee,
+                "x51 unarmed -> LightMelee");
+
+            // 边界：英雄/等级不改变角色（IsVeteran 只影响 FighterProfileFactory.Classify 档位；角色由装备决定）
+            Check(TroopClassifier.Classify(new SoldierInput { Kind = SoldierKind.Infantry, HasShield = true, PrimaryWeaponClass = PrimaryWeaponClass.OneHanded, IsVeteran = true }) == TroopRole.ShieldBearer,
+                "x51 veteran shield -> still ShieldBearer (IsVeteran 不改变角色)");
+            Check(TroopClassifier.Classify(new SoldierInput { Kind = SoldierKind.Infantry, PrimaryWeaponClass = PrimaryWeaponClass.Polearm, Level = 6 }) == TroopRole.Polearm,
+                "x51 level 6 polearm -> still Polearm (等级不改变角色)");
         }
 
         private static int idxDefend()

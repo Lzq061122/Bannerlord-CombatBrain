@@ -25,6 +25,25 @@ namespace CombatBrain.Combat
         public int Level;          // 兵种等级 1-6（英雄等级由胶水层折算；越界自动 clamp）
         public ArmorGrade Armor;   // 护甲材质（视觉可辨：布/皮/锁/板）
         public bool IsVeteran;     // 老兵旗标（久战精锐；英雄可折算为 true）
+
+        // X5-1 扩展字段（设计稿 §二 裁决 2-a）：装备角色轴输入，由胶水层从 Agent 主手/副手提取
+        // （先例 MovementGlue.cs:25 GetPrimaryWieldedItemIndex / Equipment 查询），纯逻辑零依赖。
+        public bool HasShield;                          // 是否持盾（副手盾牌；盾墙前排核心特征）
+        public PrimaryWeaponClass PrimaryWeaponClass;   // 主武器类别（单手/双手/长杆/弓/弩/投掷）
+    }
+
+    // X5-1 主武器类别（TroopClassifier 输入，设计稿 §四 规则表）：
+    // 胶水层从 Agent.GetPrimaryWieldedItemIndex 主手武器提取（MovementGlue.cs:25 先例）；
+    // 近战武器不改变 Ranged 角色（弓弩兵切近战副手仍算 Ranged，规则表语义）。
+    public enum PrimaryWeaponClass
+    {
+        None = 0,      // 徒手/未知（兜底近战）
+        OneHanded = 1, // 单手（剑/斧/锤）
+        TwoHanded = 2, // 双手重武器（双手剑/斧/锤）
+        Polearm = 3,   // 长杆（枪/矛/戟）
+        Bow = 4,       // 弓
+        Crossbow = 5,  // 弩
+        Thrown = 6     // 投掷（标枪/飞斧/飞刀，远程系）
     }
 
     public static class FighterProfileFactory

@@ -43,6 +43,8 @@
     <Compile Include="..\CombatBrain\Ai\HandSkillProfile.cs" Link="Ai\HandSkillProfile.cs" />
     <Compile Include="..\CombatBrain\Ai\FacingCorrection.cs" Link="Ai\FacingCorrection.cs" />
     <Compile Include="..\CombatBrain\Ai\FrameReleaseGlue.cs" Link="Ai\FrameReleaseGlue.cs" />
+    <Compile Include="..\CombatBrain\Formation\TroopRole.cs" Link="Formation\TroopRole.cs" />
+    <Compile Include="..\CombatBrain\Formation\TroopClassifier.cs" Link="Formation\TroopClassifier.cs" />
   </ItemGroup>
 
 </Project>
