@@ -73,6 +73,12 @@ namespace CombatBrain.Ai
         private float _unitPreservationTimer; // T8-01 骑射保存有生力量节拍（0.5s 编队级）
         private readonly Dictionary<Formation, int> _rangedCavInitial = new Dictionary<Formation, int>(); // T8-01 骑射编队初始兵力（分档基准）
         private readonly Dictionary<Formation, PreservationBand> _unitPreservationBand = new Dictionary<Formation, PreservationBand>(); // T8-01 每编队上次分档（边沿）
+        private float _stalemateTimer;            // T18-01 僵局判定慢拍（2s）
+        private float _frontlineMovement;         // T18-01 战线累计位移（米）
+        private Vec2 _lastFrontCenter;            // T18-01 上次敌中心（战线移动基准）
+        private bool _hasFrontCenter;             // T18-01 已有战线基准
+        private bool _stalemateActive;            // T18-01 僵局中（供意图引擎消费）
+        private StalematePlan _stalematePlan = StalematePlan.None; // T18-01 打破方案建议
 
         // P0-③ 感知管线停用开关（用户裁决「先停用止损」）：KnowledgeView.TryGet 无消费者（全仓库仅定义处），
         // TickPerception 每 1s 对每队全图遍历 mission.Agents 白烧性能（违反「禁全图」）。
@@ -245,6 +251,10 @@ namespace CombatBrain.Ai
             _bench.BeginSection("unitpreserve");
             TickUnitPreservation(mission, dt);
             _bench.EndSection("unitpreserve");
+
+            _bench.BeginSection("stalemate");
+            TickStalemate(mission, dt);
+            _bench.EndSection("stalemate");
 
             _bench.BeginSection("movement");
             TickMovement(mission, dt);
@@ -1045,6 +1055,67 @@ namespace CombatBrain.Ai
                     }
                 }
             }
+        }
+
+        // T18-01 僵局检测 + 打破方案建议（2s 慢拍，勿每帧）：只产出建议意图（不干预命令层，供意图引擎消费）。
+        private void TickStalemate(Mission mission, float dt)
+        {
+            _stalemateTimer -= dt;
+            if (_stalemateTimer > 0f) return;
+            _stalemateTimer = 2f;
+
+            // 代表队（首个非玩家队）与敌
+            Team own = null, enemy = null;
+            foreach (TeamState st in _states.Values)
+            {
+                if (st.Team == null || (CombatBrainSettings.PlayerTeamExemptionEnabled && st.Team.IsPlayerTeam)) continue;
+                own = st.Team;
+                enemy = GetEnemyTeam(own);
+                if (enemy != null) break;
+            }
+            if (own == null || enemy == null) { _stalemateActive = false; _stalematePlan = StalematePlan.None; return; }
+
+            // 伤亡率（非玩家队聚合；反作弊闸：存活数公开可观察）
+            int aliveSelf = 0, initialSelf = 0;
+            foreach (TeamState st in _states.Values)
+            {
+                if (st.Team == null || (CombatBrainSettings.PlayerTeamExemptionEnabled && st.Team.IsPlayerTeam)) continue;
+                aliveSelf += st.Team.ActiveAgents.Count;
+                initialSelf += st.InitialCount > 0f ? (int)st.InitialCount : st.Team.ActiveAgents.Count;
+            }
+            float casualty = initialSelf > 0 ? 1f - (float)aliveSelf / initialSelf : 0f;
+
+            // 战线移动（敌中心位移累计）
+            Vec2 ec = GetTeamCenter(enemy);
+            if (_hasFrontCenter)
+                _frontlineMovement += VecMath.Dist(_lastFrontCenter.x, _lastFrontCenter.y, ec.x, ec.y);
+            _lastFrontCenter = ec;
+            _hasFrontCenter = true;
+
+            var input = new StalemateInput();
+            input.CombatDuration = _elapsed;
+            input.CasualtyRate = casualty;
+            input.FrontlineMovement = _frontlineMovement;
+            // 7 类态势
+            input.PowerRatio = enemy.ActiveAgents.Count > 0 ? (float)aliveSelf / enemy.ActiveAgents.Count : 1f;
+            TeamQuerySystem qs = own.QuerySystem;
+            input.CavalryRatio = qs != null ? qs.CavalryRatio + qs.RangedCavalryRatio : 0f;
+            input.RangedRatio = qs != null ? qs.RangedRatio : 0f;
+            Vec2 oc = GetTeamCenter(own);
+            input.TerrainAdvantage = _terrain != null ? _terrain.Height(oc.x, oc.y) - _terrain.Height(ec.x, ec.y) : 0f;
+            input.Morale = initialSelf > 0 ? (float)aliveSelf / initialSelf : 1f;
+            input.LineIntegrity = 100f; // 阵线完整度后续接线（t65 FormationIntegrity）
+            input.Distance = VecMath.Dist(oc.x, oc.y, ec.x, ec.y);
+
+            _stalemateActive = StalemateDetector.IsStalemate(input);
+            _stalematePlan = _stalemateActive ? StalemateDetector.ChoosePlan(input) : StalematePlan.None;
+        }
+
+        /// <summary>T18-01 僵局打破建议（供意图引擎消费；非僵局返回 false）。</summary>
+        public bool TryGetStalemateIntent(out IntentType intent)
+        {
+            intent = _stalemateActive ? StalemateDetector.MapIntent(_stalematePlan) : IntentType.Attack;
+            return _stalemateActive;
         }
 
         // T38-01 战斗结束一次性落盘 %TEMP%\CombatBrain.telemetry.json + 汇总日志（幂等，非每帧 IO）。
