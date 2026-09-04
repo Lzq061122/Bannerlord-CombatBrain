@@ -13,6 +13,8 @@
   <DependedModuleMetadata id="Sandbox" order="LoadBeforeThis" version="v1.0.0.*" optional="true"/>
   <DependedModuleMetadata id="StoryMode" order="LoadBeforeThis" version="v1.0.0.*" optional="true"/>
   <DependedModuleMetadata id="CustomBattle" order="LoadBeforeThis" version="v1.0.0.*" optional="true"/>
+  <!-- t73：MCM（Bannerlord.MBOptionScreen）可选依赖，保证 MCMv5.dll 先于本模块加载以便运行时解析引用；没装不报错。 -->
+  <DependedModuleMetadata id="Bannerlord.MBOptionScreen" order="LoadBeforeThis" optional="true"/>
 
   <SubModules>
     <SubModule>

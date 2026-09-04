@@ -43,6 +43,13 @@
       <HintPath>$(GameBinDir)\TaleWorlds.DotNet.dll</HintPath>
       <Private>false</Private>
     </Reference>
+    <!-- t73：MCM 可选集成编译期引用。HintPath 指玩家已装 MCM 的模块 dll；
+         Private=false(CopyLocal=false) 不把 MCMv5.dll 拷进 CombatBrain 模块，
+         靠玩家已装 MCM 提供（SubModule.xml 声明 optional 依赖 + SubModule 懒触碰，没装 MCM 不崩）。 -->
+    <Reference Include="MCMv5">
+      <HintPath>$(GameDir)\Modules\Bannerlord.MBOptionScreen\bin\Win64_Shipping_Client\MCMv5.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
   </ItemGroup>
 
   <ItemGroup>
