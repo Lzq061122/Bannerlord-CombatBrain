@@ -134,6 +134,9 @@ namespace OfflineTests
             Console.WriteLine("== X5-2 SlotLayout ==");
             TestSlotLayout();
 
+            Console.WriteLine("== X5-3 TerrainWarp ==");
+            TestTerrainWarp();
+
             Console.WriteLine();
             if (_failures == 0)
             {
@@ -1524,6 +1527,79 @@ namespace OfflineTests
         {
             float dx = x2 - x1, dy = y2 - y1;
             return (float)System.Math.Sqrt(dx * dx + dy * dy);
+        }
+
+        // X5-3 地形形变（TerrainWarp 纯逻辑）：高地 Ranged 后移↑/坡度闸>15°无 Rank0/障碍禁入区切割
+        private static void TestTerrainWarp()
+        {
+            // ⑤ 高地适配：坡顶方向 Ranged slot 平均高度 ≥ 全队平均高度（Ranged 后移↑）
+            // 高度采样 h=x*0.1（+x 为上坡），坡顶方向 (1,0)，Ranged 步长 1.0
+            var upSlots = new System.Collections.Generic.List<FormationSlot>();
+            upSlots.Add(new FormationSlot(0, 0, 0f, 0f, 1f, 0f, TroopRole.LightMelee, SlotState.Occupied)); // x=0
+            upSlots.Add(new FormationSlot(0, 1, 1f, 0f, 1f, 0f, TroopRole.Ranged, SlotState.Occupied));     // x=1
+            upSlots.Add(new FormationSlot(0, 2, 2f, 0f, 1f, 0f, TroopRole.Ranged, SlotState.Occupied));     // x=2
+            var upTerrain = new TerrainContext();
+            upTerrain.Height = (x, y) => x * 0.1f;
+            upTerrain.Slope = (x, y) => 5f; // 平缓，不触发坡度闸
+            upTerrain.UphillX = 1f; upTerrain.UphillY = 0f;
+            upTerrain.RangedUphillStep = 1.0f;
+            var upOut = TerrainWarp.Warp(upSlots, upTerrain);
+            float allH = (upOut[0].WorldX + upOut[1].WorldX + upOut[2].WorldX) * 0.1f / 3f; // 全队平均高度（采样 h=x*0.1）
+            float rangedH = (upOut[1].WorldX + upOut[2].WorldX) * 0.1f / 2f;                 // Ranged 平均高度
+            Check(rangedH >= allH, "x53 ranged avg height >= formation avg (⑤ 高地 Ranged 后移↑)");
+            Check(upOut[1].WorldX > 1.9f, "x53 ranged slot moved uphill +1m");
+            Check(upOut[0].WorldX == 0f, "x53 melee slot not moved (仅 Ranged 后移)");
+
+            // ⑥ 坡度闸：>15° 处无 Rank0（→Rank1）；15° 边界不触发；平缓保持 Rank0
+            var slopeTerrain = new TerrainContext();
+            slopeTerrain.Slope = (x, y) => x; // 用 x 直接表示坡度角：x=16 → 16°>15°
+            var steepSlots = new System.Collections.Generic.List<FormationSlot>();
+            steepSlots.Add(new FormationSlot(0, 0, 16f, 0f, 1f, 0f, TroopRole.Polearm, SlotState.Occupied)); // 16° 陡坡 Rank0
+            steepSlots.Add(new FormationSlot(0, 1, 15f, 0f, 1f, 0f, TroopRole.ShieldBearer, SlotState.Occupied)); // 15° 边界 Rank0
+            steepSlots.Add(new FormationSlot(0, 2, 3f, 0f, 1f, 0f, TroopRole.LightMelee, SlotState.Occupied)); // 平缓 Rank0
+            var steepOut = TerrainWarp.Warp(steepSlots, slopeTerrain);
+            Check(steepOut[0].Rank == 1, "x53 slope 16° rank0 -> rank1 (⑥ 陡坡无前排)");
+            Check(steepOut[1].Rank == 0, "x53 slope 15° boundary rank0 kept (边界不触发)");
+            Check(steepOut[2].Rank == 0, "x53 flat 3° rank0 kept");
+
+            // ⑦ 障碍切割：禁入区内 slot 移出；区外 slot 不动（Frontline bend 侧向移出）
+            var zoneTerrain = new TerrainContext();
+            zoneTerrain.Height = (x, y) => 0f;
+            zoneTerrain.Slope = (x, y) => 0f;
+            zoneTerrain.UphillX = 0f; zoneTerrain.UphillY = 0f;
+            zoneTerrain.ForbiddenZones = new System.Collections.Generic.List<ForbiddenZone>();
+            zoneTerrain.ForbiddenZones.Add(new ForbiddenZone(2f, -1f, 4f, 1f)); // 禁入区 x∈[2,4]
+            var zoneSlots = new System.Collections.Generic.List<FormationSlot>();
+            zoneSlots.Add(new FormationSlot(0, 0, 3f, 0f, 1f, 0f, TroopRole.ShieldBearer, SlotState.Occupied)); // 区内
+            zoneSlots.Add(new FormationSlot(0, 1, 6f, 0f, 1f, 0f, TroopRole.Polearm, SlotState.Occupied));     // 区外
+            var zoneOut = TerrainWarp.Warp(zoneSlots, zoneTerrain);
+            bool zone1Out = !(zoneOut[0].WorldX >= 2f && zoneOut[0].WorldX <= 4f && zoneOut[0].WorldY >= -1f && zoneOut[0].WorldY <= 1f);
+            Check(zone1Out, "x53 slot in forbidden zone pushed out (⑦ 障碍切割)");
+            Check(zoneOut[1].WorldX == 6f && zoneOut[1].WorldY == 0f, "x53 slot outside zone untouched");
+
+            // 空输入 → 空列表；terrain null → 原样副本
+            Check(TerrainWarp.Warp(null, upTerrain).Count == 0, "x53 null slots -> empty");
+            Check(TerrainWarp.Warp(new System.Collections.Generic.List<FormationSlot>(), upTerrain).Count == 0, "x53 empty slots -> empty");
+            var copy = TerrainWarp.Warp(upSlots, null);
+            Check(copy.Count == 3 && copy[1].WorldX == 1f, "x53 null terrain -> unchanged copy (优雅降级)");
+
+            // 委托降级：Height/Slope null 维度不形变
+            var noSlope = new TerrainContext();
+            noSlope.UphillX = 1f; noSlope.UphillY = 0f;
+            noSlope.RangedUphillStep = 1.0f;
+            var noSlopeOut = TerrainWarp.Warp(upSlots, noSlope);
+            Check(noSlopeOut[1].WorldX > 1.9f, "x53 slope null -> uphill still applies (⑤ 不依赖坡度)");
+            Check(noSlopeOut[0].Rank == 0, "x53 slope null -> rank untouched (⑥ 降级)");
+
+            // 障碍边界：恰在禁入区边界（含边界）→ 移出
+            var edgeTerrain = new TerrainContext();
+            edgeTerrain.ForbiddenZones = new System.Collections.Generic.List<ForbiddenZone>();
+            edgeTerrain.ForbiddenZones.Add(new ForbiddenZone(0f, 0f, 2f, 2f));
+            var edgeSlots = new System.Collections.Generic.List<FormationSlot>();
+            edgeSlots.Add(new FormationSlot(0, 0, 2f, 1f, 1f, 0f, TroopRole.LightMelee, SlotState.Occupied)); // 恰在 MaxX 边界
+            var edgeOut = TerrainWarp.Warp(edgeSlots, edgeTerrain);
+            Check(!(edgeOut[0].WorldX >= 0f && edgeOut[0].WorldX <= 2f && edgeOut[0].WorldY >= 0f && edgeOut[0].WorldY <= 2f),
+                "x53 zone boundary included -> pushed out (边界含入)");
         }
 
         private static int idxDefend()
