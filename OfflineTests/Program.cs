@@ -92,6 +92,9 @@ namespace OfflineTests
             Console.WriteLine("== T38-01 BattleTelemetry ==");
             TestBattleTelemetry();
 
+            Console.WriteLine("== T39-01 AnomalyDetector ==");
+            TestAnomalyDetector();
+
             Console.WriteLine();
             if (_failures == 0)
             {
@@ -898,6 +901,57 @@ namespace OfflineTests
             Check(t.Count(TelemetryKind.RetreatCount) == 0, "telemetry reset clears counters");
             Check(t.ToJson().Contains("\"FormationBreakCount\":0"), "telemetry reset zero json");
             Check(t.ToJson().Contains("\"BattleDuration\":0"), "telemetry reset zero float");
+        }
+
+        // T39-01 战术异常检测（6 类反模式：每类各 1 + 持续时间边界）
+        private static void TestAnomalyDetector()
+        {
+            var d = new AnomalyDetector();
+
+            // ① 骑兵无任务游荡：>120m 且无目标，持续>10s（边界：恰好 10s 不触发）
+            var i1 = new AnomalyInput { CavalryDistFromMain = 200f, CavalryHasObjective = false };
+            i1.Now = 0f; d.Tick(i1);
+            i1.Now = 10f; d.Tick(i1);
+            Check(d.Count(AnomalyKind.CavalryWander) == 0, "cavalry wander boundary 10s no fire");
+            i1.Now = 10.1f; d.Tick(i1);
+            Check(d.Count(AnomalyKind.CavalryWander) == 1, "cavalry wander fires after >10s");
+
+            // ② 骑射手正面送死：连续>=3 次正面攻击
+            var i2 = new AnomalyInput();
+            i2.HorseArcherFrontalCount = 1; d.Tick(i2);
+            i2.HorseArcherFrontalCount = 2; d.Tick(i2);
+            i2.HorseArcherFrontalCount = 3; d.Tick(i2);
+            Check(d.Count(AnomalyKind.HorseArcherFrontalSuicide) == 1, "horse archer frontal 3 consecutive fires");
+
+            // ③ 射手跑到前排：射手距敌 < 步兵距敌-10m，持续>5s（边界：恰好 5s 不触发）
+            var i3 = new AnomalyInput { ArcherDistToEnemy = 40f, InfantryDistToEnemy = 60f };
+            i3.Now = 0f; d.Tick(i3);
+            i3.Now = 5f; d.Tick(i3);
+            Check(d.Count(AnomalyKind.ArcherFrontLine) == 0, "archer front line boundary 5s no fire");
+            i3.Now = 5.1f; d.Tick(i3);
+            Check(d.Count(AnomalyKind.ArcherFrontLine) == 1, "archer front line fires after >5s");
+
+            // ④ 劣势强制冲锋：战场劣势<-30 且完整度<50 且 ForcedCharge 边沿
+            var i4 = new AnomalyInput { BattleAdvantage = -40f, FormationIntegrity = 30f, ForcedCharge = false };
+            d.Tick(i4);
+            i4.ForcedCharge = true; d.Tick(i4);
+            Check(d.Count(AnomalyKind.DisadvantagedForcedCharge) == 1, "disadvantaged forced charge fires");
+
+            // ⑤ 无理由放弃高地：地形优势>=20 后离开且无新目标
+            var i5 = new AnomalyInput { TerrainAdvantage = 25f };
+            d.Tick(i5);
+            i5.TerrainAdvantage = 5f; i5.HasNewObjective = false; d.Tick(i5);
+            Check(d.Count(AnomalyKind.HighGroundAbandon) == 1, "high ground abandon fires");
+
+            // ⑥ 长期僵局：>120s 且伤亡<5% 且战线移动<20m（单次触发不重复）
+            var i6 = new AnomalyInput { Now = 130f, CasualtyRate = 0.02f, FrontlineMovement = 5f };
+            d.Tick(i6);
+            Check(d.Count(AnomalyKind.LongStalemate) == 1, "long stalemate fires");
+            d.Tick(i6);
+            Check(d.Count(AnomalyKind.LongStalemate) == 1, "long stalemate no double fire");
+
+            d.Reset();
+            Check(d.Count(AnomalyKind.CavalryWander) == 0 && d.Count(AnomalyKind.LongStalemate) == 0, "anomaly reset clears");
         }
 
         private static int idxDefend()

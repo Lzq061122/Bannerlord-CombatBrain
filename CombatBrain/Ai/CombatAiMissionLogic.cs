@@ -8,6 +8,7 @@ using CombatBrain;
 using CombatBrain.Bench;
 using CombatBrain.Combat;
 using CombatBrain.Events;
+using CombatBrain.Formations;
 using CombatBrain.Intent;
 using CombatBrain.Lod;
 using CombatBrain.Perception;
@@ -58,11 +59,13 @@ namespace CombatBrain.Ai
         private readonly BattleBenchmark _bench = new BattleBenchmark();
         private readonly BattleTelemetry _telemetry = new BattleTelemetry(); // T38-01 战斗遥测计数器（事件驱动累加，战斗结束一次落盘）
         private bool _telemetrySaved; // 落盘幂等守卫（OnMissionStateFinalized/OnClearScene 双钩子只写一次）
+        private readonly AnomalyDetector _anomaly = new AnomalyDetector(); // T39-01 战术异常检测（6 类反模式，0.5s 低频判定）
 
         private float _lodTimer;
         private float _intentTimer;
         private float _blockTimer;
         private float _formationLogTimer; // 日志增强：编队明细快照 5s 节拍
+        private float _anomalyTimer;       // T39-01 异常检测节拍（0.5s 低频，O(队数×编队数)）
 
         // P0-③ 感知管线停用开关（用户裁决「先停用止损」）：KnowledgeView.TryGet 无消费者（全仓库仅定义处），
         // TickPerception 每 1s 对每队全图遍历 mission.Agents 白烧性能（违反「禁全图」）。
@@ -219,6 +222,10 @@ namespace CombatBrain.Ai
             _bench.BeginSection("intent");
             TickIntent(mission, dt);
             _bench.EndSection("intent");
+
+            _bench.BeginSection("anomaly");
+            TickAnomaly(mission, dt);
+            _bench.EndSection("anomaly");
 
             _bench.BeginSection("movement");
             TickMovement(mission, dt);
@@ -840,7 +847,8 @@ namespace CombatBrain.Ai
             }
         }
 
-        // T38-01 战斗结束一次性落盘 %TEMP%\CombatBrain.telemetry.json + 汇总日志（幂等，非每帧 IO）
+        // T38-01 战斗结束一次性落盘 %TEMP%\CombatBrain.telemetry.json + 汇总日志（幂等，非每帧 IO）。
+        // T39-01：合并 6 类异常计数（20 项遥测 + 6 项异常，扁平 JSON 对象）。
         private void SaveTelemetry()
         {
             if (_telemetrySaved) return;
@@ -849,13 +857,84 @@ namespace CombatBrain.Ai
             try
             {
                 string path = Path.Combine(Path.GetTempPath(), "CombatBrain.telemetry.json");
-                File.WriteAllText(path, _telemetry.ToJson());
-                CombatLog.Log("[遥测] 落盘: " + path + " | " + _telemetry.Summary());
+                string telemetryJson = _telemetry.ToJson();
+                string anomalyJson = _anomaly.ToJson();
+                string combined = telemetryJson.Substring(0, telemetryJson.Length - 1) + "," + anomalyJson.Substring(1);
+                File.WriteAllText(path, combined);
+                CombatLog.Log("[遥测] 落盘: " + path + " | " + _telemetry.Summary() + " | " + _anomaly.Summary());
             }
             catch (Exception ex)
             {
                 CombatLog.Log("[遥测] 落盘失败: " + ex.Message);
             }
+        }
+
+        // T39-01 异常检测低频驱动（0.5s，O(队数×编队数)，禁全图逐兵）：采集聚合喂入 AnomalyDetector。
+        private void TickAnomaly(Mission mission, float dt)
+        {
+            _anomalyTimer -= dt;
+            if (_anomalyTimer > 0f) return;
+            _anomalyTimer = 0.5f;
+
+            foreach (TeamState state in _states.Values)
+            {
+                Team own = state.Team;
+                if (own == null || (CombatBrainSettings.PlayerTeamExemptionEnabled && own.IsPlayerTeam)) continue; // P0-④ 玩家队豁免
+                Team enemy = GetEnemyTeam(own);
+                if (enemy == null) continue;
+                _anomaly.Tick(BuildAnomalyInput(own, enemy, state));
+            }
+        }
+
+        // T39-01 聚合输入采集：编队中心距(TeamGeometry) + QuerySystem 兵种 + CachedFormationIntegrityData(t65)
+        // + 存活数/真实地形高度。禁全图/禁个体遍历（铁律）；阈值见 AnomalyDetector.cs §T39-01。
+        private AnomalyInput BuildAnomalyInput(Team own, Team enemy, TeamState state)
+        {
+            Vec2 oc = GetTeamCenter(own);
+            Vec2 ec = GetTeamCenter(enemy);
+            int aliveSelf = own.ActiveAgents.Count;
+            int aliveEnemy = enemy.ActiveAgents.Count;
+            int total = aliveSelf + aliveEnemy;
+
+            var input = new AnomalyInput();
+            input.Now = _elapsed;
+            input.BattleAdvantage = total > 0 ? (aliveSelf - aliveEnemy) * 100f / total : 0f;
+            input.CasualtyRate = state.InitialCount > 0f ? 1f - aliveSelf / state.InitialCount : 0f;
+            input.TerrainAdvantage = _terrain != null ? _terrain.Height(oc.x, oc.y) - _terrain.Height(ec.x, ec.y) : 0f;
+
+            float infDist = -1f, archDist = -1f, cavDist = -1f;
+            float integrity = 100f;
+            foreach (Formation f in own.FormationsIncludingEmpty)
+            {
+                if (f == null || f.CountOfUnits == 0 || f.QuerySystem == null) continue;
+                Vec2 fc = TeamGeometry.GetFormationPosition(f, TeamPosKind.SmoothedAverage);
+                float d = VecMath.Dist(fc.x, fc.y, ec.x, ec.y);
+                if (f.QuerySystem.IsRangedFormation || f.QuerySystem.IsRangedCavalryFormation) { if (archDist < 0f || d < archDist) archDist = d; }
+                else if (f.QuerySystem.IsInfantryFormation) { if (infDist < 0f || d < infDist) infDist = d; }
+                else if (f.QuerySystem.IsCavalryFormation) { if (cavDist < 0f || d < cavDist) cavDist = d; }
+                var ig = f.CachedFormationIntegrityData;
+                float avgSpeed = VecMath.Dist(0f, 0f, ig.AverageVelocityExcludeFarAgents.x, ig.AverageVelocityExcludeFarAgents.y);
+                float fi = FormationIntegrity.Compute(ig.DeviationOfPositionsExcludeFarAgents, ig.MaxDeviationOfPositionExcludeFarAgents, avgSpeed, ig.AverageMaxUnlimitedSpeedExcludeFarAgents, f.CountOfUnits);
+                if (fi < integrity) integrity = fi;
+            }
+            input.InfantryDistToEnemy = infDist;
+            input.ArcherDistToEnemy = archDist;
+            input.CavalryDistFromMain = cavDist;
+            input.FormationIntegrity = integrity;
+
+            // 骑兵是否有目标：近似=意图非 Reform/Retreat（无独立「无任务」信号，后续 feature 接入）
+            input.CavalryHasObjective = state.LastIntent != IntentType.Reform && state.LastIntent != IntentType.Retreat;
+
+            // 骑射正面/侧翼累计：来自遥测（t72 只埋点未接线，未接线前=0，异常②不触发）
+            input.HorseArcherFrontalCount = _telemetry.Count(TelemetryKind.HorseArcherFrontalAttackCount);
+            input.HorseArcherFlankCount = _telemetry.Count(TelemetryKind.HorseArcherFlankCount);
+
+            // 强制冲锋/新目标/战线移动：无现成事件源，后续 feature 接入（当前默认 false/0，异常④⑤⑥依赖项不触发）
+            input.ForcedCharge = false;
+            input.HasNewObjective = false;
+            input.FrontlineMovement = 0f;
+
+            return input;
         }
 
         // ---------- helpers ----------
