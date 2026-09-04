@@ -33,6 +33,7 @@
     <Compile Include="..\CombatBrain\Ai\WindowCache.cs" Link="Ai\WindowCache.cs" />
     <Compile Include="..\CombatBrain\Telemetry\BattleTelemetry.cs" Link="Telemetry\BattleTelemetry.cs" />
     <Compile Include="..\CombatBrain\Telemetry\AnomalyDetector.cs" Link="Telemetry\AnomalyDetector.cs" />
+    <Compile Include="..\CombatBrain\Ai\FormationTactics.cs" Link="Ai\FormationTactics.cs" />
   </ItemGroup>
 
 </Project>

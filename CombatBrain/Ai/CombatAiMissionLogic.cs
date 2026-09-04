@@ -66,6 +66,7 @@ namespace CombatBrain.Ai
         private float _blockTimer;
         private float _formationLogTimer; // 日志增强：编队明细快照 5s 节拍
         private float _anomalyTimer;       // T39-01 异常检测节拍（0.5s 低频，O(队数×编队数)）
+        private float _tacticsTimer;       // T2-01 阵型三态节拍（0.5s 编队级）
 
         // P0-③ 感知管线停用开关（用户裁决「先停用止损」）：KnowledgeView.TryGet 无消费者（全仓库仅定义处），
         // TickPerception 每 1s 对每队全图遍历 mission.Agents 白烧性能（违反「禁全图」）。
@@ -226,6 +227,10 @@ namespace CombatBrain.Ai
             _bench.BeginSection("anomaly");
             TickAnomaly(mission, dt);
             _bench.EndSection("anomaly");
+
+            _bench.BeginSection("tactics");
+            TickFormationTactics(mission, dt);
+            _bench.EndSection("tactics");
 
             _bench.BeginSection("movement");
             TickMovement(mission, dt);
@@ -844,6 +849,54 @@ namespace CombatBrain.Ai
                     _telemetry.Increment(TelemetryKind.FormationBreakCount);
                     break;
                 // AgentDown/AttackObserved/ChargeContact 等 → 待后续 feature 定义语义后在此增补
+            }
+        }
+
+        // T2-01 行军/战斗阵型三态切换（0.5s 编队级，O(队数×编队数)）：只切 ArrangementOrder，不动移动命令。
+        // 分域：骑兵/骑射归 F8/Skirmish（跳过）；Protect/Brace 激活时跳过（不覆盖其阵型）；玩家队豁免（MCM）保留。
+        private void TickFormationTactics(Mission mission, float dt)
+        {
+            _tacticsTimer -= dt;
+            if (_tacticsTimer > 0f) return;
+            _tacticsTimer = 0.5f;
+
+            const float RangedThreatRange = 150f; // 敌方远程威胁射程代理（弓矢量级，源文档「进入射程」）
+
+            foreach (TeamState state in _states.Values)
+            {
+                Team own = state.Team;
+                if (own == null || (CombatBrainSettings.PlayerTeamExemptionEnabled && own.IsPlayerTeam)) continue; // P0-④ 玩家队豁免
+                if (_protect.IsProtecting(own.TeamIndex) || _brace.IsBracing(own.TeamIndex)) continue; // 分域：Protect/Brace 激活不覆盖
+                Team enemy = GetEnemyTeam(own);
+                if (enemy == null) continue;
+
+                Vec2 ec = GetTeamCenter(enemy);
+                bool enemyRanged = enemy.QuerySystem != null
+                    && (enemy.QuerySystem.RangedRatio > 0.05f || enemy.QuerySystem.RangedCavalryRatio > 0.05f);
+
+                foreach (Formation f in own.FormationsIncludingEmpty)
+                {
+                    if (f == null || f.CountOfUnits == 0 || f.QuerySystem == null) continue;
+                    if (f.QuerySystem.IsCavalryFormation || f.QuerySystem.IsRangedCavalryFormation) continue; // 骑兵/骑射归 F8/Skirmish
+
+                    Vec2 fc = TeamGeometry.GetFormationPosition(f, TeamPosKind.SmoothedAverage);
+                    float dist = VecMath.Dist(fc.x, fc.y, ec.x, ec.y);
+                    bool enemyInRange = enemyRanged && dist <= RangedThreatRange;
+
+                    FormationTacticsState st = FormationTactics.Classify(dist, enemyInRange);
+
+                    var ig = f.CachedFormationIntegrityData;
+                    float avgSpeed = VecMath.Dist(0f, 0f, ig.AverageVelocityExcludeFarAgents.x, ig.AverageVelocityExcludeFarAgents.y);
+                    float integrity = FormationIntegrity.Compute(ig.DeviationOfPositionsExcludeFarAgents, ig.MaxDeviationOfPositionExcludeFarAgents, avgSpeed, ig.AverageMaxUnlimitedSpeedExcludeFarAgents, f.CountOfUnits);
+
+                    TacticsArrangement want = FormationTactics.SelectArrangement(st, state.CultureId, integrity);
+                    ArrangementOrder target = want == TacticsArrangement.ShieldWall
+                        ? ArrangementOrder.ArrangementOrderShieldWall
+                        : ArrangementOrder.ArrangementOrderLine;
+
+                    // 只切阵型，不动移动命令（避免与 Protect/Brace/Cavalry/Morale 命令互刷）
+                    if (f.ArrangementOrder != target) f.SetArrangementOrder(target);
+                }
             }
         }
 
