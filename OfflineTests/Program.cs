@@ -110,6 +110,9 @@ namespace OfflineTests
             Console.WriteLine("== T18-01 StalemateDetector ==");
             TestStalemateDetector();
 
+            Console.WriteLine("== t89 FormationTacticsTakeover ==");
+            TestFormationTacticsTakeover();
+
             Console.WriteLine();
             if (_failures == 0)
             {
@@ -1092,6 +1095,26 @@ namespace OfflineTests
             // 意图映射
             Check(StalemateDetector.MapIntent(StalematePlan.FlankEnvelop) == IntentType.Flank, "stalemate FlankEnvelop -> Flank intent");
             Check(StalemateDetector.MapIntent(StalematePlan.OccupyHighGround) == IntentType.Defend, "stalemate OccupyHighGround -> Defend intent");
+        }
+
+        // t89 全面接管阵型（原版 Circle 防御环改写 + 幂等 + March/Threatened 分流）
+        private static void TestFormationTacticsTakeover()
+        {
+            // 原版 Circle 被接管改写
+            Check(FormationTactics.ShouldOverride(FormationArrangementKind.Circle, TacticsArrangement.ShieldWall), "takeover Circle + ShieldWall -> override");
+            Check(FormationTactics.ShouldOverride(FormationArrangementKind.Circle, TacticsArrangement.Line), "takeover Circle + Line -> override");
+            // 幂等：已是目标不改写
+            Check(!FormationTactics.ShouldOverride(FormationArrangementKind.ShieldWall, TacticsArrangement.ShieldWall), "takeover ShieldWall + ShieldWall -> no override (idempotent)");
+            Check(!FormationTactics.ShouldOverride(FormationArrangementKind.Line, TacticsArrangement.Line), "takeover Line + Line -> no override (idempotent)");
+            Check(FormationTactics.ShouldOverride(FormationArrangementKind.Other, TacticsArrangement.Line), "takeover Other + Line -> override");
+
+            // March/Threatened 分流：Circle 改写目标
+            var marchTarget = FormationTactics.SelectArrangement(FormationTacticsState.March, "empire", 100f);
+            Check(marchTarget == TacticsArrangement.Line, "takeover March -> Line target");
+            var threatTarget = FormationTactics.SelectArrangement(FormationTacticsState.Threatened, "empire", 100f);
+            Check(threatTarget == TacticsArrangement.ShieldWall, "takeover Threatened -> ShieldWall target");
+            Check(FormationTactics.ShouldOverride(FormationArrangementKind.Circle, marchTarget), "takeover Circle + March -> rewrite to Line");
+            Check(FormationTactics.ShouldOverride(FormationArrangementKind.Circle, threatTarget), "takeover Circle + Threatened -> rewrite to ShieldWall");
         }
 
         private static int idxDefend()

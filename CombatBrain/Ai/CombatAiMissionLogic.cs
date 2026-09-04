@@ -919,9 +919,20 @@ namespace CombatBrain.Ai
                         : ArrangementOrder.ArrangementOrderLine;
 
                     // 只切阵型，不动移动命令（避免与 Protect/Brace/Cavalry/Morale 命令互刷）
-                    if (f.ArrangementOrder != target) f.SetArrangementOrder(target);
+                    // t89 全面接管：检测原版 Circle 防御环（BehaviorDefensiveRing 下发）→ 强制改写（ShouldOverride 幂等）
+                    if (FormationTactics.ShouldOverride(MapArrangementKind(f.ArrangementOrder), want))
+                        f.SetArrangementOrder(target);
                 }
             }
+        }
+
+        // t89 当前实际阵型 → 纯枚举（Circle=原版防御环，用于全面接管检测）
+        private static FormationArrangementKind MapArrangementKind(ArrangementOrder o)
+        {
+            if (o == ArrangementOrder.ArrangementOrderCircle) return FormationArrangementKind.Circle;
+            if (o == ArrangementOrder.ArrangementOrderShieldWall) return FormationArrangementKind.ShieldWall;
+            if (o == ArrangementOrder.ArrangementOrderLine) return FormationArrangementKind.Line;
+            return FormationArrangementKind.Other;
         }
 
         // T3-01 射手射击阵地转移（0.5s 编队级，O(队数×编队数)）：仅在 7 种允许原因下转移，只发 Move 不动阵型。

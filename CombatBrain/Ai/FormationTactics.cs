@@ -21,6 +21,15 @@ namespace CombatBrain.Ai
         ShieldWall = 1
     }
 
+    // 当前实际阵型（纯枚举，胶水层从 f.ArrangementOrder 映射）——Circle=原版防御环（BehaviorDefensiveRing 下发）。
+    public enum FormationArrangementKind
+    {
+        Line = 0,
+        ShieldWall = 1,
+        Circle = 2,   // 原版防御环圆阵
+        Other = 3     // Skein/Column/Loose/Scatter/Square 等
+    }
+
     public static class FormationTactics
     {
         public const float MarchDistance = 80f;        // >80m = March
@@ -46,6 +55,16 @@ namespace CombatBrain.Ai
             // Approach：斯特吉亚提前举盾，或完整度 <50 提前 ShieldWall 重组（t65）
             if (cultureId == ShieldWallCulture || integrity < ReformIntegrity) return TacticsArrangement.ShieldWall;
             return TacticsArrangement.Line;
+        }
+
+        /// <summary>
+        /// t89 全面接管：当前阵型非目标（含原版 Circle 防御环）→ 需改写为目标阵型；已是目标 → 不改写（幂等）。
+        /// </summary>
+        public static bool ShouldOverride(FormationArrangementKind current, TacticsArrangement target)
+        {
+            FormationArrangementKind want = target == TacticsArrangement.ShieldWall
+                ? FormationArrangementKind.ShieldWall : FormationArrangementKind.Line;
+            return current != want;
         }
     }
 }
