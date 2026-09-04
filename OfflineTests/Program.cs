@@ -122,6 +122,9 @@ namespace OfflineTests
             Console.WriteLine("== X2 HandSkillProfile ==");
             TestHandSkillProfile();
 
+            Console.WriteLine("== X3 FacingCorrection ==");
+            TestFacingCorrection();
+
             Console.WriteLine();
             if (_failures == 0)
             {
@@ -1242,6 +1245,43 @@ namespace OfflineTests
             CheckApprox(HandSkillProfile.DefendDirectionChance(1f, 1f), 0.5f, "x2 defend dir chance 1.0 s1 -> 0.5");
             CheckApprox(HandSkillProfile.DefendDirectionChance(0.2f, 1f), 0.1f, "x2 defend dir chance base0.2 s1 -> 0.1");
             CheckApprox(HandSkillProfile.DefendDirectionChance(0f, 1f), 0f, "x2 defend dir chance floor 0");
+        }
+
+        // X3 编队朝向修正（FacingCorrection 纯逻辑）：朝向计算/0.5s 缓存/目标无效/剧场半径/方向迟滞/玩家豁免
+        private static void TestFacingCorrection()
+        {
+            float dx, dy, dist;
+
+            // 1) 朝向计算：正东目标 → dir=(1,0)；正北目标 → dir=(0,1)
+            bool r1 = FacingCorrection.DecideFacing(0f, 0f, 10f, 0f, 0f, 0f, 1f, -1f, out dx, out dy, out dist);
+            Check(r1 && dx > 0.99f && dy > -0.01f && dy < 0.01f, "x3 facing east -> dir(1,0)");
+            bool r2 = FacingCorrection.DecideFacing(0f, 0f, 0f, 10f, 0f, 0f, 1f, -1f, out dx, out dy, out dist);
+            Check(r2 && dx > -0.01f && dx < 0.01f && dy > 0.99f, "x3 facing north -> dir(0,1)");
+
+            // 2) 0.5s 缓存窗：now-lastTime=0.4 < 0.5 → 不重算（沿用上次方向）
+            bool r3 = FacingCorrection.DecideFacing(0f, 0f, 10f, 0f, 0f, 0f, 1f, 0.6f, out dx, out dy, out dist);
+            Check(!r3, "x3 cache window 0.4s<0.5s -> no recompute");
+
+            // 3) 目标无效（==己方中心，dist<1m）→ 不修正
+            bool r4 = FacingCorrection.DecideFacing(0f, 0f, 0.5f, 0f, 0f, 0f, 2f, -1f, out dx, out dy, out dist);
+            Check(!r4, "x3 target==own (<1m) -> no facing");
+
+            // 4) 剧场半径边界：200m 外不修正；149m 内修正且 dist 正确
+            bool r5 = FacingCorrection.DecideFacing(0f, 0f, 200f, 0f, 0f, 0f, 2f, -1f, out dx, out dy, out dist);
+            Check(!r5, "x3 out of theater radius 200m -> no facing");
+            bool r6 = FacingCorrection.DecideFacing(0f, 0f, 149f, 0f, 0f, 0f, 2f, -1f, out dx, out dy, out dist);
+            Check(r6 && dist > 148.9f && dist < 149.1f, "x3 within theater radius 149m -> facing, dist ok");
+
+            // 5) 方向迟滞：新方向与上次夹角 <0.2rad（点积>0.98）→ 不下发；90° 变化 → 更新
+            bool r7 = FacingCorrection.DecideFacing(0f, 0f, 10f, 0.3f, 1f, 0f, 2f, -1f, out dx, out dy, out dist);
+            Check(!r7, "x3 direction hysteresis <0.2rad -> keep last");
+            bool r8 = FacingCorrection.DecideFacing(0f, 0f, 0f, 10f, 1f, 0f, 2f, -1f, out dx, out dy, out dist);
+            Check(r8 && dy > 0.99f, "x3 direction change 90deg -> update");
+
+            // 6) 玩家队豁免判定（MCM 开关；P0-④ 保留）
+            Check(FacingCorrection.ShouldExempt(true, true), "x3 exempt player team when switch on");
+            Check(!FacingCorrection.ShouldExempt(true, false), "x3 no exempt when switch off");
+            Check(!FacingCorrection.ShouldExempt(false, true), "x3 no exempt for AI team");
         }
 
         private static int idxDefend()

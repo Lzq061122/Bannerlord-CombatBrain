@@ -90,6 +90,13 @@ namespace CombatBrain.Ai
         private readonly Dictionary<Formation, TargetSelection> _formationTargets = new Dictionary<Formation, TargetSelection>(); // X1 每编队上次选择（缓存+迟滞基准）
         private readonly TargetCandidate[] _targetCandidates = new TargetCandidate[32]; // X1 候选复用缓冲（编队数上限防御，零每拍分配）
 
+        // X3 编队朝向修正：0.5s 编队级节拍（FacingCorrection.cs 纯逻辑，只产出朝向不下移动/阵型命令）。
+        // 朝向源：t93 TryGetFormationTarget 目标编队方向优先（敌射手优先），无目标 → 最近敌队中心（TeamGeometry）。
+        // 剧场半径内修正、玩家队豁免（MCM）保留；每编队记录上次方向（迟滞防抖基准）。
+        private float _facingTimer; // X3 朝向修正节拍（0.5s 编队级）
+        private readonly Dictionary<Formation, Vec2> _facingLastDir = new Dictionary<Formation, Vec2>(); // X3 每编队上次朝向方向（迟滞）
+        private readonly Dictionary<Formation, float> _facingLastTime = new Dictionary<Formation, float>(); // X3 每编队上次朝向时刻（0.5s 缓存）
+
         // P0-③ 感知管线停用开关（用户裁决「先停用止损」）：KnowledgeView.TryGet 无消费者（全仓库仅定义处），
         // TickPerception 每 1s 对每队全图遍历 mission.Agents 白烧性能（违反「禁全图」）。
         // 仅停用调用，Perception\KnowledgeView/VisibilityOracle/PerceptionPipeline 类保留供后续信息迷雾接线；
@@ -269,6 +276,10 @@ namespace CombatBrain.Ai
             _bench.BeginSection("targeting");
             TickTargeting(mission, dt);
             _bench.EndSection("targeting");
+
+            _bench.BeginSection("facing");
+            TickFacing(mission, dt);
+            _bench.EndSection("facing");
 
             _bench.BeginSection("movement");
             TickMovement(mission, dt);
@@ -1207,6 +1218,58 @@ namespace CombatBrain.Ai
             if (ef.QuerySystem.IsRangedCavalryFormation) return FormationTargetKind.RangedCavalry;
             if (ef.QuerySystem.IsCavalryFormation) return FormationTargetKind.Cavalry;
             return FormationTargetKind.Infantry;
+        }
+
+        // X3 编队朝向修正（0.5s 编队级，只 SetFacingOrder 不动 Movement/Arrangement——与 t79 三态/t89 接管分域独立）。
+        // 朝向源：①t93 TryGetFormationTarget 目标编队方向（敌射手优先，7m 迟滞）；②无目标 → GetEnemyTeam 最近敌队中心。
+        // FacingCorrection 纯逻辑判定（0.5s 缓存 + 1m 目标无效 + 150m 剧场半径 + 0.2rad 方向迟滞防抖），
+        // 只产出方向供 SetFacingOrder(FacingOrderLookAtDirection)（Formation.cs:717 / FacingOrder.cs:32 已核实）。
+        // 反作弊闸：编队中心/敌队中心为引擎公开可观察位置；玩家队豁免（MCM）保留。
+        private void TickFacing(Mission mission, float dt)
+        {
+            _facingTimer -= dt;
+            if (_facingTimer > 0f) return;
+            _facingTimer = 0.5f;
+
+            foreach (TeamState state in _states.Values)
+            {
+                Team own = state.Team;
+                if (own == null || FacingCorrection.ShouldExempt(own.IsPlayerTeam, CombatBrainSettings.PlayerTeamExemptionEnabled)) continue; // P0-④ 玩家队豁免
+
+                foreach (Formation f in own.FormationsIncludingEmpty)
+                {
+                    if (f == null || f.CountOfUnits == 0 || f.QuerySystem == null) continue;
+                    Vec2 fc = TeamGeometry.GetFormationPosition(f, TeamPosKind.CachedMedian); // 编队层下令系口径
+
+                    // 朝向源优先：t93 目标编队方向；无目标 → 最近敌队中心
+                    TargetSelection sel;
+                    Vec2 target;
+                    if (TryGetFormationTarget(f, out sel))
+                    {
+                        target = new Vec2(sel.X, sel.Y);
+                    }
+                    else
+                    {
+                        Team enemy = GetEnemyTeam(own);
+                        if (enemy == null) continue;
+                        target = GetTeamCenter(enemy);
+                    }
+
+                    Vec2 lastDir;
+                    if (!_facingLastDir.TryGetValue(f, out lastDir)) lastDir = Vec2.Zero;
+                    float lastTime;
+                    if (!_facingLastTime.TryGetValue(f, out lastTime)) lastTime = -1f;
+
+                    float dx, dy, dist;
+                    if (FacingCorrection.DecideFacing(fc.x, fc.y, target.x, target.y,
+                        lastDir.x, lastDir.y, _elapsed, lastTime, out dx, out dy, out dist))
+                    {
+                        f.SetFacingOrder(FacingOrder.FacingOrderLookAtDirection(new Vec2(dx, dy)));
+                        _facingLastDir[f] = new Vec2(dx, dy);
+                        _facingLastTime[f] = _elapsed;
+                    }
+                }
+            }
         }
 
         /// <summary>T18-01 僵局打破建议（供意图引擎消费；非僵局返回 false）。</summary>

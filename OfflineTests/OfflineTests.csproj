@@ -41,6 +41,7 @@
     <Compile Include="..\CombatBrain\Ai\DecisionDelay.cs" Link="Ai\DecisionDelay.cs" />
     <Compile Include="..\CombatBrain\Ai\FormationTargeting.cs" Link="Ai\FormationTargeting.cs" />
     <Compile Include="..\CombatBrain\Ai\HandSkillProfile.cs" Link="Ai\HandSkillProfile.cs" />
+    <Compile Include="..\CombatBrain\Ai\FacingCorrection.cs" Link="Ai\FacingCorrection.cs" />
   </ItemGroup>
 
 </Project>
