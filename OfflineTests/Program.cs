@@ -140,6 +140,9 @@ namespace OfflineTests
             Console.WriteLine("== X5-4 SlotAssigner ==");
             TestSlotAssigner();
 
+            Console.WriteLine("== X5-5 FormationDiscipline ==");
+            TestFormationDiscipline();
+
             Console.WriteLine();
             if (_failures == 0)
             {
@@ -1698,6 +1701,51 @@ namespace OfflineTests
             var inputCrowd = new SlotAssignInput { Slots = slots, Agents = fourAgents, Integrity = 85f };
             var outCrowd = SlotAssigner.Assign(inputCrowd);
             Check(outCrowd.Count == 3, "x54 slot shortage: only 3 assigned (1 per slot)");
+        }
+
+        // X5-5 阵型纪律四态（FormationDisciplineController 纯逻辑）：Grade()→约束参数 边界 80/60/40 + 各态方向
+        private static void TestFormationDiscipline()
+        {
+            // 1) 四态边界：80→Full、79→Slight、60→Slight、59→Moderate、40→Moderate、39→Stopped、0→Stopped
+            Check(FormationDisciplineController.Evaluate(85f).State == DisciplineState.Full, "x55 85 -> Full");
+            Check(FormationDisciplineController.Evaluate(80f).State == DisciplineState.Full, "x55 80 boundary -> Full");
+            Check(FormationDisciplineController.Evaluate(79f).State == DisciplineState.Slight, "x55 79 -> Slight");
+            Check(FormationDisciplineController.Evaluate(60f).State == DisciplineState.Slight, "x55 60 boundary -> Slight");
+            Check(FormationDisciplineController.Evaluate(59f).State == DisciplineState.Moderate, "x55 59 -> Moderate");
+            Check(FormationDisciplineController.Evaluate(40f).State == DisciplineState.Moderate, "x55 40 boundary -> Moderate");
+            Check(FormationDisciplineController.Evaluate(39f).State == DisciplineState.Stopped, "x55 39 -> Stopped (Severe+Collapsed)");
+            Check(FormationDisciplineController.Evaluate(0f).State == DisciplineState.Stopped, "x55 0 -> Stopped (Collapsed)");
+
+            // 2) Full：严格维持——刷新正常 0.5s、无噪声、MaxRankDiff=0（与 SlotAssigner 严格同 Rank 一致）
+            var full = FormationDisciplineController.Evaluate(90f);
+            Check(full.MaintainSlots && full.RefreshInterval == 0.5f, "x55 full: maintain + refresh 0.5s");
+            Check(full.NoiseAmplitude == 0f, "x55 full: no noise");
+            Check(full.MaxRankDiff == 0, "x55 full: maxRankDiff 0 (严格同 Rank, 与 SlotAssigner 一致)");
+
+            // 3) Slight：允许局部补位——MaxRankDiff=1（邻位互换）、无噪声、刷新正常
+            var slight = FormationDisciplineController.Evaluate(70f);
+            Check(slight.MaintainSlots && slight.RefreshInterval == 0.5f, "x55 slight: maintain + refresh 0.5s");
+            Check(slight.MaxRankDiff == 1, "x55 slight: maxRankDiff 1 (邻位互换, 与 SlotAssigner 一致)");
+            Check(slight.NoiseAmplitude == 0f, "x55 slight: no noise (局部补位不抖动)");
+
+            // 4) Moderate：降低约束——加噪声、降刷新优先级（1.0s）、MaxRankDiff=1（允许局部变形）
+            var moderate = FormationDisciplineController.Evaluate(50f);
+            Check(moderate.MaintainSlots, "x55 moderate: still maintains slots");
+            Check(moderate.RefreshInterval > 0.5f, "x55 moderate: refresh slower than full (降刷新优先级)");
+            Check(moderate.NoiseAmplitude > 0f, "x55 moderate: noise > 0 (允许局部变形)");
+            Check(moderate.MaxRankDiff == 1, "x55 moderate: maxRankDiff 1");
+
+            // 5) Severe+Collapsed：停止维护——MaintainSlots=false、刷新 0（停刷交 F6）
+            var stopped = FormationDisciplineController.Evaluate(30f);
+            Check(!stopped.MaintainSlots, "x55 severe: stops maintaining (交 F6 近战走位)");
+            Check(stopped.RefreshInterval == 0f, "x55 severe: refresh 0 (停刷 Slot 目标)");
+            Check(stopped.NoiseAmplitude == 0f, "x55 severe: no noise when stopped");
+
+            // 6) 与 X5-4 语义一致：Full 严格（MaxRankDiff=0）< Slight/Moderate（1）；Stopped 不指派（Maintain=false）
+            Check(FormationDisciplineController.Evaluate(90f).MaxRankDiff == 0
+                && FormationDisciplineController.Evaluate(70f).MaxRankDiff == 1
+                && FormationDisciplineController.Evaluate(50f).MaxRankDiff == 1,
+                "x55 maxRankDiff full(0) < slight/moderate(1) 与 X5-4 门控一致");
         }
 
         private static int idxDefend()
