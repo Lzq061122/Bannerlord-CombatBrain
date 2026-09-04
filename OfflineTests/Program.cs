@@ -116,6 +116,9 @@ namespace OfflineTests
             Console.WriteLine("== X0 DecisionDelay ==");
             TestDecisionDelay();
 
+            Console.WriteLine("== X1 FormationTargeting ==");
+            TestFormationTargeting();
+
             Console.WriteLine();
             if (_failures == 0)
             {
@@ -1136,6 +1139,67 @@ namespace OfflineTests
             Check(full.HesitateProb == 0.5f && full.DelayBase == 0.8f && full.Wobble == 0.6f, "decisiondelay strength 1 -> unchanged");
             var half = DecisionDelay.ScaleProfile(p, 0.5f);
             Check(half.HesitateProb == 0.25f && half.DelayBase == 0.4f && half.Wobble == 0.3f, "decisiondelay strength 0.5 -> half jitter");
+        }
+
+        // X1 编队级目标选择（FormationTargeting 纯逻辑）：优先级链/距离加权/威胁加权/小股过滤/无目标降级/半径/缓存/迟滞
+        private static void TestFormationTargeting()
+        {
+            // 1) 优先级链：射手(kind 3) 压过更近的骑兵(kind 1)——类别优先于距离
+            var pri = new[]
+            {
+                new TargetCandidate { Index = 1, X = 30f, Y = 0f, Count = 80, Kind = FormationTargetKind.Cavalry },
+                new TargetCandidate { Index = 2, X = 100f, Y = 0f, Count = 65, Kind = FormationTargetKind.Ranged },
+            };
+            var s1 = FormationTargeting.Select(0f, 0f, 100, pri, pri.Length, TargetSelection.None, 1.0f);
+            Check(s1.HasTarget && s1.Index == 2, "x1 priority chain: ranged beats nearer cavalry");
+
+            // 2) 距离加权：同类骑兵，近者胜（20m vs 60m 同兵力）
+            var dist = new[]
+            {
+                new TargetCandidate { Index = 1, X = 60f, Y = 0f, Count = 80, Kind = FormationTargetKind.Cavalry },
+                new TargetCandidate { Index = 2, X = 20f, Y = 0f, Count = 80, Kind = FormationTargetKind.Cavalry },
+            };
+            var s2 = FormationTargeting.Select(0f, 0f, 100, dist, dist.Length, TargetSelection.None, 1.0f);
+            Check(s2.HasTarget && s2.Index == 2, "x1 distance weighting: nearer cavalry wins");
+
+            // 3) 威胁加权：同类同距，人多者胜（90 vs 40）
+            var threat = new[]
+            {
+                new TargetCandidate { Index = 1, X = 40f, Y = 0f, Count = 40, Kind = FormationTargetKind.Cavalry },
+                new TargetCandidate { Index = 2, X = 40f, Y = 0f, Count = 90, Kind = FormationTargetKind.Cavalry },
+            };
+            var s3 = FormationTargeting.Select(0f, 0f, 100, threat, threat.Length, TargetSelection.None, 1.0f);
+            Check(s3.HasTarget && s3.Index == 2, "x1 threat weighting: bigger formation wins");
+
+            // 4) 小股过滤：敌 50 < 己方 100×0.6=60 → 无目标降级
+            var small = new[] { new TargetCandidate { Index = 1, X = 20f, Y = 0f, Count = 50, Kind = FormationTargetKind.Infantry } };
+            var s4 = FormationTargeting.Select(0f, 0f, 100, small, small.Length, TargetSelection.None, 1.0f);
+            Check(!s4.HasTarget, "x1 small-band filter: 50<60 -> no target");
+
+            // 5) 己方零兵力不除零：ownCount=0 → 小股过滤失效（全部计入），有目标
+            var zero = new[] { new TargetCandidate { Index = 1, X = 20f, Y = 0f, Count = 5, Kind = FormationTargetKind.Infantry } };
+            var s5 = FormationTargeting.Select(0f, 0f, 0, zero, zero.Length, TargetSelection.None, 1.0f);
+            Check(s5.HasTarget && s5.Index == 1, "x1 zero own count: no div-by-zero, target kept");
+
+            // 6) 剧场半径：200m > 150m → 剔除 → 无目标降级
+            var far = new[] { new TargetCandidate { Index = 1, X = 200f, Y = 0f, Count = 200, Kind = FormationTargetKind.Infantry } };
+            var s6 = FormationTargeting.Select(0f, 0f, 100, far, far.Length, TargetSelection.None, 1.0f);
+            Check(!s6.HasTarget, "x1 theater radius: 200m out of 150m -> no target");
+
+            // 7) 缓存：now=1.2 距上次选择时刻 1.0 < 0.5s → 直接返回上次（即使候选已消失）
+            var s7 = FormationTargeting.Select(0f, 0f, 100, dist, dist.Length, s2, 1.2f);
+            Check(s7.HasTarget && s7.Index == 2, "x1 cache hit within 0.5s returns last");
+
+            // 8) 迟滞：上次目标 (30,0)，新最优 (32,0) 距 2m ≤7m → 沿用上次
+            var lastSel = new TargetSelection { HasTarget = true, Index = 9, X = 30f, Y = 0f, Kind = FormationTargetKind.Cavalry, Time = 0f };
+            var near = new[] { new TargetCandidate { Index = 7, X = 32f, Y = 0f, Count = 90, Kind = FormationTargetKind.Cavalry } };
+            var s8 = FormationTargeting.Select(0f, 0f, 100, near, near.Length, lastSel, 1.0f);
+            Check(s8.HasTarget && s8.Index == 9, "x1 hysteresis <=7m keeps last target");
+
+            // 9) 迟滞失效：新最优 (45,0) 距 15m >7m → 更新为新目标
+            var far2 = new[] { new TargetCandidate { Index = 7, X = 45f, Y = 0f, Count = 90, Kind = FormationTargetKind.Cavalry } };
+            var s9 = FormationTargeting.Select(0f, 0f, 100, far2, far2.Length, lastSel, 1.0f);
+            Check(s9.HasTarget && s9.Index == 7, "x1 hysteresis >7m updates to new target");
         }
 
         private static int idxDefend()

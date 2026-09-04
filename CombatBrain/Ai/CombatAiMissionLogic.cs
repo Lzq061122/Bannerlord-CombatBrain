@@ -83,6 +83,13 @@ namespace CombatBrain.Ai
         private bool _stalemateActive;            // T18-01 僵局中（供意图引擎消费）
         private StalematePlan _stalematePlan = StalematePlan.None; // T18-01 打破方案建议
 
+        // X1 编队级目标选择：0.5s 编队级节拍（契约③缓存）+ 每编队目标缓存字典（FormationTargeting.cs 纯逻辑）。
+        // 只产出选择供下游消费（X3 朝向/X4 解阵框/骑兵冲锋目标），本层不下任何命令（避免与
+        // Protect/Brace/Cavalry/Skirmish/Morale 命令冲突，契约②）。
+        private float _targetingTimer; // X1 目标选择节拍（0.5s 编队级）
+        private readonly Dictionary<Formation, TargetSelection> _formationTargets = new Dictionary<Formation, TargetSelection>(); // X1 每编队上次选择（缓存+迟滞基准）
+        private readonly TargetCandidate[] _targetCandidates = new TargetCandidate[32]; // X1 候选复用缓冲（编队数上限防御，零每拍分配）
+
         // P0-③ 感知管线停用开关（用户裁决「先停用止损」）：KnowledgeView.TryGet 无消费者（全仓库仅定义处），
         // TickPerception 每 1s 对每队全图遍历 mission.Agents 白烧性能（违反「禁全图」）。
         // 仅停用调用，Perception\KnowledgeView/VisibilityOracle/PerceptionPipeline 类保留供后续信息迷雾接线；
@@ -258,6 +265,10 @@ namespace CombatBrain.Ai
             _bench.BeginSection("stalemate");
             TickStalemate(mission, dt);
             _bench.EndSection("stalemate");
+
+            _bench.BeginSection("targeting");
+            TickTargeting(mission, dt);
+            _bench.EndSection("targeting");
 
             _bench.BeginSection("movement");
             TickMovement(mission, dt);
@@ -1123,6 +1134,79 @@ namespace CombatBrain.Ai
 
             _stalemateActive = StalemateDetector.IsStalemate(input);
             _stalematePlan = _stalemateActive ? StalemateDetector.ChoosePlan(input) : StalematePlan.None;
+        }
+
+        // X1 编队级目标选择（0.5s 编队级，只产出选择不下令）：每编队从剧场半径内可见敌方编队选目标。
+        // 优先级链 敌射手>敌骑射>敌骑兵>敌步兵 + 距离/威胁加权 + 7m 迟滞（FormationTargeting 纯逻辑，可离线测）。
+        // 反作弊闸：只用引擎公开聚合（QuerySystem 兵种旗标 / CountOfUnits / TeamGeometry 编队中心），
+        //   禁全图、禁个体遍历；敌队判定与 P1-③ 一致（IsEnemyOf）；玩家队豁免（MCM 开关）保留。
+        // 结果入 _formationTargets 字典，下游经 TryGetFormationTarget 消费（契约②：本层不下令）。
+        private void TickTargeting(Mission mission, float dt)
+        {
+            _targetingTimer -= dt;
+            if (_targetingTimer > 0f) return;
+            _targetingTimer = 0.5f;
+
+            foreach (TeamState state in _states.Values)
+            {
+                Team own = state.Team;
+                if (own == null || (CombatBrainSettings.PlayerTeamExemptionEnabled && own.IsPlayerTeam)) continue; // P0-④ 玩家队豁免（MCM t66）
+
+                foreach (Formation f in own.FormationsIncludingEmpty)
+                {
+                    if (f == null || f.CountOfUnits == 0 || f.QuerySystem == null) continue;
+                    Vec2 fc = TeamGeometry.GetFormationPosition(f, TeamPosKind.CachedMedian); // 编队层下令系口径（P1-④）
+
+                    int n = 0;
+                    foreach (Team et in mission.Teams)
+                    {
+                        // P1-③ 真敌队判定（IsEnemyOf，Team.cs L629 已核实）；多队混战不把盟友当敌人
+                        if (et == null || et == own || !et.MBTeam.IsValid || !et.IsEnemyOf(own)) continue;
+                        if (CombatBrainSettings.PlayerTeamExemptionEnabled && et.IsPlayerTeam) continue; // 玩家队豁免
+                        foreach (Formation ef in et.FormationsIncludingEmpty)
+                        {
+                            if (ef == null || ef.CountOfUnits == 0 || ef.QuerySystem == null) continue;
+                            Vec2 ep = TeamGeometry.GetFormationPosition(ef, TeamPosKind.CachedMedian);
+                            float dist = VecMath.Dist(fc.x, fc.y, ep.x, ep.y);
+                            if (dist > FormationTargeting.TheaterRadius) continue; // 剧场半径内可见（禁全图）
+
+                            var c = new TargetCandidate
+                            {
+                                Index = ef.Index,
+                                X = ep.x,
+                                Y = ep.y,
+                                Count = ef.CountOfUnits,
+                                Kind = ClassifyFormation(ef)
+                            };
+                            if (n < _targetCandidates.Length) _targetCandidates[n++] = c; // 编队数上限防御（复用缓冲零分配）
+                        }
+                    }
+
+                    TargetSelection last;
+                    if (!_formationTargets.TryGetValue(f, out last)) last = TargetSelection.None;
+                    TargetSelection sel = FormationTargeting.Select(fc.x, fc.y, f.CountOfUnits,
+                        n > 0 ? _targetCandidates : null, n, last, _elapsed);
+                    _formationTargets[f] = sel; // 缓存：0.5s 节拍 + 本层时间缓存双保险
+                }
+            }
+        }
+
+        /// <summary>X1 编队级目标选择查询（供 X3/X4 等下游消费；无目标返回 false）。</summary>
+        public bool TryGetFormationTarget(Formation f, out TargetSelection selection)
+        {
+            if (f != null && _formationTargets.TryGetValue(f, out selection) && selection.HasTarget) return true;
+            selection = TargetSelection.None;
+            return false;
+        }
+
+        // X1 编队分类：QuerySystem 四类旗标按兵力比互斥（FormationQuerySystem.cs L434-439 已核实），
+        // 优先级映射 射手>骑射>骑兵>步兵 与 FormationTargetKind 枚举一致。
+        private static FormationTargetKind ClassifyFormation(Formation ef)
+        {
+            if (ef.QuerySystem.IsRangedFormation) return FormationTargetKind.Ranged;
+            if (ef.QuerySystem.IsRangedCavalryFormation) return FormationTargetKind.RangedCavalry;
+            if (ef.QuerySystem.IsCavalryFormation) return FormationTargetKind.Cavalry;
+            return FormationTargetKind.Infantry;
         }
 
         /// <summary>T18-01 僵局打破建议（供意图引擎消费；非僵局返回 false）。</summary>
