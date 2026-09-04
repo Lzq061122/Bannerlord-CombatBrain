@@ -194,6 +194,10 @@ namespace CombatBrain.Ai
                 {
                     BeginCharge(formation, enemy != null ? enemy.Formation : null); // t58：先判定盾墙挡路→绕行或直冲
                 }
+                else if (next == CavalryState.Recall)
+                {
+                    BeginRecall(formation); // t83：Recall 回撤目标=重整点（优先级链+距离档位选址）
+                }
                 else
                 {
                     IssueOrder(formation, next, enemy != null ? enemy.Formation : null);
@@ -268,6 +272,67 @@ namespace CombatBrain.Ai
             wp.SetVec2(target);
             if (wp.GetNavMesh() == UIntPtr.Zero) return;
             formation.SetMovementOrder(MovementOrder.MovementOrderMove(wp));
+        }
+
+        // t83 骑兵重整点选址：Recall 回撤目标=重整点（原 FallBack 无目标，会跑到地图边缘）。
+        // 输入全可观察（TeamGeometry 编队中心/阵线/敌我距离），禁全图禁个体；无导航点保持原 FallBack 语义。
+        private void BeginRecall(Formation formation)
+        {
+            Vec2 rally = SelectRallyPoint(formation);
+            WorldPosition wp = formation.CachedMedianPosition;
+            wp.SetVec2(rally);
+            if (wp.GetNavMesh() == UIntPtr.Zero) { formation.SetMovementOrder(MovementOrder.MovementOrderFallBack); return; }
+            formation.SetMovementOrder(MovementOrder.MovementOrderMove(wp)); // 回撤到重整点
+        }
+
+        // 选址：候选=侧翼(50m)/主阵线后方(60m)/安全距离(100m)/目标附近安全区(60m)，
+        // RallyPointSelector.SelectBest 按优先级链（侧翼>后方>安全>目标附近）+ 距离档位选择。
+        private static Vec2 SelectRallyPoint(Formation formation)
+        {
+            Vec2 cav = TeamGeometry.GetFormationPosition(formation, TeamPosKind.CachedMedian);
+            // 己方步兵线中心（主战线）
+            Vec2 ic = Vec2.Zero; int infCount = 0;
+            foreach (Formation f in formation.Team.FormationsIncludingEmpty)
+            {
+                if (f == null || f.CountOfUnits == 0 || f.QuerySystem == null) continue;
+                if (!f.QuerySystem.IsInfantryFormation) continue;
+                Vec2 p = TeamGeometry.GetFormationPosition(f, TeamPosKind.CachedMedian);
+                ic.x += p.x; ic.y += p.y; infCount++;
+            }
+            if (infCount == 0)
+            {
+                Vec2 c;
+                ic = TeamGeometry.TryGetTeamCenter(formation.Team, TeamPosKind.CachedMedian, out c) ? c : cav;
+            }
+            else { ic.x /= infCount; ic.y /= infCount; }
+
+            // 敌中心 → 背敌方向（安全方向）与侧翼方向
+            Vec2 ec = Vec2.Zero;
+            FormationQuerySystem enemy = formation.QuerySystem.ClosestSignificantlyLargeEnemyFormation;
+            if (enemy != null && enemy.Formation != null)
+                ec = TeamGeometry.GetFormationPosition(enemy.Formation, TeamPosKind.CachedMedian);
+            float dx = ic.x - ec.x, dy = ic.y - ec.y;
+            float len = (float)Math.Sqrt(dx * dx + dy * dy);
+            float bx = len > 1e-3f ? dx / len : 1f; // 背敌单位向量
+            float by = len > 1e-3f ? dy / len : 0f;
+            float px = -by, py = bx; // 侧翼方向（垂直背敌）
+
+            var candidates = new RallyCandidate[]
+            {
+                new RallyCandidate { Priority = RallyPriority.Flank, DistanceToMainLine = 50f },
+                new RallyCandidate { Priority = RallyPriority.BehindLine, DistanceToMainLine = 60f },
+                new RallyCandidate { Priority = RallyPriority.SafeDistance, DistanceToMainLine = 100f },
+                new RallyCandidate { Priority = RallyPriority.NearTarget, DistanceToMainLine = 60f },
+            };
+            RallyCandidate best = RallyPointSelector.SelectBest(candidates);
+            switch (best.Priority)
+            {
+                case RallyPriority.Flank: return new Vec2(ic.x + px * 50f, ic.y + py * 50f);
+                case RallyPriority.SafeDistance: return new Vec2(ic.x + bx * 100f, ic.y + by * 100f);
+                case RallyPriority.NearTarget:
+                case RallyPriority.BehindLine:
+                default: return new Vec2(ic.x + bx * 60f, ic.y + by * 60f); // 后方/目标附近/降级均退到阵线后方 60m
+            }
         }
 
         // 正式冲锋命令（楔形冲击阵型 + 指定目标）。

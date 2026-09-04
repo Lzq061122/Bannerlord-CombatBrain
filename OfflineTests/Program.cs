@@ -101,6 +101,9 @@ namespace OfflineTests
             Console.WriteLine("== T3-01 RangedPosition ==");
             TestRangedPosition();
 
+            Console.WriteLine("== T6-01 RallyPointSelector ==");
+            TestRallyPointSelector();
+
             Console.WriteLine();
             if (_failures == 0)
             {
@@ -1004,6 +1007,43 @@ namespace OfflineTests
             Check(RangedPosition.ShouldIssueMove(RangedPositionReason.CavalryThreat, RangedPositionReason.None, 0f), "rangedpos reason switch -> issue");
             Check(!RangedPosition.ShouldIssueMove(RangedPositionReason.CavalryThreat, RangedPositionReason.CavalryThreat, 3f), "rangedpos same reason drift 3m -> no issue (boundary)");
             Check(RangedPosition.ShouldIssueMove(RangedPositionReason.CavalryThreat, RangedPositionReason.CavalryThreat, 3.1f), "rangedpos same reason drift 3.1m -> issue (boundary)");
+        }
+
+        // T6-01 骑兵重整点选址（距离档位 40/80/120 边界 + 优先级链 + 无安全点降级）
+        private static void TestRallyPointSelector()
+        {
+            // 距离档位边界 40/80/120
+            Check(RallyPointSelector.ClassifyBand(40f) == RallyBand.Normal, "rally band 40 -> Normal");
+            Check(RallyPointSelector.ClassifyBand(80f) == RallyBand.Normal, "rally band 80 -> Normal (boundary)");
+            Check(RallyPointSelector.ClassifyBand(80.1f) == RallyBand.Warning, "rally band 80.1 -> Warning");
+            Check(RallyPointSelector.ClassifyBand(120f) == RallyBand.Warning, "rally band 120 -> Warning (boundary)");
+            Check(RallyPointSelector.ClassifyBand(120.1f) == RallyBand.Forbidden, "rally band 120.1 -> Forbidden");
+            Check(RallyPointSelector.ClassifyBand(39.9f) == RallyBand.TooClose, "rally band 39.9 -> TooClose");
+
+            // 优先级链：Flank 禁止 → 落到 BehindLine
+            var cand1 = new RallyCandidate[]
+            {
+                new RallyCandidate { Priority = RallyPriority.Flank, DistanceToMainLine = 150f },
+                new RallyCandidate { Priority = RallyPriority.BehindLine, DistanceToMainLine = 60f },
+                new RallyCandidate { Priority = RallyPriority.SafeDistance, DistanceToMainLine = 100f },
+            };
+            Check(RallyPointSelector.SelectBest(cand1).Priority == RallyPriority.BehindLine, "rally priority chain: forbidden flank -> BehindLine");
+
+            // 优先级链：Flank 可用 → Flank 胜出
+            var cand2 = new RallyCandidate[]
+            {
+                new RallyCandidate { Priority = RallyPriority.BehindLine, DistanceToMainLine = 60f },
+                new RallyCandidate { Priority = RallyPriority.Flank, DistanceToMainLine = 50f },
+            };
+            Check(RallyPointSelector.SelectBest(cand2).Priority == RallyPriority.Flank, "rally priority chain: usable flank wins");
+
+            // 无安全点降级：全禁止 → None
+            var cand3 = new RallyCandidate[]
+            {
+                new RallyCandidate { Priority = RallyPriority.Flank, DistanceToMainLine = 150f },
+                new RallyCandidate { Priority = RallyPriority.BehindLine, DistanceToMainLine = 150f },
+            };
+            Check(RallyPointSelector.SelectBest(cand3).Priority == RallyPriority.None, "rally no safe point -> None (degradation)");
         }
 
         private static int idxDefend()

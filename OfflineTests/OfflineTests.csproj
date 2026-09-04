@@ -35,6 +35,7 @@
     <Compile Include="..\CombatBrain\Telemetry\AnomalyDetector.cs" Link="Telemetry\AnomalyDetector.cs" />
     <Compile Include="..\CombatBrain\Ai\FormationTactics.cs" Link="Ai\FormationTactics.cs" />
     <Compile Include="..\CombatBrain\Ai\RangedPosition.cs" Link="Ai\RangedPosition.cs" />
+    <Compile Include="..\CombatBrain\Ai\RallyPointSelector.cs" Link="Ai\RallyPointSelector.cs" />
   </ItemGroup>
 
 </Project>
