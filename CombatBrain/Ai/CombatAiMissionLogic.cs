@@ -68,7 +68,10 @@ namespace CombatBrain.Ai
             public FormationMission Mission = FormationMission.SupportMainEffort;
             public SeparationIntent Separation = SeparationIntent.None;
             public IsolationDecision Isolation;
-            public float FormationPrevDist; // ATC-3 距离趋势基准（上拍距 MainBody 距离，0=首拍）
+            // atc4 nits 收口：FormationPrevDist 单字段共享基线（ATC-3/ATC-4 同拍互写、只保留最后一个编队的
+            //   近似）改为 per-formation 基线——键=Formation.Index、值=上拍该编队距 MainBody 距离（首拍缺省 0）。
+            //   距离趋势（DistanceIncreasing）按各编队自身历史判定，行为等价（零命令/阈值变化，影子输出更准）。
+            public readonly Dictionary<int, float> FormationPrevDist = new Dictionary<int, float>();
 
             // ATC-4 Commitment 影子判定（0.5s；每编队一条，只记录「若执行层接线将允许/拒绝什么」，零行为变化）。
             // 键=Formation.Index；日志变化才写（Permission/Reasons 边沿），禁每拍每队刷。
@@ -287,6 +290,10 @@ namespace CombatBrain.Ai
                 _provenanceTimer = 5f;
                 LogProvenanceSummary();
             }
+
+            // atc3 nits 收口：ATC-2 Army Context 日志 5s 兜底节拍改由 OnMissionTick 按真实 dt 递减
+            // （原在 TickArmyContext 内固定 -= 0.5f，依赖 0.5s 拍频；两者行为等价，5s 汇总周期不变）。
+            _armyLogTimer -= dt;
 
             _bench.BeginSection("perception");
             // X7：FogOfWarEnabled=false 时直接跳过感知计算（关闭降开销，开启才增开销——派单④方向）；
@@ -602,7 +609,7 @@ namespace CombatBrain.Ai
         // 反作弊闸：零新增禁读；O(编队数²)；coordination Bench 段可单独观测。
         private void TickArmyContext(TeamState state, Team own, Team enemy)
         {
-            _armyLogTimer -= 0.5f; // atc3 顺手修（atc2-armylog-timer-not-decremented）：兜底计时器补递减，5s 无变化也会写一次
+            // atc3 nits 收口：_armyLogTimer 已改由 OnMissionTick 按 dt 递减（5s 兜底周期不变），此处不再固定 -= 0.5f
             // 己方快照（全部非空编队）
             var ownSnaps = new List<FormationCoordSnapshot>();
             var enemySnaps = new List<FormationCoordSnapshot>();
@@ -692,7 +699,6 @@ namespace CombatBrain.Ai
         private void TickFormationMissions(TeamState state, Team own, Team enemy)
         {
             float mbX = state.Army.MainBodyX, mbY = state.Army.MainBodyY;
-            float prevDist = state.FormationPrevDist; // 距离趋势基准（首拍=0）
             float aliveSelf = own.ActiveAgents.Count;
             int aliveEnemy = enemy != null ? enemy.ActiveAgents.Count : 0;
             float localRatio = aliveEnemy > 0 ? aliveSelf / (float)aliveEnemy : 1f; // 局部兵力比近似（队级存活比）
@@ -702,6 +708,9 @@ namespace CombatBrain.Ai
                 if (f == null || f.CountOfUnits == 0 || f.QuerySystem == null) continue;
                 Vec2 pos = TeamGeometry.GetFormationPosition(f, TeamPosKind.CachedMedian);
                 float dist = (float)Math.Sqrt((pos.x - mbX) * (pos.x - mbX) + (pos.y - mbY) * (pos.y - mbY));
+                // atc4 nits 收口：per-formation 距离趋势基线（键=Formation.Index；首拍缺省 0=无趋势）
+                float prevDist;
+                if (!state.FormationPrevDist.TryGetValue(f.Index, out prevDist)) prevDist = 0f;
                 bool distIncreasing = prevDist > 0f && dist > prevDist;
 
                 // §9 任务映射输入
@@ -732,7 +741,7 @@ namespace CombatBrain.Ai
                     InRetreat = inRetreat
                 });
 
-                state.FormationPrevDist = dist;
+                state.FormationPrevDist[f.Index] = dist; // per-formation 基线更新（atc4 nits 收口）
                 bool changed = mission.Mission != state.Mission || mission.Separation != state.Separation
                     || iso.UnauthorizedIsolation != state.Isolation.UnauthorizedIsolation;
                 state.Mission = mission.Mission;
@@ -748,6 +757,9 @@ namespace CombatBrain.Ai
                 }
             }
         }
+
+        // atc4 nits 收口：贴身接战阈值（编队级近似）——己方编队中心与最近已知敌编队中心 ≤20m 视为近战接触中
+        private const float CommitmentContactMeters = 20f;
 
         // ATC-4 Commitment 影子判定（0.5s 队级拍，零行为变化）：对每个己方 Formation 的候选投入做统一
         // 许可判断，只记录「若执行层接线将允许/拒绝什么」，不 SetMovementOrder / 不下召回 / 不动
@@ -776,7 +788,10 @@ namespace CombatBrain.Ai
             }
 
             float mbX = state.Army.MainBodyX, mbY = state.Army.MainBodyY;
-            float prevDist = state.FormationPrevDist; // 距离趋势基准（与 ATC-3 同源）
+            // atc4 nits 收口：DefensiveOverride 接线到既有编队级公开状态（Brace/Protect 激活，编队级聚合，
+            //   非逐兵读取；§4.5 Immediate Defensive 高于 Army Commitment——Brace/Protect 激活时影子判定
+            //   允许 Limited 脱困/维持，不被普通 Denied 锁死）。
+            bool defensiveActive = _brace.IsBracing(own.TeamIndex) || _protect.IsProtecting(own.TeamIndex);
 
             foreach (Formation f in own.FormationsIncludingEmpty)
             {
@@ -790,7 +805,20 @@ namespace CombatBrain.Ai
                 if (self.FormationId < 0) continue;
 
                 float dist = (float)Math.Sqrt((fc.x - mbX) * (fc.x - mbX) + (fc.y - mbY) * (fc.y - mbY));
+                // atc4 nits 收口：per-formation 距离趋势基线（键=Formation.Index；首拍缺省 0=无趋势）
+                float prevDist;
+                if (!state.FormationPrevDist.TryGetValue(f.Index, out prevDist)) prevDist = 0f;
                 bool distIncreasing = prevDist > 0f && dist > prevDist;
+
+                // atc4 nits 收口：InContact 接线到既有公开聚合——己方编队中心距最近已知敌编队中心 ≤20m
+                //   视为贴身接战（编队级近似；TeamGeometry CachedMedian 口径；enemySnaps 已按迷雾过滤，
+                //   未知敌不参与）。纪律2 由此真实生效：接战中返回 Limited 而非突然 Denied 原地不动。
+                bool inContact = false;
+                for (int i = 0; i < enemySnaps.Count; i++)
+                {
+                    FormationCoordSnapshot e = enemySnaps[i];
+                    if (VecMath.Dist(fc.x, fc.y, e.X, e.Y) <= CommitmentContactMeters) { inContact = true; break; }
+                }
 
                 // 候选目标：X1 目标缓存优先（TacticalTarget）；无 → Operational Objective 中心；再无 → 无候选（跳评）
                 TargetSelection sel;
@@ -844,12 +872,15 @@ namespace CombatBrain.Ai
                     EnemyContactEta = est.EnemyContactEta,
                     Integrity = self.Integrity,
                     IsReserve = dist < 30f && !inRetreat && state.Army.MainBodyStrength > 0, // 与 ATC-3 同口径
-                    InContact = false,        // 近战接触信号：本卡无独立源，第一版保守 false（不影响 Limited 分支测试）
-                    DefensiveOverride = false, // Brace/Protect/脱困 override：第一版 false（影子观测）
-                    EmergencyOverride = false  // Emergency/Survival override：第一版 false（影子观测）
+                    InContact = inContact,           // ④ 接线：距最近已知敌编队 ≤20m（编队级近似，纪律2 生效）
+                    DefensiveOverride = defensiveActive, // ④ 接线：Brace/Protect 激活（既有公开状态，§4.5 优先）
+                    EmergencyOverride = false // ④ 收口：编队级无既有 Emergency 聚合——个体级 SurvivalGlue 属 LOD
+                                              //   逐 agent 层（F7），不宜提升为队级 Emergency 信号；保持 false
+                                              //   预留，未来接入队级存活骤降/全队溃逃信号时再接线
                 });
 
                 // 日志：Permission/Reasons 变化才写（限频；§14 [Commit] 固定字段顺序）
+                state.FormationPrevDist[f.Index] = dist; // per-formation 基线更新（atc4 nits 收口）
                 CommitmentDecision last;
                 bool changed = !state.Commitments.TryGetValue(f.Index, out last)
                     || last.Permission != decision.Permission || last.Reasons != decision.Reasons;

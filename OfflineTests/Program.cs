@@ -2252,6 +2252,13 @@ namespace OfflineTests
             Check(BattlePhaseFSM.RetreatSurvival == 0.4f && BattlePhaseFSM.AdvanceSurvival == 0.7f
                 && BattlePhaseFSM.MinDwellSeconds == 5f && BattlePhaseFSM.ExploitEnemySurvival == 0.4f,
                 "atc1 threshold constants");
+
+            // 18) atc1 nits 收口：EnemyContact 契约字段默认 false 不参与转移——Advance→Engage 无条件转移保持现状
+            // （可选输入契约补全，未接线前胶水层不设该字段，语义零变化）
+            var rEC = BattlePhaseFSM.Advance(BattlePhase.Advance, new BattlePhaseInput
+            { OwnSurvival = 0.8f, TimeInPhase = 6f, EnemyContact = false });
+            Check(rEC.Phase == BattlePhase.Engage && rEC.Changed,
+                "atc1 advance->engage unconditional with EnemyContact default false (契约字段保持)");
         }
 
         // ATC-2 ArmyContext（MainBodySelector/OperationalObjectiveSelector 纯逻辑）：最大簇/平局/加权中心/孤立骑兵/空队/单编队/两集团/迷雾三态
