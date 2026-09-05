@@ -63,6 +63,12 @@ namespace CombatBrain.Ai
 
             // ATC-2 Army Context 影子快照（0.5s 更新；MainBody/Objective 只算不改行为）
             public ArmyContextSnapshot Army = ArmyContextSnapshot.None;
+
+            // ATC-3 Formation Mission / Separation / Isolation 影子判定（0.5s；只判断不下召回命令）
+            public FormationMission Mission = FormationMission.SupportMainEffort;
+            public SeparationIntent Separation = SeparationIntent.None;
+            public IsolationDecision Isolation;
+            public float FormationPrevDist; // ATC-3 距离趋势基准（上拍距 MainBody 距离，0=首拍）
         }
 
         private bool _initialized;
@@ -514,6 +520,7 @@ namespace CombatBrain.Ai
                 // ATC-2 Army Context 影子计算（0.5s 拍内；MainBody/Objective 只算不改行为，迷雾一致）。
                 _bench.BeginSection("coordination");
                 TickArmyContext(state, own, enemy);
+                TickFormationMissions(state, own, enemy); // ATC-3：Mission/Separation/Isolation 影子判定（不下命令）
                 _bench.EndSection("coordination");
 
                 // P0-④ 玩家队豁免意图决策：意图是玩家指挥的领域——玩家队不 Evaluate/不发布
@@ -590,6 +597,7 @@ namespace CombatBrain.Ai
         // 反作弊闸：零新增禁读；O(编队数²)；coordination Bench 段可单独观测。
         private void TickArmyContext(TeamState state, Team own, Team enemy)
         {
+            _armyLogTimer -= 0.5f; // atc3 顺手修（atc2-armylog-timer-not-decremented）：兜底计时器补递减，5s 无变化也会写一次
             // 己方快照（全部非空编队）
             var ownSnaps = new List<FormationCoordSnapshot>();
             var enemySnaps = new List<FormationCoordSnapshot>();
@@ -670,6 +678,80 @@ namespace CombatBrain.Ai
                 Kind = kind,
                 IsKnown = isKnown
             };
+        }
+
+        // ATC-3 Formation Mission / Separation / Isolation 影子判定（0.5s 队级拍）。
+        // 只产出判断与 Why 日志，不下召回命令（ATC 规格 §4.4/§9）；Isolation 输出仅作 CommitmentReason
+        // 供 ATC-4 消费。输入=既有公开聚合（兵种/阶段/意图/Morale 撤退态/距 MainBody 距离/存活比）。
+        // 反作弊闸：零新增禁读；O(编队数²)。
+        private void TickFormationMissions(TeamState state, Team own, Team enemy)
+        {
+            float mbX = state.Army.MainBodyX, mbY = state.Army.MainBodyY;
+            float prevDist = state.FormationPrevDist; // 距离趋势基准（首拍=0）
+            float aliveSelf = own.ActiveAgents.Count;
+            int aliveEnemy = enemy != null ? enemy.ActiveAgents.Count : 0;
+            float localRatio = aliveEnemy > 0 ? aliveSelf / (float)aliveEnemy : 1f; // 局部兵力比近似（队级存活比）
+
+            foreach (Formation f in own.FormationsIncludingEmpty)
+            {
+                if (f == null || f.CountOfUnits == 0 || f.QuerySystem == null) continue;
+                Vec2 pos = TeamGeometry.GetFormationPosition(f, TeamPosKind.CachedMedian);
+                float dist = (float)Math.Sqrt((pos.x - mbX) * (pos.x - mbX) + (pos.y - mbY) * (pos.y - mbY));
+                bool distIncreasing = prevDist > 0f && dist > prevDist;
+
+                // §9 任务映射输入
+                FormationCoordKind kind = MapKind(f);
+                string moraleState = _morale.GetStateName(f); // F11 撤退 FSM（"-"=无记录）
+                bool inRetreat = moraleState != "-" && moraleState != "Hold"; // 非 Hold 即撤退中
+                var mission = FormationMissionAssigner.Assign(new MissionInput
+                {
+                    Kind = kind,
+                    Phase = state.Phase,
+                    Intent = state.LastIntent,
+                    InRetreat = inRetreat,
+                    IsReserve = dist < 30f && !inRetreat && state.Army.MainBodyStrength > 0 // 未投入且靠近 MainBody
+                });
+
+                // §4.4 隔离判定（SupportScore 第一版近似：MainBody 兵力占比；ArrivalGap 缺省=false）
+                var iso = IsolationDetector.Evaluate(new IsolationInput
+                {
+                    MainBodyDistance = dist,
+                    DistanceIncreasing = distIncreasing,
+                    SupportScore = state.Army.MainBodyStrength > 0
+                        ? Math.Min(1f, f.CountOfUnits / (float)state.Army.MainBodyStrength) : 0f,
+                    LocalForceRatio = localRatio,
+                    EnemyArrivesFirst = false,
+                    Phase = state.Phase,
+                    Separation = mission.Separation,
+                    Emergency = false,
+                    InRetreat = inRetreat
+                });
+
+                state.FormationPrevDist = dist;
+                bool changed = mission.Mission != state.Mission || mission.Separation != state.Separation
+                    || iso.UnauthorizedIsolation != state.Isolation.UnauthorizedIsolation;
+                state.Mission = mission.Mission;
+                state.Separation = mission.Separation;
+                state.Isolation = iso;
+                if (changed)
+                {
+                    CombatLog.Log(string.Format(
+                        "[Mission] Team {0} f={1} mission={2} sep={3} iso={4} dist={5:F0} mb=({6:F0},{7:F0})",
+                        own.TeamIndex, f.Index, mission.Mission, mission.Separation,
+                        iso.UnauthorizedIsolation ? "UnauthorizedIsolation" : "OK",
+                        dist, mbX, mbY));
+                }
+            }
+        }
+
+        // 编队兵种映射（QuerySystem 旗标 → ATC-2 五类；与 BuildSnapshot 同口径）
+        private static FormationCoordKind MapKind(Formation f)
+        {
+            return f.QuerySystem.IsRangedCavalryFormation ? FormationCoordKind.RangedCavalry
+                : f.QuerySystem.IsCavalryFormation ? FormationCoordKind.MeleeCavalry
+                : f.QuerySystem.IsRangedFormation ? FormationCoordKind.Ranged
+                : f.QuerySystem.IsInfantryFormation ? FormationCoordKind.Infantry
+                : FormationCoordKind.Other;
         }
 
         // N2 L0 战场事件 E1-E4（§3）：边沿检测 + Narrator.Notify 播报。消费既有态势/信念/存活代理，

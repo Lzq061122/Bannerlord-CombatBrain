@@ -173,6 +173,9 @@ namespace OfflineTests
             Console.WriteLine("== ATC2 ArmyContext ==");
             TestArmyContext();
 
+            Console.WriteLine("== ATC3 Mission/Isolation ==");
+            TestFormationMission();
+
             Console.WriteLine();
             if (_failures == 0)
             {
@@ -2355,6 +2358,154 @@ namespace OfflineTests
             // 12) 常量契约
             Check(MainBodySelector.MainBodyLinkMeters == 60f && OperationalObjectiveSelector.ObjectiveLinkMeters == 60f,
                 "atc2 link meters 60 const");
+        }
+
+        // ATC-3 Mission/Separation/Isolation（纯逻辑）：§9 映射分支 + §4.4 六因子 + 80 人案例
+        private static void TestFormationMission()
+        {
+            // 1) §9 任务映射：主力步兵 → SupportMainEffort/Separation=None
+            var m0 = FormationMissionAssigner.Assign(new MissionInput
+            { Kind = FormationCoordKind.Infantry, Phase = BattlePhase.Engage, Intent = IntentType.Attack });
+            Check(m0.Mission == FormationMission.SupportMainEffort && m0.Separation == SeparationIntent.None,
+                "atc3 infantry -> SupportMainEffort/None");
+
+            // 2) 远程 → SupportMainEffort（非独立 Main Effort）
+            var m1 = FormationMissionAssigner.Assign(new MissionInput
+            { Kind = FormationCoordKind.Ranged, Phase = BattlePhase.Engage, Intent = IntentType.Defend });
+            Check(m1.Mission == FormationMission.SupportMainEffort, "atc3 ranged -> SupportMainEffort");
+
+            // 3) 近战骑兵：进攻意图 → Flank/Separation=Flank
+            var m2 = FormationMissionAssigner.Assign(new MissionInput
+            { Kind = FormationCoordKind.MeleeCavalry, Phase = BattlePhase.Engage, Intent = IntentType.Flank });
+            Check(m2.Mission == FormationMission.Flank && m2.Separation == SeparationIntent.Flank,
+                "atc3 melee cavalry aggressive -> Flank");
+
+            // 4) 近战骑兵：防守意图 → Intercept
+            var m3 = FormationMissionAssigner.Assign(new MissionInput
+            { Kind = FormationCoordKind.MeleeCavalry, Phase = BattlePhase.Engage, Intent = IntentType.Defend });
+            Check(m3.Mission == FormationMission.Intercept && m3.Separation == SeparationIntent.Intercept,
+                "atc3 melee cavalry defensive -> Intercept");
+
+            // 5) 骑射：非 Exploit → Screen
+            var m4 = FormationMissionAssigner.Assign(new MissionInput
+            { Kind = FormationCoordKind.RangedCavalry, Phase = BattlePhase.Engage, Intent = IntentType.Harass });
+            Check(m4.Mission == FormationMission.Screen && m4.Separation == SeparationIntent.Screen,
+                "atc3 ranged cavalry -> Screen");
+
+            // 6) 骑射：Exploit+Pursue → Pursuit
+            var m5 = FormationMissionAssigner.Assign(new MissionInput
+            { Kind = FormationCoordKind.RangedCavalry, Phase = BattlePhase.Exploit, Intent = IntentType.Pursue });
+            Check(m5.Mission == FormationMission.Pursuit && m5.Separation == SeparationIntent.Pursuit,
+                "atc3 ranged cavalry exploit+pursue -> Pursuit");
+
+            // 7) 骑射 Exploit 但非 Pursue → 仍 Screen（Exploit 阶段方可 Pursuit）
+            var m6 = FormationMissionAssigner.Assign(new MissionInput
+            { Kind = FormationCoordKind.RangedCavalry, Phase = BattlePhase.Exploit, Intent = IntentType.Attack });
+            Check(m6.Mission == FormationMission.Screen, "atc3 exploit non-pursue -> Screen");
+
+            // 8) Reserve 输入 → Reserve
+            var m7 = FormationMissionAssigner.Assign(new MissionInput
+            { Kind = FormationCoordKind.Infantry, IsReserve = true });
+            Check(m7.Mission == FormationMission.Reserve && m7.Separation == SeparationIntent.Reserve,
+                "atc3 reserve flag -> Reserve");
+
+            // 9) Morale 撤离 → Retreat（最高优先）
+            var m8 = FormationMissionAssigner.Assign(new MissionInput
+            { Kind = FormationCoordKind.Infantry, InRetreat = true, IsReserve = true });
+            Check(m8.Mission == FormationMission.Retreat && m8.Separation == SeparationIntent.Retreat,
+                "atc3 in retreat -> Retreat (highest priority)");
+
+            // 10) SeparationIntent 枚举契约（§3.3 八值）
+            Check((int)SeparationIntent.None == 0 && (int)SeparationIntent.Retreat == 7,
+                "atc3 SeparationIntent 0..7 (8 values)");
+
+            // 11) 合法远离不误报：Flank 编队（Separation=Flank）远出 → 不报隔离（因子4 阻断）
+            var i0 = IsolationDetector.Evaluate(new IsolationInput
+            {
+                MainBodyDistance = 200f, DistanceIncreasing = true, SupportScore = 0.1f,
+                LocalForceRatio = 1.5f, Phase = BattlePhase.Engage,
+                Separation = SeparationIntent.Flank
+            });
+            Check(!i0.UnauthorizedIsolation, "atc3 flank far away -> no isolation (合法分离)");
+
+            // 12) Intercept 合法远离不误报
+            var i1 = IsolationDetector.Evaluate(new IsolationInput
+            {
+                MainBodyDistance = 150f, DistanceIncreasing = true, SupportScore = 0.2f,
+                LocalForceRatio = 1.2f, Phase = BattlePhase.Engage,
+                Separation = SeparationIntent.Intercept
+            });
+            Check(!i1.UnauthorizedIsolation, "atc3 intercept far -> no isolation");
+
+            // 13) Retreat 合法远离不误报（因子5：Retreat 阻断）
+            var i2 = IsolationDetector.Evaluate(new IsolationInput
+            {
+                MainBodyDistance = 300f, DistanceIncreasing = true, SupportScore = 0.0f,
+                LocalForceRatio = 0.3f, Phase = BattlePhase.Retreat,
+                Separation = SeparationIntent.Retreat, InRetreat = true
+            });
+            Check(!i2.UnauthorizedIsolation, "atc3 retreat far -> no isolation (Retreat 豁免)");
+
+            // 14) Exploit+Pursuit 不误报（因子6：Exploit 阻断）
+            var i3 = IsolationDetector.Evaluate(new IsolationInput
+            {
+                MainBodyDistance = 250f, DistanceIncreasing = true, SupportScore = 0.1f,
+                LocalForceRatio = 0.8f, Phase = BattlePhase.Exploit,
+                Separation = SeparationIntent.Pursuit
+            });
+            Check(!i3.UnauthorizedIsolation, "atc3 exploit+pursuit -> no isolation (Exploit 豁免)");
+
+            // 15) 未隔离：距离近（<80m 安全带内且未增）→ 因子1 阻断
+            var i4 = IsolationDetector.Evaluate(new IsolationInput
+            {
+                MainBodyDistance = 40f, DistanceIncreasing = false, SupportScore = 0.1f,
+                LocalForceRatio = 0.5f, Phase = BattlePhase.Engage,
+                Separation = SeparationIntent.None
+            });
+            Check(!i4.UnauthorizedIsolation, "atc3 close to main body -> no isolation");
+
+            // 16) 未隔离：支援充足（因子2 阻断）
+            var i5 = IsolationDetector.Evaluate(new IsolationInput
+            {
+                MainBodyDistance = 150f, DistanceIncreasing = true, SupportScore = 0.8f,
+                LocalForceRatio = 0.5f, Phase = BattlePhase.Engage,
+                Separation = SeparationIntent.None
+            });
+            Check(!i5.UnauthorizedIsolation, "atc3 good support -> no isolation");
+
+            // 17) 未隔离：局部优势（因子3 阻断）
+            var i6 = IsolationDetector.Evaluate(new IsolationInput
+            {
+                MainBodyDistance = 150f, DistanceIncreasing = true, SupportScore = 0.1f,
+                LocalForceRatio = 2.0f, Phase = BattlePhase.Engage,
+                Separation = SeparationIntent.None
+            });
+            Check(!i6.UnauthorizedIsolation, "atc3 local advantage -> no isolation");
+
+            // 18) 全因子命中：SupportMainEffort 远离+无支援+局部劣势 → UnauthorizedIsolation（§4.4）
+            var i7 = IsolationDetector.Evaluate(new IsolationInput
+            {
+                MainBodyDistance = 200f, DistanceIncreasing = true, SupportScore = 0.1f,
+                LocalForceRatio = 0.5f, Phase = BattlePhase.Engage,
+                Separation = SeparationIntent.None
+            });
+            Check(i7.UnauthorizedIsolation, "atc3 support main effort far+unsupported+inferior -> isolation");
+            Check(i7.DistanceFactor && i7.SupportFactor && i7.LocalFactor
+                && i7.SeparationFactor && i7.NotRetreatFactor && i7.NotExploitFactor,
+                "atc3 isolation all six factors true");
+
+            // 19) 80 人案例纯逻辑回归（§10：80 步兵远出、敌方更强、支援晚到、Mission=SupportMainEffort/Separation=None）→ UnauthorizedIsolation=true
+            var i8 = IsolationDetector.Evaluate(new IsolationInput
+            {
+                MainBodyDistance = 180f, DistanceIncreasing = true, SupportScore = 0.1f,
+                LocalForceRatio = 0.6f, EnemyArrivesFirst = true, Phase = BattlePhase.Advance,
+                Separation = SeparationIntent.None
+            });
+            Check(i8.UnauthorizedIsolation, "atc3 80-men case -> UnauthorizedIsolation=true (不强制 Hold)");
+
+            // 20) 常量契约
+            Check(IsolationDetector.SafeDistanceMeters == 80f && IsolationDetector.SupportThreshold == 0.3f
+                && IsolationDetector.RatioThreshold == 1.0f, "atc3 isolation constants");
         }
 
         private static int idxDefend()
