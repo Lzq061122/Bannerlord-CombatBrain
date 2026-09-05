@@ -164,6 +164,9 @@ namespace OfflineTests
             Console.WriteLine("== atc4-opt CoordinationController ==");
             TestCoordinationController();
 
+            Console.WriteLine("== atc4-integration samples ==");
+            TestIntegrationSamples();
+
             Console.WriteLine("== N1 NarratorPure ==");
             TestNarratorPure();
 
@@ -3119,6 +3122,52 @@ namespace OfflineTests
             Check(line.StartsWith("[ArmyCtx] Team 1 phase=") && line.Contains("MB=") && line.Contains("obj=3"),
                 "atc4-opt ArmyCtx format §14");
             Check(CoordinationController.MainBodyMoveLogMeters == 3f, "atc4-opt move threshold const 3m");
+        }
+
+        // atc4-integration-tests §5：修复前后关键计算样例（验收十项第 3/4/6 条的可执行样例对比）
+        private static void TestIntegrationSamples()
+        {
+            // 样例1：CommitmentEstimator 自身兵力双算（P0-3 修复前后）
+            //   修复前（自身被 friendlies 重复计入）：allFriendlyEff = 80(ownEff) + 80(自身条目) + 50(友军) = 210，
+            //     support = 50/210 ≈ 0.238（自身重复稀释 SupportEff → 误判支援不足）；LocalForceRatio 分子虚高。
+            //   修复后（selfFormationId 跳过自身）：allFriendlyEff = 130，support = 50/130 ≈ 0.385。
+            var friendsSelf2 = new List<FormationCoordSnapshot>
+            {
+                new FormationCoordSnapshot { FormationId = 0, Count = 80, X = 0f, Y = 0f, Kind = FormationCoordKind.Infantry, Integrity = 1f, NominalSpeed = 4f, IsKnown = true },
+                new FormationCoordSnapshot { FormationId = 1, Count = 50, X = 10f, Y = 0f, Kind = FormationCoordKind.Infantry, Integrity = 1f, NominalSpeed = 4f, IsKnown = true }
+            };
+            var s1 = CommitmentEstimator.Estimate(0, 0f, 0f, 200f, 0f, 4f, 80, FormationCoordKind.Infantry, 1f, friendsSelf2, null);
+            CheckApprox(s1.FriendlySupport, 50f / 130f, "atc4-int sample1 support fixed 50/130 (前 50/210 双算)", 1e-3f);
+            CheckApprox(s1.LocalForceRatio, 130f, "atc4-int sample1 ratio fixed 130/1 (前 210/1 虚高)");
+
+            // 样例2：Reserve 判定（P0-4 修复前后）——主力步兵在 MainBody 中心
+            //   修复前（距离单条件 dist<30m）：主力 → Reserve（误判）。
+            //   修复后（ReserveClassifier 主动任务硬否决）：意图 Attack → 非 Reserve。
+            Check(!ReserveClassifier.IsReserve(new ReserveInput
+            { IsActiveTask = true, InContact = false, MainBodyDistance = 5f }, false),
+                "atc4-int sample2 main-body infantry not reserve (前 dist<30 误判)");
+
+            // 样例3：BattlePhase Advance→Engage（P1-2 修复前后）——双方距离很远且无有效接触
+            //   修复前（无条件转移）：驻留够即 Engage（假装已接战）。
+            //   修复后（EnemyContact 门控）：无接触保持 Advance。
+            var r1 = BattlePhaseFSM.Advance(BattlePhase.Advance, new BattlePhaseInput
+            { OwnSurvival = 0.8f, TimeInPhase = 6f, EnemyContact = false });
+            Check(r1.Phase == BattlePhase.Advance && !r1.Changed,
+                "atc4-int sample3 no contact stays Advance (前计时到即 Engage)");
+            var r2 = BattlePhaseFSM.Advance(BattlePhase.Advance, new BattlePhaseInput
+            { OwnSurvival = 0.8f, TimeInPhase = 6f, EnemyContact = true });
+            Check(r2.Phase == BattlePhase.Engage && r2.Changed, "atc4-int sample3 contact -> Engage");
+
+            // 样例4：验收十项第 10 条确认——Objective 消失后（HasOperationalObjective=false）Evaluate 输出
+            //   Hold + NoArmyObjective（P1-5 胶水层在无目标时写入该决策，下游不再读到过期 Commitment）
+            var noObj = CommitmentEvaluator.Evaluate(new CommitmentInput
+            {
+                Phase = BattlePhase.Advance, Mission = FormationMission.SupportMainEffort, Separation = SeparationIntent.None,
+                HasOperationalObjective = false, TargetAlignedWithObjective = false,
+                MainBodyDistance = 80f, FriendlySupport = 0.8f, LocalForceRatio = 1.8f
+            });
+            Check(noObj.Permission == CommitmentPermission.Hold && (noObj.Reasons & CommitmentReason.NoArmyObjective) != 0,
+                "atc4-int sample4 objective gone -> Hold/NoArmyObjective (P1-5 无残留)");
         }
 
         private static int idxDefend()
