@@ -37,7 +37,7 @@ namespace CombatBrain.Formations
         public delegate float HeightQuery(float x, float y);
         public delegate float SlopeQuery(float x, float y);
 
-        public HeightQuery Height;           // 高度采样（米）；null=不形变高度
+        public HeightQuery Height;           // 高度采样（米）——预留：本类 Warp 不直接消费（高地适配用 Uphill 方向 + 坡度闸用 Slope 梯度近似表达）；由胶水层映射 Uphill/Slope 时已隐含高度语义，字段保留供未来高度形变/断言契约
         public SlopeQuery Slope;             // 坡度角（度）；null=不做坡度闸
         public float UphillX;                // 坡顶方向 X（归一化；胶水层从高度梯度映射）
         public float UphillY;                // 坡顶方向 Y（归一化）

@@ -76,14 +76,12 @@ namespace CombatBrain.Formations
             FormationIntegrityGrade grade = FormationIntegrity.Grade(input.Integrity);
             int maxRankDiff = grade == FormationIntegrityGrade.Full ? 0 : 1;
 
-            // agent 索引 → 角色/位置 查表
+            // agent 索引 → 角色 查表（posByAgent 死字典已删除——就近占位直接用 AgentRoleEntry.X/Y，见 x5-assign-posbyagent-unused）
             var roleByAgent = new System.Collections.Generic.Dictionary<int, TroopRole>();
-            var posByAgent = new System.Collections.Generic.Dictionary<int, float[]>();
             for (int i = 0; i < input.Agents.Count; i++)
             {
                 AgentRoleEntry a = input.Agents[i];
                 roleByAgent[a.AgentIndex] = a.Role;
-                posByAgent[a.AgentIndex] = new float[] { a.X, a.Y };
             }
 
             // 已指派 agent 集合 + 已占用 slot 集合

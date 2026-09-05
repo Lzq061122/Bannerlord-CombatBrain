@@ -67,7 +67,11 @@ namespace CombatBrain.Ai
 
                 foreach (Formation f in team.FormationsIncludingEmpty)
                 {
-                    if (f == null || f.CountOfUnits == 0 || f.QuerySystem == null) continue;
+                    if (f == null || f.CountOfUnits == 0 || f.QuerySystem == null)
+                    {
+                        RemoveFormation(f); // 空编队/解散：清 _lastByFormation（防字典滞留，行为等价）
+                        continue;
+                    }
                     // 骑兵/骑射编队走 F8/Skirmish，不进 X5 近战布局通道
                     if (f.QuerySystem.IsCavalryFormation || f.QuerySystem.IsRangedCavalryFormation) continue;
 
@@ -137,11 +141,20 @@ namespace CombatBrain.Ai
         private void RunIndividualLeg(Formation f, List<FormationSlot> slots, List<SlotAssignment> assignments,
             float now, Func<int, LodLevel> getLod, bool budgetOver, HashSet<int> frameDisabled)
         {
+            // 一次性建 agent 索引表（O(M) 替代逐 assignment 线性扫描 O(M²)——x5-glue-on2-scan）
+            var agentByIndex = new Dictionary<int, Agent>();
+            foreach (IFormationUnit unit in f.Arrangement.GetAllUnits())
+            {
+                Agent agent = unit as Agent;
+                if (agent != null && agent.IsActive()) agentByIndex[agent.Index] = agent;
+            }
+
             for (int i = 0; i < assignments.Count; i++)
             {
                 SlotAssignment a = assignments[i];
                 if (a.SlotIndex < 0 || a.SlotIndex >= slots.Count) continue;
-                Agent agent = GetAgentInFormation(f, a.AgentIndex);
+                Agent agent;
+                if (!agentByIndex.TryGetValue(a.AgentIndex, out agent)) continue;
                 if (agent == null || !agent.IsActive() || !agent.IsAIControlled || !agent.IsHuman) continue;
 
                 // 剧场闸（硬性）：仅 L3（玩家可见区）执行个体腿，L0-L2 交原版/纪律内手段
@@ -204,16 +217,6 @@ namespace CombatBrain.Ai
                 if (agent == null) continue;
                 if (!agent.IsFormationFrameEnabled) frameDisabled.Add(agent.Index); // X4 已解阵（Agent.cs:1445 已核实）
             }
-        }
-
-        private static Agent GetAgentInFormation(Formation f, int agentIndex)
-        {
-            foreach (IFormationUnit unit in f.Arrangement.GetAllUnits())
-            {
-                Agent agent = unit as Agent;
-                if (agent != null && agent.Index == agentIndex) return agent;
-            }
-            return null;
         }
 
         // T2-01 已选阵型 → 纯枚举（胶水层映射；不写原生 ArrangementOrder 到纯逻辑）
