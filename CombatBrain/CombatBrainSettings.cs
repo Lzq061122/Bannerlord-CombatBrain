@@ -31,5 +31,11 @@ namespace CombatBrain
         // 不新增任何信息读取；关闭后 AI 信息集等于 X6 前现状（全可见公开聚合），而非大于现状。
         // 默认 true=拟人；MCM 装载后可在「真实度」组里热切（RequireRestart=false）。
         public static bool FogOfWarEnabled = true;
+
+        // N1 叙事双视角模式（战场叙事反馈系统 §2）：false=默认指挥模式（只播与玩家交战相关的 CB 队，
+        // 主语代填我军/敌军）；true=观战模式（所有被 CB 接管的非玩家队都播，主语用阵营名）。
+        // 玩家本队永不播（含豁免关闭时——旁白说给玩家听，不说玩家自己）；playerTeam==null 回退观战规则。
+        // 默认 false=指挥模式；MCM 装载后可在「通用」组里热切（RequireRestart=false）。
+        public static bool NarrationSpectatorMode = false;
     }
 }

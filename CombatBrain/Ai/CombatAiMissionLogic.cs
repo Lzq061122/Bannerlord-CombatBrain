@@ -385,6 +385,20 @@ namespace CombatBrain.Ai
             return PerceptionFilter.IsKnown(PerceptionEnabled, visible);
         }
 
+        // N1 叙事关系提取（Team→NarrationInfo，供 Narrator.Notify 统一出口）：
+        // 反作弊闸：只读公开阵营关系（IsPlayerTeam@Team.cs:40/IsPlayerAlly@Team.cs:52/IsEnemyOf@Team.cs:629）。
+        public static Narrator.NarrationInfo NarrateInfo(Team team, Team playerTeam)
+        {
+            return new Narrator.NarrationInfo
+            {
+                IsPlayerTeam = team != null && team.IsPlayerTeam,
+                IsPlayerAlly = team != null && team.IsPlayerAlly,
+                IsEnemyOfPlayer = team != null && playerTeam != null && playerTeam.IsEnemyOf(team),
+                HasPlayerTeam = playerTeam != null,
+                FactionName = team != null ? FeedbackText.Faction(team) : string.Empty
+            };
+        }
+
         // 编队 Key：敌队索引*100 + 编队索引（跨队不冲突；编队索引 <100 上限防御）
         private static int FormationKey(Team team, Formation formation)
         {
@@ -490,11 +504,12 @@ namespace CombatBrain.Ai
                     CombatLog.Log(string.Format(
                         "Team {0} 意图切换 → {1}  [{2}]",
                         own.TeamIndex, newIntent, v.ToString()));
-                    InGameFeedback.NotifyTactical("意图", // t62 战术层播报：阵营+战术名+态势摘要（正常模式显示；
-                        // hold 6s 天然限频 + NotifyTactical 3s 去重/速率上限防刷屏；编队级跃迁仍为细节行）
-                        string.Format("{0}战术：{1}——{2}",
-                            FeedbackText.Faction(own), FeedbackText.Intent(newIntent), FeedbackText.TacticBrief(newIntent)),
-                        InGameFeedback.TacticalColor);
+                    Narrator.Notify(NarrateInfo(own, Mission.PlayerTeam), "意图", // N1 叙事统一出口：按模式代填 {S}=我军/敌军/阵营名
+                        // t62 战术层播报：{S}+战术名+态势摘要（正常模式显示；hold 6s 天然限频 +
+                        // NotifyTactical 3s 去重/速率上限防刷屏；编队级跃迁仍为细节行）
+                        string.Format("{S}战术：{1}——{2}",
+                            FeedbackText.Intent(newIntent), FeedbackText.TacticBrief(newIntent)),
+                        InGameFeedback.TacticalColor, InGameFeedback.NotifyTactical);
                 }
             }
         }

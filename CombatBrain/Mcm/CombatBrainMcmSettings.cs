@@ -45,5 +45,15 @@ namespace CombatBrain.Mcm
             get => CombatBrainSettings.FogOfWarEnabled;
             set => CombatBrainSettings.FogOfWarEnabled = value;
         }
+
+        // N1 叙事双视角模式（战场叙事反馈系统 §2）：开=观战模式（双方阵营名播报，所有被 CB 接管队都播）；
+        // 关=指挥模式（默认，只播与玩家交战相关 CB 队，主语我军/敌军）。玩家本队永不播。
+        [SettingPropertyBool("观战模式（双方阵营名播报）", RequireRestart = false)]
+        [SettingPropertyGroup("通用")]
+        public bool NarrationSpectatorMode
+        {
+            get => CombatBrainSettings.NarrationSpectatorMode;
+            set => CombatBrainSettings.NarrationSpectatorMode = value;
+        }
     }
 }

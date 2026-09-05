@@ -60,7 +60,9 @@ namespace CombatBrain.Ai
                 {
                     bool wasOff; // 游戏内反馈：保护释放边沿（上拍保护中→本拍解除一次性输出）
                     if (_protecting.TryGetValue(team.TeamIndex, out wasOff) && wasOff)
-                        InGameFeedback.NotifyTactical("保护", string.Format("{0}威胁解除，恢复进攻", FeedbackText.Faction(team)), InGameFeedback.FormationColor);
+                        Narrator.Notify(CombatAiMissionLogic.NarrateInfo(team,
+                            Mission.Current != null ? Mission.Current.PlayerTeam : null),
+                            "保护", "{S}威胁解除，恢复进攻", InGameFeedback.FormationColor, InGameFeedback.NotifyTactical); // N1 叙事统一出口
                     _protecting[team.TeamIndex] = false;
                     continue;
                 }
@@ -72,8 +74,9 @@ namespace CombatBrain.Ai
                 }
                 bool wasOn; // 游戏内反馈：保护激活边沿（上拍未保护→本拍激活一次性输出）
                 if (!_protecting.TryGetValue(team.TeamIndex, out wasOn) || !wasOn)
-                    InGameFeedback.NotifyTactical("保护",
-                        string.Format("{0}弓手受胁，全军护射", FeedbackText.Faction(team)), InGameFeedback.FormationColor);
+                    Narrator.Notify(CombatAiMissionLogic.NarrateInfo(team,
+                        Mission.Current != null ? Mission.Current.PlayerTeam : null),
+                        "保护", "{S}弓手受胁，全军护射", InGameFeedback.FormationColor, InGameFeedback.NotifyTactical); // N1 叙事统一出口
                 _protecting[team.TeamIndex] = true;
                 Execute(team, mission);
             }
@@ -87,8 +90,9 @@ namespace CombatBrain.Ai
             bool wasProtecting;
             if (!_protecting.TryGetValue(team.TeamIndex, out wasProtecting) || !wasProtecting) return;
             _protecting[team.TeamIndex] = false;
-            InGameFeedback.NotifyTactical("保护", // 游戏内反馈：剧场外释放边沿（上方 wasProtecting 保证一次性）
-                string.Format("{0}解除护射（超出战场）", FeedbackText.Faction(team)), InGameFeedback.FormationColor);
+            Narrator.Notify(CombatAiMissionLogic.NarrateInfo(team,
+                Mission.Current != null ? Mission.Current.PlayerTeam : null),
+                "保护", "{S}解除护射（超出战场）", InGameFeedback.FormationColor, InGameFeedback.NotifyTactical); // N1 叙事统一出口（剧场外释放边沿）
             foreach (Formation f in team.FormationsIncludingEmpty)
             {
                 if (f == null || f.CountOfUnits == 0) continue;

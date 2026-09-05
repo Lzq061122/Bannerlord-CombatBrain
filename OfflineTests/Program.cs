@@ -149,6 +149,9 @@ namespace OfflineTests
             Console.WriteLine("== X6 KnowledgeView/PerceptionFilter ==");
             TestPerception();
 
+            Console.WriteLine("== N1 NarratorPure ==");
+            TestNarratorPure();
+
             Console.WriteLine();
             if (_failures == 0)
             {
@@ -1840,6 +1843,43 @@ namespace OfflineTests
             view3.Observe(12, 1f, 1f, 0f);
             view3.Observe(12, 2f, 2f, 24f); // 24s 再刷 → 仍可见（未到 25s）
             Check(view3.TryGet(12, 24.5f, out info), "x6 re-observe refreshes SeenTime");
+        }
+
+        // N1 叙事双视角标签层（Narrator 纯逻辑）：对象集过滤全关系×全模式矩阵/回退/标签映射/默认值
+        private static void TestNarratorPure()
+        {
+            // 1) ShouldNarrate 全关系×全模式矩阵（IsPlayerTeam/IsPlayerAlly/IsEnemyOfPlayer/HasPlayer/spectator）
+            var enemy = new Narrator.NarrationInfo { IsEnemyOfPlayer = true, HasPlayerTeam = true, FactionName = "帝国" };
+            var ally = new Narrator.NarrationInfo { IsPlayerAlly = true, HasPlayerTeam = true, FactionName = "帝国" };
+            var third = new Narrator.NarrationInfo { HasPlayerTeam = true, FactionName = "帝国" };
+            var player = new Narrator.NarrationInfo { IsPlayerTeam = true, HasPlayerTeam = true, FactionName = "帝国" };
+            var noPlayer = new Narrator.NarrationInfo { FactionName = "帝国" };
+            //    观战模式（spectator=true）：非玩家队全放行
+            Check(Narrator.ShouldNarrate(enemy, true), "n1 spectator enemy team -> narrate");
+            Check(Narrator.ShouldNarrate(ally, true), "n1 spectator ally team -> narrate");
+            Check(Narrator.ShouldNarrate(third, true), "n1 spectator third team -> narrate");
+            Check(!Narrator.ShouldNarrate(player, true), "n1 spectator player team -> never");
+            //    指挥模式（spectator=false）：只放行与玩家交战的 CB 队（敌队/友军 CB 队）；第三方不放行
+            Check(Narrator.ShouldNarrate(enemy, false), "n1 command enemy team -> narrate");
+            Check(Narrator.ShouldNarrate(ally, false), "n1 command ally CB team -> narrate");
+            Check(!Narrator.ShouldNarrate(third, false), "n1 command third team -> silent");
+            Check(!Narrator.ShouldNarrate(player, false), "n1 command player team -> never");
+            //    无玩家队回退（HasPlayer=false）：全放行（阵营名）
+            Check(Narrator.ShouldNarrate(noPlayer, false), "n1 no player team -> narrate (回退)");
+
+            // 2) Subject 映射表：观战=阵营名；指挥&敌队=敌军；指挥&友军CB队=我军
+            Check(Narrator.Subject(enemy, false) == "敌军", "n1 subject command enemy -> 敌军");
+            Check(Narrator.Subject(ally, false) == "我军", "n1 subject command ally -> 我军");
+            Check(Narrator.Subject(enemy, true) == "帝国", "n1 subject spectator -> faction name");
+            Check(Narrator.Subject(noPlayer, false) == "帝国", "n1 subject no player -> faction name");
+
+            // 3) Opponent 映射表：观战=O 阵营名；指挥&O 是玩家=我军；指挥&O 非玩家=敌军
+            Check(Narrator.Opponent(true, true, false, "帝国") == "我军", "n1 opponent is player -> 我军");
+            Check(Narrator.Opponent(false, true, false, "帝国") == "敌军", "n1 opponent not player -> 敌军");
+            Check(Narrator.Opponent(false, true, true, "帝国") == "帝国", "n1 opponent spectator -> faction name");
+
+            // 4) 指挥模式默认值 false（观感派单 §2.1）
+            Check(!CombatBrainSettings.NarrationSpectatorMode, "n1 spectator mode default false (指挥模式)");
         }
 
         private static int idxDefend()

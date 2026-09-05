@@ -86,18 +86,22 @@ namespace CombatBrain.Ai
                 if (arm)
                 {
                     _episode[team.TeamIndex] = true; // 武装或维持剧集（意图/威胁驱动，均经距离守卫）
-                    if (!ep) InGameFeedback.NotifyTactical("架枪", // 游戏内反馈：编队级边沿（激活一次性）
+                    if (!ep) Narrator.Notify(CombatAiMissionLogic.NarrateInfo(team,
+                        Mission.Current != null ? Mission.Current.PlayerTeam : null),
+                        "架枪", // N1 叙事统一出口（编队级边沿，激活一次性）
                         intentBrace
-                            ? string.Format("{0}步兵架枪迎敌（奉命）", FeedbackText.Faction(team))
-                            : string.Format("{0}步兵架枪迎敌（敌骑距{1:F0}米）", FeedbackText.Faction(team), d),
-                        InGameFeedback.FormationColor);
+                            ? "{S}步兵架枪迎敌（奉命）"
+                            : string.Format("{S}步兵架枪迎敌（敌骑距{0:F0}米）", d),
+                        InGameFeedback.FormationColor, InGameFeedback.NotifyTactical);
                     Execute(team, mission);
                 }
                 else
                 {
                     _episode[team.TeamIndex] = false; // 释放，交回正常 AI
-                    if (ep) InGameFeedback.NotifyTactical("架枪", // 游戏内反馈：编队级边沿（释放一次性）
-                        string.Format("{0}解除架枪，恢复推进", FeedbackText.Faction(team)), InGameFeedback.FormationColor);
+                    if (ep) Narrator.Notify(CombatAiMissionLogic.NarrateInfo(team,
+                        Mission.Current != null ? Mission.Current.PlayerTeam : null),
+                        "架枪", // N1 叙事统一出口（编队级边沿，释放一次性）
+                        "{S}解除架枪，恢复推进", InGameFeedback.FormationColor, InGameFeedback.NotifyTactical);
                     Release(team);
                 }
             }
