@@ -8,6 +8,7 @@ using TaleWorlds.MountAndBlade;
 using CombatBrain;
 using CombatBrain.Bench;
 using CombatBrain.Combat;
+using CombatBrain.Coordination;
 using CombatBrain.Events;
 using CombatBrain.Formations;
 using CombatBrain.Intent;
@@ -241,6 +242,9 @@ namespace CombatBrain.Ai
                 _bench.EndFrame(dt, 0);
                 return;
             }
+
+            // ATC-0 命令来源观测：逻辑拍起点（同拍覆盖链判定基准；只记录，不改命令）
+            CommandProvenance.Instance.BeginLogicalTick(_elapsed);
 
             _elapsed += dt;
             int agentCount = mission.Agents.Count;
@@ -1090,7 +1094,11 @@ namespace CombatBrain.Ai
                     // 只切阵型，不动移动命令（避免与 Protect/Brace/Cavalry/Morale 命令互刷）
                     // t89 全面接管：检测原版 Circle 防御环（BehaviorDefensiveRing 下发）→ 强制改写（ShouldOverride 幂等）
                     if (FormationTactics.ShouldOverride(MapArrangementKind(f.ArrangementOrder), want))
+                    {
+                        CommandProvenance.Instance.Record(f.Index, CommandSource.OriginalUnknown,
+                            CommandKind.Arrangement, (int)want); // ATC-0 记录（不改命令）
                         f.SetArrangementOrder(target);
+                    }
                 }
             }
         }
@@ -1215,6 +1223,8 @@ namespace CombatBrain.Ai
             WorldPosition wp = f.CachedMedianPosition;
             wp.SetVec2(target);
             if (wp.GetNavMesh() == UIntPtr.Zero) return;
+            CommandProvenance.Instance.Record(f.Index, CommandSource.RangedPosition,
+                CommandKind.Move, 0, -1, tx, ty); // ATC-0 记录（不改命令）
             f.SetMovementOrder(MovementOrder.MovementOrderMove(wp));
         }
 
@@ -1253,6 +1263,8 @@ namespace CombatBrain.Ai
                         _unitPreservationBand[f] = band; // 分档边沿才动作（防每拍刷命令）
                         if (band == PreservationBand.Withdraw)
                         {
+                            CommandProvenance.Instance.Record(f.Index, CommandSource.UnitPreservation,
+                                CommandKind.FallBack, (int)band); // ATC-0 记录（不改命令）
                             f.SetMovementOrder(MovementOrder.MovementOrderFallBack); // 撤离档：脱离战场（交原版由后续 feature 决定）
                         }
                         // 中间档（谨慎/减接战/优先保存）行为建议由 UnitPreservation.ActionFor 提供，SkirmishGlue 后续接线消费
@@ -1432,6 +1444,8 @@ namespace CombatBrain.Ai
                     if (FacingCorrection.DecideFacing(fc.x, fc.y, target.x, target.y,
                         lastDir.x, lastDir.y, _elapsed, lastTime, out dx, out dy, out dist))
                     {
+                        CommandProvenance.Instance.Record(f.Index, CommandSource.OriginalUnknown,
+                            CommandKind.Facing, 0, -1, target.x, target.y); // ATC-0 记录（不改命令）
                         f.SetFacingOrder(FacingOrder.FacingOrderLookAtDirection(new Vec2(dx, dy)));
                         _facingLastDir[f] = new Vec2(dx, dy);
                         _facingLastTime[f] = _elapsed;

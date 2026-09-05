@@ -5,6 +5,7 @@ using TaleWorlds.Engine;
 using TaleWorlds.Library;
 using TaleWorlds.MountAndBlade;
 using CombatBrain;
+using CombatBrain.Coordination;
 using CombatBrain.Intent;
 
 namespace CombatBrain.Ai
@@ -96,6 +97,7 @@ namespace CombatBrain.Ai
             foreach (Formation f in team.FormationsIncludingEmpty)
             {
                 if (f == null || f.CountOfUnits == 0) continue;
+                CommandProvenance.Instance.Record(f.Index, CommandSource.Protect, CommandKind.Advance); // ATC-0 记录
                 f.SetMovementOrder(MovementOrder.MovementOrderAdvance); // 交回原版默认推进（MovementOrder.cs L59，v1.4.8 核实）
             }
         }
@@ -169,6 +171,8 @@ namespace CombatBrain.Ai
             WorldPosition wp = f.CachedMedianPosition;
             wp.SetVec2(target);
             if (wp.GetNavMesh() == UIntPtr.Zero) return; // 无导航点（RBM 同款）
+            CommandProvenance.Instance.Record(f.Index, CommandSource.Protect,
+                CommandKind.Move, 0, -1, tx, ty); // ATC-0 记录
             f.SetMovementOrder(MovementOrder.MovementOrderMove(wp));
         }
 

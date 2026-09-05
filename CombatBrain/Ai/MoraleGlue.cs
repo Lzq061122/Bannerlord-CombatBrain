@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using TaleWorlds.Library;
 using TaleWorlds.MountAndBlade;
 using CombatBrain.Morale;
+using CombatBrain.Coordination;
 
 namespace CombatBrain.Ai
 {
@@ -216,10 +217,14 @@ namespace CombatBrain.Ai
             switch (state)
             {
                 case RetreatState.Disengage:
+                    CommandProvenance.Instance.Record(formation.Index, CommandSource.Morale, CommandKind.Retreat); // ATC-0 记录
                     formation.SetMovementOrder(MovementOrder.MovementOrderRetreat); // 分阶段脱离
                     break;
                 case RetreatState.Reform:
+                    CommandProvenance.Instance.Record(formation.Index, CommandSource.Morale, CommandKind.Hold); // ATC-0 记录
                     formation.SetMovementOrder(MovementOrder.MovementOrderStop);
+                    CommandProvenance.Instance.Record(formation.Index, CommandSource.Morale,
+                        CommandKind.Arrangement); // ATC-0 记录（ArrangementOrder 为引用类型不转 int）
                     formation.SetArrangementOrder(ArrangementOrder.ArrangementOrderLine); // 重整列阵
                     break;
                 // Hold / RequestRetreat：不下令（保持原状，等待批准）
@@ -235,6 +240,7 @@ namespace CombatBrain.Ai
             _states.Remove(formation);
             _stateElapsed.Remove(formation);
             _morale.Remove(formation);
+            CommandProvenance.Instance.Record(formation.Index, CommandSource.Morale, CommandKind.Advance); // ATC-0 记录
             formation.SetMovementOrder(MovementOrder.MovementOrderAdvance); // 交回原版默认推进（MovementOrder.cs L59，v1.4.8 核实）
         }
 

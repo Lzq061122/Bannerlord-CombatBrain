@@ -12,6 +12,7 @@ using CombatBrain.Intent;
 using CombatBrain.Perception;
 using CombatBrain.Formations;
 using CombatBrain.Ai;
+using CombatBrain.Coordination;
 using CombatBrain.Telemetry;
 
 namespace OfflineTests
@@ -157,6 +158,9 @@ namespace OfflineTests
 
             Console.WriteLine("== N3 NarrativeBuffer ==");
             TestNarrativeBuffer();
+
+            Console.WriteLine("== ATC0 CommandProvenance ==");
+            TestCommandProvenance();
 
             Console.WriteLine();
             if (_failures == 0)
@@ -2006,6 +2010,86 @@ namespace OfflineTests
             buf4.Push(NarrativeEventKind.E4PredictCharge, 0f);
             buf4.Clear();
             Check(buf4.IsEmpty, "n3 clear empties buffer");
+        }
+
+        // ATC-0 命令来源观测（CommandProvenance 纯逻辑）：ring 覆盖/同拍覆盖链/跨拍不误判/Clear/删除清理
+        private static void TestCommandProvenance()
+        {
+            // 1) 枚举值契约（§6）：Source 8 值 + Kind 10 值
+            Check((int)CommandSource.OriginalUnknown == 0 && (int)CommandSource.ArmyCoordination == 8,
+                "atc0 CommandSource 0..8 (9 values)");
+            Check((int)CommandKind.None == 0 && (int)CommandKind.FrameRelease == 9,
+                "atc0 CommandKind 0..9 (10 values)");
+
+            // 2) 空 buffer：Count=0，At 越界返回 None
+            var p = new CommandProvenance();
+            Check(p.Count == 0, "atc0 empty provenance count 0");
+            Check(p.At(0).Kind == CommandKind.None, "atc0 At(0) out of range -> None");
+
+            // 3) Record 基本：同拍命令入 ring
+            p.BeginLogicalTick(0f);
+            p.Record(2, CommandSource.Protect, CommandKind.Move, 0, -1, 10f, 20f);
+            Check(p.Count == 1, "atc0 one record count 1");
+            Check(p.At(0).FormationId == 2 && p.At(0).Source == CommandSource.Protect && p.At(0).Kind == CommandKind.Move,
+                "atc0 record fields correct");
+
+            // 4) 同拍覆盖链：同 Formation 同拍后续命令 → 上一条 WasOverridden + OverriddenBy
+            p.BeginLogicalTick(0f);
+            p.Record(2, CommandSource.Brace, CommandKind.Hold);
+            Check(p.Count == 2, "atc0 second record count 2");
+            Check(p.At(0).WasOverridden && p.At(0).OverriddenBy == CommandSource.Brace,
+                "atc0 same-tick override marked (Protect.Move -> Brace.Hold)");
+            Check(p.At(1).Kind == CommandKind.Hold && !p.At(1).WasOverridden, "atc0 latest not overridden");
+
+            // 5) 同拍覆盖链可复原：上一条 Source 保留（Protect），OverriddenBy=Brace
+            Check(p.At(0).Source == CommandSource.Protect && p.At(0).Kind == CommandKind.Move,
+                "atc0 overridden trace keeps original source/kind");
+
+            // 6) 跨拍不误判：不同逻辑拍（时间差 > 0.01s）不标记覆盖
+            var p2 = new CommandProvenance();
+            p2.BeginLogicalTick(0f);
+            p2.Record(3, CommandSource.Cavalry, CommandKind.Charge, 0, 5);
+            p2.BeginLogicalTick(1f);
+            p2.Record(3, CommandSource.Morale, CommandKind.Retreat);
+            Check(p2.Count == 2, "atc0 cross-tick two records");
+            Check(!p2.At(0).WasOverridden, "atc0 cross-tick not overridden (不误判)");
+            Check(p2.At(1).Kind == CommandKind.Retreat, "atc0 cross-tick latest correct");
+
+            // 7) ring 容量破顶覆盖最旧：Capacity=256，写 260 条 → Count=256，最旧被覆盖
+            var p3 = new CommandProvenance();
+            for (int i = 0; i < CommandProvenance.Capacity + 4; i++)
+            {
+                p3.BeginLogicalTick(i * 0.5f);
+                p3.Record(1, CommandSource.Cavalry, CommandKind.Hold);
+            }
+            Check(p3.Count == CommandProvenance.Capacity, "atc0 ring caps at Capacity 256");
+            // 第 0 条（i=0）已被覆盖掉——最旧现在是 i=4
+            Check(p3.At(0).Time >= 4f * 0.5f, "atc0 oldest overwritten (破顶覆盖最旧)");
+
+            // 8) Formation 删除清理：RemoveFormation 后该编队新 Record 不再与旧记录判同拍覆盖
+            var p4 = new CommandProvenance();
+            p4.BeginLogicalTick(0f);
+            p4.Record(7, CommandSource.Cavalry, CommandKind.Charge);
+            p4.RemoveFormation(7);
+            p4.BeginLogicalTick(0.1f); // 时间差 0.1 > 0.01 本就不判；但验证 Remove 后 LastIndex=-1
+            Check(p4.LastIndex(7) == -1, "atc0 RemoveFormation clears last index");
+            p4.BeginLogicalTick(0f);
+            p4.Record(7, CommandSource.Morale, CommandKind.Retreat);
+            Check(!p4.At(0).WasOverridden, "atc0 after remove same-tick re-record not marked (独立链)");
+
+            // 9) Clear 清空
+            var p5 = new CommandProvenance();
+            p5.BeginLogicalTick(0f);
+            p5.Record(4, CommandSource.Protect, CommandKind.Advance);
+            p5.Clear();
+            Check(p5.Count == 0 && p5.LastIndex(4) == -1, "atc0 Clear empties");
+
+            // 10) 同 Formation 不同编队互不干扰（FormationId 隔离）
+            var p6 = new CommandProvenance();
+            p6.BeginLogicalTick(0f);
+            p6.Record(1, CommandSource.Cavalry, CommandKind.Charge);
+            p6.Record(2, CommandSource.Morale, CommandKind.Retreat);
+            Check(!p6.At(0).WasOverridden, "atc0 different formation same tick not overridden (隔离)");
         }
 
         private static int idxDefend()

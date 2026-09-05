@@ -5,6 +5,7 @@ namespace CombatBrain.Ai
     using TaleWorlds.Engine;
     using TaleWorlds.Library;
     using TaleWorlds.MountAndBlade;
+    using CombatBrain.Coordination;
 
     // T5 骑射游击（SkirmishGlue）—— 编队级 0.5s 低频（与 F8/F11 并列挂 CombatAiMissionLogic）。
     // 用户实测 P0：骑射手开局正面冲锋送死——骑射（IsRangedCavalryFormation）不在 F8（实测 骑FSM=-），
@@ -166,7 +167,10 @@ namespace CombatBrain.Ai
             _modes[formation] = mode;
             _lastOrder[formation] = dest;
             if (mode == Mode.FlankHold)
+            {
+                CommandProvenance.Instance.Record(formation.Index, CommandSource.Skirmish, CommandKind.Hold); // ATC-0 记录
                 formation.SetMovementOrder(MovementOrder.MovementOrderStop); // 夹击位：停位射击
+            }
             else
                 IssueMove(formation, dest);
         }
@@ -177,6 +181,8 @@ namespace CombatBrain.Ai
             WorldPosition wp = formation.CachedMedianPosition;
             wp.SetVec2(target);
             if (wp.GetNavMesh() == UIntPtr.Zero) return; // 无导航点不下发
+            CommandProvenance.Instance.Record(formation.Index, CommandSource.Skirmish,
+                CommandKind.Move, 0, -1, target.x, target.y); // ATC-0 记录
             formation.SetMovementOrder(MovementOrder.MovementOrderMove(wp));
         }
 
@@ -242,6 +248,7 @@ namespace CombatBrain.Ai
             if (!_modes.ContainsKey(formation)) return;
             _modes.Remove(formation);
             _lastOrder.Remove(formation);
+            CommandProvenance.Instance.Record(formation.Index, CommandSource.Skirmish, CommandKind.Advance); // ATC-0 记录
             formation.SetMovementOrder(MovementOrder.MovementOrderAdvance); // 交回原版默认推进（MovementOrder.cs L59）
         }
     }

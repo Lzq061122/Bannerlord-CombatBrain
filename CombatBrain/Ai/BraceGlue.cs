@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using TaleWorlds.Library;
 using TaleWorlds.MountAndBlade;
 using CombatBrain;
+using CombatBrain.Coordination;
 using CombatBrain.Intent;
 
 namespace CombatBrain.Ai
@@ -130,6 +131,7 @@ namespace CombatBrain.Ai
                     _armed[inf] = armed;
                 }
                 if (!BracePlan.ShouldIssueBraceOrder(true, armed, false)) continue; // 降级：交回正常防御 AI
+                CommandProvenance.Instance.Record(inf.Index, CommandSource.Brace, CommandKind.Hold); // ATC-0 记录
                 inf.SetMovementOrder(MovementOrder.MovementOrderStop); // 站定（引擎对静止持枪兵自动架枪）
             }
         }
@@ -158,7 +160,10 @@ namespace CombatBrain.Ai
             {
                 if (f == null || f.CountOfUnits == 0) continue;
                 if (_armed.ContainsKey(f))
+                {
+                    CommandProvenance.Instance.Record(f.Index, CommandSource.Brace, CommandKind.Advance); // ATC-0 记录
                     f.SetMovementOrder(MovementOrder.MovementOrderAdvance); // 交回原版默认推进（MovementOrder.cs L59，v1.4.8 核实）
+                }
             }
             Release(team); // 清 _armed 评估缓存（幂等）
         }

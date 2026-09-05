@@ -4,6 +4,7 @@ using TaleWorlds.Engine;
 using TaleWorlds.Library;
 using TaleWorlds.MountAndBlade;
 using CombatBrain.Cavalry;
+using CombatBrain.Coordination;
 
 namespace CombatBrain.Ai
 {
@@ -276,6 +277,8 @@ namespace CombatBrain.Ai
             WorldPosition wp = formation.CachedMedianPosition;
             wp.SetVec2(target);
             if (wp.GetNavMesh() == UIntPtr.Zero) return;
+            CommandProvenance.Instance.Record(formation.Index, CommandSource.Cavalry,
+                CommandKind.Move, 0, -1, target.x, target.y); // ATC-0 记录（不改命令）
             formation.SetMovementOrder(MovementOrder.MovementOrderMove(wp));
         }
 
@@ -286,7 +289,15 @@ namespace CombatBrain.Ai
             Vec2 rally = SelectRallyPoint(formation);
             WorldPosition wp = formation.CachedMedianPosition;
             wp.SetVec2(rally);
-            if (wp.GetNavMesh() == UIntPtr.Zero) { formation.SetMovementOrder(MovementOrder.MovementOrderFallBack); return; }
+            if (wp.GetNavMesh() == UIntPtr.Zero)
+            {
+                CommandProvenance.Instance.Record(formation.Index, CommandSource.Cavalry,
+                    CommandKind.FallBack); // ATC-0 记录（不改命令）
+                formation.SetMovementOrder(MovementOrder.MovementOrderFallBack);
+                return;
+            }
+            CommandProvenance.Instance.Record(formation.Index, CommandSource.Cavalry,
+                CommandKind.Move, 0, -1, rally.x, rally.y); // ATC-0 记录（不改命令）
             formation.SetMovementOrder(MovementOrder.MovementOrderMove(wp)); // 回撤到重整点
         }
 
@@ -346,7 +357,11 @@ namespace CombatBrain.Ai
         // Charge 换 Skein 冲击阵（Recall/Reform 由 IssueOrder 恢复 FallBack/Column，Setup 恢复 Line）。
         private static void IssueChargeOrder(Formation formation, Formation target)
         {
+            CommandProvenance.Instance.Record(formation.Index, CommandSource.Cavalry,
+                CommandKind.Arrangement); // ATC-0 记录（ArrangementOrder 为引用类型不转 int）
             formation.SetArrangementOrder(ArrangementOrder.ArrangementOrderSkein); // 楔形冲击阵
+            CommandProvenance.Instance.Record(formation.Index, CommandSource.Cavalry,
+                CommandKind.Charge, 0, target != null ? target.Index : -1); // ATC-0 记录（不改命令）
             formation.SetMovementOrder(target != null
                 ? MovementOrder.MovementOrderChargeToTarget(target)
                 : MovementOrder.MovementOrderCharge);
@@ -395,20 +410,28 @@ namespace CombatBrain.Ai
             switch (state)
             {
                 case CavalryState.Scout:
+                    CommandProvenance.Instance.Record(formation.Index, CommandSource.Cavalry, CommandKind.Hold); // ATC-0 记录
                     formation.SetMovementOrder(MovementOrder.MovementOrderStop); // 侦察待命
                     break;
                 case CavalryState.Setup:
+                    CommandProvenance.Instance.Record(formation.Index, CommandSource.Cavalry, CommandKind.Hold); // ATC-0 记录
                     formation.SetMovementOrder(MovementOrder.MovementOrderStop);
+                    CommandProvenance.Instance.Record(formation.Index, CommandSource.Cavalry,
+                        CommandKind.Arrangement); // ATC-0 记录（ArrangementOrder 为引用类型不转 int）
                     formation.SetArrangementOrder(ArrangementOrder.ArrangementOrderLine); // 列阵
                     break;
                 case CavalryState.Charge:
                     IssueChargeOrder(formation, targetFormation); // t58：楔形冲击阵+冲锋命令（含绕行后的正式冲锋）
                     break;
                 case CavalryState.Recall:
+                    CommandProvenance.Instance.Record(formation.Index, CommandSource.Cavalry, CommandKind.FallBack); // ATC-0 记录
                     formation.SetMovementOrder(MovementOrder.MovementOrderFallBack); // 后撤脱离
                     break;
                 case CavalryState.Reform:
+                    CommandProvenance.Instance.Record(formation.Index, CommandSource.Cavalry, CommandKind.Hold); // ATC-0 记录
                     formation.SetMovementOrder(MovementOrder.MovementOrderStop);
+                    CommandProvenance.Instance.Record(formation.Index, CommandSource.Cavalry,
+                        CommandKind.Arrangement); // ATC-0 记录（ArrangementOrder 为引用类型不转 int）
                     formation.SetArrangementOrder(ArrangementOrder.ArrangementOrderColumn); // 骑兵纵队待命再冲
                     break;
             }
