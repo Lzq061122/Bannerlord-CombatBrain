@@ -846,9 +846,10 @@ namespace CombatBrain.Ai
                 }
                 if (!hasTarget) continue; // 无候选目标 → 本拍不判定（交原版）
 
-                // §4.3 编队级近似（含 TacticalTarget 对齐度）
+                // §4.3 编队级近似（含 TacticalTarget 对齐度；P0-3：传 selfFormationId 由估算器跳过自身，
+                //   ownSnaps 含自身不重复计入 SupportEff/AllFriendlyEff/LocalForceRatio）
                 LocalForceEstimate est = CommitmentEstimator.Estimate(
-                    fc.x, fc.y, tx, ty, self.NominalSpeed,
+                    self.FormationId, fc.x, fc.y, tx, ty, self.NominalSpeed,
                     self.Count, self.Kind, self.Integrity, ownSnaps, enemySnaps);
                 bool aligned = VecMath.Dist(tx, ty, state.Army.ObjectiveX, state.Army.ObjectiveY) <= CommitmentEvaluator.AlignMeters;
 

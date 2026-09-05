@@ -2795,8 +2795,8 @@ namespace OfflineTests
                 new FormationCoordSnapshot { FormationId = 1, Count = 50, X = 10f, Y = 0f, Kind = FormationCoordKind.Infantry, Integrity = 1f, NominalSpeed = 4f, IsKnown = true },  // 近 + 及时
                 new FormationCoordSnapshot { FormationId = 2, Count = 50, X = 200f, Y = 0f, Kind = FormationCoordKind.Infantry, Integrity = 1f, NominalSpeed = 4f, IsKnown = true }   // 远（>60m 半径）
             };
-            // 自身 A：80 步兵 @(0,0)，目标 @(200,0)，速度 4m/s → selfEta=40/4=10s
-            var est0 = CommitmentEstimator.Estimate(0f, 0f, 200f, 0f, 4f,
+            // 自身 A：80 步兵 @(0,0)，目标 @(200,0)，速度 4m/s → selfEta=40/4=10s（selfFormationId=0，friendlies 无 id=0）
+            var est0 = CommitmentEstimator.Estimate(0, 0f, 0f, 200f, 0f, 4f,
                 80, FormationCoordKind.Infantry, 1f, friendlies, null);
             CheckApprox(est0.SelfEta, 10f, "atc4 self eta 10s", 1e-3f);
             // 支援 1（10m 处，eta=2.5s ≤ 10+10）计入；支援 2（200m 处，>60m 半径）不计 → support=50/180
@@ -2810,13 +2810,48 @@ namespace OfflineTests
                 new FormationCoordSnapshot { FormationId = 11, Count = 60, X = 45f, Y = 0f, Kind = FormationCoordKind.Infantry, Integrity = 1f, NominalSpeed = 4f, IsKnown = true }
             };
             // 自身 A @(0,0) 目标 @(200,0)：contact=(40,0)；敌 11 距 contact 5m ≤100m 且 eta=5/4=1.25 ≤ 10+10 → 计入
-            var est1 = CommitmentEstimator.Estimate(0f, 0f, 200f, 0f, 4f,
+            var est1 = CommitmentEstimator.Estimate(0, 0f, 0f, 200f, 0f, 4f,
                 80, FormationCoordKind.Infantry, 1f, friendlies, enemies);
             CheckApprox(est1.EnemyLocalForce, 60f, "atc4 unknown enemy excluded from local force (迷雾)", 1e-3f);
 
             // 32) LocalForceRatio = (自身+支援) / max(敌局部, 1)
             // 自身 80 + 支援 50 = 130；敌局部 60 → ratio = 130/60
             CheckApprox(est1.LocalForceRatio, 130f / 60f, "atc4 local force ratio (self+support)/enemy", 1e-3f);
+
+            // ---- atc4-force-accounting-fix P0-3：自身兵力双算修复（friendlies 含自身时只计一次） ----
+
+            // 33) friendlies 包含自身（FormationId=0 与 selfFormationId=0 相同）→ 自身跳过，只经 ownEff 计一次
+            var friendsSelf = new List<FormationCoordSnapshot>
+            {
+                new FormationCoordSnapshot { FormationId = 0, Count = 80, X = 0f, Y = 0f, Kind = FormationCoordKind.Infantry, Integrity = 1f, NominalSpeed = 4f, IsKnown = true }, // 自身（应被跳过）
+                new FormationCoordSnapshot { FormationId = 1, Count = 50, X = 10f, Y = 0f, Kind = FormationCoordKind.Infantry, Integrity = 1f, NominalSpeed = 4f, IsKnown = true }  // 友军（10m 内及时）
+            };
+            var estSelf = CommitmentEstimator.Estimate(0, 0f, 0f, 200f, 0f, 4f,
+                80, FormationCoordKind.Infantry, 1f, friendsSelf, null);
+            // support=50（仅友军）；allFriendlyEff=80+50=130（自身不重复）；ratio=130/1
+            CheckApprox(estSelf.FriendlySupport, 50f / 130f, "atc4-force self in friendlies counted once (support 50/130)", 1e-3f);
+            CheckApprox(estSelf.LocalForceRatio, 130f, "atc4-force local ratio excludes duplicated self (130/1)", 1e-3f);
+
+            // 34) 只有自身、无支援 → SupportEff==0（FriendlySupport=0，ratio=自身/1）
+            var onlySelf = new List<FormationCoordSnapshot>
+            {
+                new FormationCoordSnapshot { FormationId = 0, Count = 80, X = 0f, Y = 0f, Kind = FormationCoordKind.Infantry, Integrity = 1f, NominalSpeed = 4f, IsKnown = true } // 自身
+            };
+            var estOnly = CommitmentEstimator.Estimate(0, 0f, 0f, 200f, 0f, 4f,
+                80, FormationCoordKind.Infantry, 1f, onlySelf, null);
+            CheckApprox(estOnly.FriendlySupport, 0f, "atc4-force only self -> support 0", 1e-3f);
+            CheckApprox(estOnly.LocalForceRatio, 80f, "atc4-force only self -> ratio self/1", 1e-3f);
+
+            // 35) 增加一支友军 → 只增加该友军有效兵力（在 34 基础上 +50 → support=50/130，ratio=(80+50)/1）
+            var selfPlusOne = new List<FormationCoordSnapshot>
+            {
+                new FormationCoordSnapshot { FormationId = 0, Count = 80, X = 0f, Y = 0f, Kind = FormationCoordKind.Infantry, Integrity = 1f, NominalSpeed = 4f, IsKnown = true },
+                new FormationCoordSnapshot { FormationId = 1, Count = 50, X = 10f, Y = 0f, Kind = FormationCoordKind.Infantry, Integrity = 1f, NominalSpeed = 4f, IsKnown = true } // 新增友军
+            };
+            var estPlusOne = CommitmentEstimator.Estimate(0, 0f, 0f, 200f, 0f, 4f,
+                80, FormationCoordKind.Infantry, 1f, selfPlusOne, null);
+            CheckApprox(estPlusOne.FriendlySupport, 50f / 130f, "atc4-force adding one ally adds only that ally (50/130)", 1e-3f);
+            CheckApprox(estPlusOne.LocalForceRatio, 130f, "atc4-force adding one ally ratio 130/1", 1e-3f);
 
             // ---- atc4-fix finding1：距离基线时序修复（共享字典同拍先写后读 → distIncreasing 恒 false） ----
 

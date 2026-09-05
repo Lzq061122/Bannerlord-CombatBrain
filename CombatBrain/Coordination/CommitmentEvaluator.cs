@@ -322,13 +322,16 @@ namespace CombatBrain.Coordination
 
         /// <summary>
         /// §4.3 编队级估计（O(F²)：friendlies/enemies 各一次线性扫描）。
+        /// 输入契约（atc4-force-accounting-fix P0-3）：调用方必须传 selfFormationId（本编队 FormationId），
+        ///   估算器在 friendlies 扫描中跳过自身（f.FormationId == selfFormationId）——禁止依赖调用方
+        ///   「默认已排除自身」的隐式约定（ownSnaps 含自身时自身不得被重复计入 SupportEff/AllFriendlyEff）。
         /// FriendlySupport：SupportRadius 内 且 支援 ETA <= 自身 ETA + ArrivalSlack 的己方编队有效兵力 / 全体己方有效兵力；
         /// EnemyLocalForce：ContactPoint LocalRadius 内、IsKnown=true 且预计可及时到达（eta <= 自身 ETA + Slack）的敌编队有效兵力；
         /// LocalForceRatio = (自身有效兵力 + 支援有效兵力) / max(敌局部有效兵力, 1)。
         /// 迷雾一致：IsKnown=false 的敌编队不参与（§2.2.2）。
         /// </summary>
         public static LocalForceEstimate Estimate(
-            float fx, float fy, float tx, float ty, float nominalSpeed,
+            int selfFormationId, float fx, float fy, float tx, float ty, float nominalSpeed,
             int selfCount, FormationCoordKind selfKind, float selfIntegrity,
             IList<FormationCoordSnapshot> friendlies, IList<FormationCoordSnapshot> enemies)
         {
@@ -336,7 +339,7 @@ namespace CombatBrain.Coordination
             ContactPoint(fx, fy, tx, ty, out r.ContactX, out r.ContactY, out r.DistanceToContact);
             r.SelfEta = Eta(r.DistanceToContact, nominalSpeed);
 
-            // 己方：自身 + 支援（SupportRadius 内且及时到达）
+            // 己方：自身 + 支援（SupportRadius 内且及时到达；P0-3：friendlies 中自身条目跳过，自身只经 ownEff 计一次）
             float ownEff = EffectiveStrength(selfCount, selfKind, selfIntegrity);
             float supportEff = 0f, allFriendlyEff = ownEff;
             float minSupportEta = float.MaxValue;
@@ -345,7 +348,7 @@ namespace CombatBrain.Coordination
                 for (int i = 0; i < friendlies.Count; i++)
                 {
                     FormationCoordSnapshot f = friendlies[i];
-                    if (f.FormationId < 0) continue;
+                    if (f.FormationId < 0 || f.FormationId == selfFormationId) continue; // P0-3：跳过自身（防双算）
                     float df = Dist(f.X, f.Y, fx, fy);
                     float eff = EffectiveStrength(f.Count, f.Kind, f.Integrity);
                     allFriendlyEff += eff;
