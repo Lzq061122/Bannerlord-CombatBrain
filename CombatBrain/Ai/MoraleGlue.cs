@@ -192,6 +192,8 @@ namespace CombatBrain.Ai
                     InGameFeedback.FormationColor, InGameFeedback.NotifyTactical);
 
                 // N2 E3 自身崩溃（§3 E3 备注）：被指挥队自身士气崩溃 → 撤退 FSM 跃迁到 Disengage 时补一条。
+                // 文案统一 {S}=崩溃队自身（Subject 自动代填敌军/我军）——不用 {O}（enemyOfPlayer=true 时
+                // {O} 会代填成玩家队=我军，产出「我军损失惨重」+优势绿语义矛盾，t28 修复）。
                 // 颜色=事件对被叙事队的利害：指挥模式观看方自动获得敌我语义（敌侧绿=我军优势，友侧红=我军崩溃）。
                 if (next == RetreatState.Disengage && state != RetreatState.Disengage)
                 {
@@ -201,12 +203,9 @@ namespace CombatBrain.Ai
                     Narrator.Notify(CombatAiMissionLogic.NarrateInfo(formation.Team,
                         Mission.Current != null ? Mission.Current.PlayerTeam : null),
                         "事件",
-                        enemyOfPlayer ? "{O}损失惨重，阵线开始崩溃" : "{S}损失惨重，阵线开始崩溃",
+                        "{S}损失惨重，阵线开始崩溃", // {S}=崩溃队自身（Subject 代填敌军/我军）
                         enemyOfPlayer ? InGameFeedback.AdvantageColor : InGameFeedback.CrisisColor,
-                        InGameFeedback.NotifyTactical,
-                        CombatAiMissionLogic.NarrateInfo(
-                            Mission.Current != null ? Mission.Current.PlayerTeam : null,
-                            Mission.Current != null ? Mission.Current.PlayerTeam : null)); // {O}=玩家侧兜底
+                        InGameFeedback.NotifyTactical);
                 }
             }
         }

@@ -1948,6 +1948,16 @@ namespace OfflineTests
             Check(composed == "我军骑兵集结，威胁敌军侧翼", "n2 compose {O}=opponent (player) -> 我军, {S}=subject (enemy) -> 敌军");
             string spectator = Narrator.ComposeText(enemyInfo, "{O}骑兵集结，威胁{S}侧翼", true, playerOppo);
             Check(spectator == "帝国骑兵集结，威胁帝国侧翼", "n2 compose spectator -> faction names");
+
+            // N2 E3 自身崩溃文案回归（t28：{O}→{S}，避免 enemyOfPlayer=true 时「我军损失惨重」+优势绿矛盾）：
+            // {S}=崩溃队自身，Subject 按敌我代填敌军/我军；颜色按敌我区分在 Glue 侧（走审查）。
+            string e3Enemy = Narrator.ComposeText(enemyInfo, "{S}损失惨重，阵线开始崩溃", false);
+            Check(e3Enemy == "敌军损失惨重，阵线开始崩溃", "n2 e3 enemy team collapse -> 敌军崩溃 (t28 {S})");
+            var allyInfo = new Narrator.NarrationInfo { IsPlayerAlly = true, HasPlayerTeam = true, FactionName = "帝国" };
+            string e3Ally = Narrator.ComposeText(allyInfo, "{S}损失惨重，阵线开始崩溃", false);
+            Check(e3Ally == "我军损失惨重，阵线开始崩溃", "n2 e3 ally team collapse -> 我军崩溃 (t28 {S})");
+            Check(e3Enemy.Length <= 16, "n2 e3 template <=16 chars (文案纪律)");
+            Check(!e3Enemy.Contains("{O}"), "n2 e3 no {O} leftover (t28 修复)");
         }
 
         // 占位符齐全性辅助（FeedbackText 有 TaleWorlds 依赖不可链接，此处返回占位符常量供断言引用）
