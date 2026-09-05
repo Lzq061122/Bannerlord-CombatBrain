@@ -142,7 +142,19 @@ namespace CombatBrain.Ai
             }
         }
 
-        // t54 阵营判定（士兵文化多数决）：GeneralAgent 文化在自定义战斗不可靠——可为 null 或
+        // ATC-1 战局阶段短文案（§7：五态上下文播报；走 Narrator 统一出口，单句 ≤8 字）。
+        public static string BattlePhaseText(int phase)
+        {
+            switch (phase)
+            {
+                case 0: return "部署阶段";
+                case 1: return "进军阶段";
+                case 2: return "接敌阶段";
+                case 3: return "扩大战果";
+                case 4: return "撤退阶段";
+                default: return string.Empty;
+            }
+        }
         // 与士兵不同阵营（实测选帝国显示瓦兰迪亚、日志读空 阵营=-）。改为遍历各编队士兵统计
         // 文化票数取多数；无兵 → GeneralAgent 兜底 → null（调用方自行再兜底）。
         // 反作弊闸：文化=公开只读属性；调用均为事件驱动低频（FSM 跃迁/意图切换），O(兵数) 可接受。

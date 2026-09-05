@@ -9,6 +9,7 @@ using CombatBrain;
 using CombatBrain.Bench;
 using CombatBrain.Combat;
 using CombatBrain.Coordination;
+using CombatBrain.Battle;
 using CombatBrain.Events;
 using CombatBrain.Formations;
 using CombatBrain.Intent;
@@ -55,6 +56,10 @@ namespace CombatBrain.Ai
             public bool LatchE4;              // E4 预测冲锋边沿锁存
             public string LastStrategicClass = null; // E5 战术转折：上拍战略大类（进攻/防守/撤退/机动）
             public NarrativeEventBuffer EventBuffer; // N3 L1 事件缓冲（ring 2，TTL 3.5s；意图切换后读原因）
+
+            // ATC-1 战局阶段（队级五态上下文；只更新状态+发事件/播报，不下命令）
+            public BattlePhase Phase = BattlePhase.Deployment; // 当前战局阶段
+            public float PhaseEnteredAt = 0f; // 进入当前阶段的时刻（相位内时间基准，强制修订4）
         }
 
         private bool _initialized;
@@ -497,6 +502,11 @@ namespace CombatBrain.Ai
                 //   全部输入=既有公开态势（反作弊闸不变）；只播无→有跨越（NarrativeEvents 迟滞带）。
                 TickNarrativeEvents(state, own, enemy, v, belief);
 
+                // ATC-1 战局阶段（队级五态上下文，0.5s 拍内；只更新状态+发事件/播报，不下命令）。
+                // OwnSurvival=aliveSelf/InitialCount 真实存活比（强制修订2，绝不用 v.Moral）；
+                // TimeInPhase=_elapsed-PhaseEnteredAt（强制修订4）；Stalemate=_stalemateActive（修订5）。
+                TickBattlePhase(state, own, enemy, aliveSelf, aliveEnemy);
+
                 // P0-④ 玩家队豁免意图决策：意图是玩家指挥的领域——玩家队不 Evaluate/不发布
                 // IntentSwitched（否则 F10 把自家引擎输出当玩家套路，循环自证；玩家队也不消费本层
                 // 意图，4 个编队层 Glue 已同步豁免）。态势向量/士气照算（LastVector 仍供 GetMorale
@@ -594,6 +604,60 @@ namespace CombatBrain.Ai
 
             // N3 L1 事件缓冲写入（§4）：L0 事件触发时记入 ring 2，供意图切换后原因第二条 toast 消费。
             state.EventBuffer.Push(evt, _elapsed);
+        }
+
+        // ATC-1 战局阶段推进（0.5s 队级拍，只更新状态+发事件/播报，不下命令）。
+        // 强制修订落实：OwnSurvival=aliveSelf/InitialCount 真实存活比（修订2）；Retreat 终态（修订3）；
+        //   TimeInPhase=_elapsed-PhaseEnteredAt（修订4）；Stalemate 不触发转移（修订5）；
+        //   EnemyWeakening 需配合敌存活<阈值或 Pursue 才进 Exploit（修订6）。
+        // 反作弊闸：输入=己方/敌方存活聚合（ActiveAgents 公开）+ 既有僵局判定，零新增禁读。
+        private void TickBattlePhase(TeamState state, Team own, Team enemy, int aliveSelf, int aliveEnemy)
+        {
+            float ownSurvival = state.InitialCount > 0f ? (float)aliveSelf / state.InitialCount : 1f; // 修订2
+            float enemySurvival = 1f; // 敌初始存活基线（首拍=1）；EnemyCountHistory 首值作敌初始近似
+            if (state.EnemyCountHistory.Count > 0)
+            {
+                float enemyInitial = state.EnemyCountHistory.Peek();
+                if (enemyInitial > 0f) enemySurvival = aliveEnemy / enemyInitial;
+            }
+
+            var input = new BattlePhaseInput
+            {
+                OwnSurvival = ownSurvival,
+                EnemySurvival = enemySurvival,
+                Stalemate = _stalemateActive,          // 修订5：不触发转移
+                EnemyWeakening = enemySurvival < 0.4f,  // 敌弱化信号（修订6 条件之一）
+                Intent = state.LastIntent,             // Pursue 直接触发 Exploit（修订6）
+                TimeInPhase = _elapsed - state.PhaseEnteredAt // 修订4：相位内时间
+            };
+
+            BattlePhaseResult r = BattlePhaseFSM.Advance(state.Phase, input);
+            if (!r.Changed) return; // 同态不重播（修订5：不发事件/播报）
+
+            BattlePhase prev = state.Phase;
+            state.Phase = r.Phase;
+            state.PhaseEnteredAt = _elapsed;
+
+            // 事件发布（BattlePhaseChanged；只发状态迁移，同态不发）
+            _bus.Publish(new CombatEvent
+            {
+                Kind = CombatEventKind.BattlePhaseChanged,
+                Time = _elapsed,
+                Id = own.TeamIndex,
+                IntValue = (int)r.Phase
+            });
+            CombatLog.Log(string.Format(
+                "[BattlePhase] Team {0} {1} → {2} (ownSurv={3:F2} enemSurv={4:F2} intent={5})",
+                own.TeamIndex, prev, r.Phase, ownSurvival, enemySurvival, state.LastIntent));
+
+            // 播报（Narrator 统一出口，阶段短文案；只播迁移瞬间）
+            string phaseText = FeedbackText.BattlePhaseText((int)r.Phase);
+            if (!string.IsNullOrEmpty(phaseText))
+            {
+                Narrator.Notify(NarrateInfo(own, Mission.PlayerTeam), "战局",
+                    string.Format("{S}进入{0}", phaseText),
+                    InGameFeedback.TacticalColor, InGameFeedback.NotifyTactical);
+            }
         }
 
         private void ComposeVector(

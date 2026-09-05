@@ -74,6 +74,7 @@ namespace CombatBrain
         MessengerIntercepted,
         AgentDown,
         AttackObserved,
-        LodChanged
+        LodChanged,
+        BattlePhaseChanged // ATC-1 追加（只追加不重排，旧索引不变）
     }
 }

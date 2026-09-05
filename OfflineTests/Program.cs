@@ -12,6 +12,7 @@ using CombatBrain.Intent;
 using CombatBrain.Perception;
 using CombatBrain.Formations;
 using CombatBrain.Ai;
+using CombatBrain.Battle;
 using CombatBrain.Coordination;
 using CombatBrain.Telemetry;
 
@@ -164,6 +165,9 @@ namespace OfflineTests
 
             Console.WriteLine("== ATC0 OutputLayer ==");
             TestProvenanceOutput();
+
+            Console.WriteLine("== ATC1 BattlePhaseFSM ==");
+            TestBattlePhaseFSM();
 
             Console.WriteLine();
             if (_failures == 0)
@@ -2146,6 +2150,98 @@ namespace OfflineTests
             string agg = p5.BuildSourceAggregate();
             Check(agg.Contains("Cavalry=1/o1") && agg.Contains("Morale=1/o0"), "atc0 source aggregate counts+overrides");
             Check(agg.Contains("Protect=0/o0"), "atc0 source aggregate zero source included (固定顺序)");
+        }
+
+        // ATC-1 战局阶段机（BattlePhaseFSM 纯逻辑）：五态全边界/最短驻留/同态不重播/Retreat 终态/早期伤亡不误进 Exploit
+        private static void TestBattlePhaseFSM()
+        {
+            // 1) 初始 Deployment：存活正常 + 未到驻留 → 不转移（同态 Changed=false，修订4/5）
+            var r0 = BattlePhaseFSM.Advance(BattlePhase.Deployment, new BattlePhaseInput
+            { OwnSurvival = 0.9f, TimeInPhase = 2f });
+            Check(r0.Phase == BattlePhase.Deployment && !r0.Changed, "atc1 deployment dwell <5s no move (修订4)");
+
+            // 2) Deployment→Advance：存活 ≥0.7 且驻留 ≥5s
+            var r1 = BattlePhaseFSM.Advance(BattlePhase.Deployment, new BattlePhaseInput
+            { OwnSurvival = 0.9f, TimeInPhase = 6f });
+            Check(r1.Phase == BattlePhase.Advance && r1.Changed, "atc1 deployment -> advance (surv 0.9 dwell 6s)");
+
+            // 3) Deployment 存活不足（<0.7）→ 不 Advance（即使驻留够）
+            var r2 = BattlePhaseFSM.Advance(BattlePhase.Deployment, new BattlePhaseInput
+            { OwnSurvival = 0.5f, TimeInPhase = 6f });
+            Check(r2.Phase == BattlePhase.Deployment, "atc1 low survival blocks advance");
+
+            // 4) Advance→Engage：驻留够即接敌
+            var r3 = BattlePhaseFSM.Advance(BattlePhase.Advance, new BattlePhaseInput
+            { OwnSurvival = 0.8f, TimeInPhase = 6f });
+            Check(r3.Phase == BattlePhase.Engage && r3.Changed, "atc1 advance -> engage");
+
+            // 5) Engage→Exploit：敌弱化 + 敌存活<0.4（修订6 双条件之一）
+            var r4 = BattlePhaseFSM.Advance(BattlePhase.Engage, new BattlePhaseInput
+            { OwnSurvival = 0.7f, EnemySurvival = 0.3f, EnemyWeakening = true, TimeInPhase = 6f });
+            Check(r4.Phase == BattlePhase.Exploit, "atc1 engage -> exploit (enemy surv 0.3 + weakening)");
+
+            // 6) Engage 敌弱化但敌存活高（≥0.4）→ 不进 Exploit（修订6 防早期误进）
+            var r5 = BattlePhaseFSM.Advance(BattlePhase.Engage, new BattlePhaseInput
+            { OwnSurvival = 0.9f, EnemySurvival = 0.6f, EnemyWeakening = true, TimeInPhase = 6f });
+            Check(r5.Phase == BattlePhase.Engage, "atc1 enemy weakening but surv 0.6 -> stay engage (修订6)");
+
+            // 7) Engage 敌存活低但无弱化信号 → 不进 Exploit
+            var r6 = BattlePhaseFSM.Advance(BattlePhase.Engage, new BattlePhaseInput
+            { OwnSurvival = 0.7f, EnemySurvival = 0.2f, EnemyWeakening = false, TimeInPhase = 6f });
+            Check(r6.Phase == BattlePhase.Engage, "atc1 low enemy surv but no weakening -> stay engage");
+
+            // 8) Engage 意图 Pursue → 进 Exploit（修订6 第二条件）
+            var r7 = BattlePhaseFSM.Advance(BattlePhase.Engage, new BattlePhaseInput
+            { OwnSurvival = 0.7f, EnemyWeakening = true, Intent = IntentType.Pursue, TimeInPhase = 6f });
+            Check(r7.Phase == BattlePhase.Exploit, "atc1 engage -> exploit via Pursue (修订6)");
+
+            // 9) 同态不重播：Engage 正常状态 → Changed=false（修订5）
+            var r8 = BattlePhaseFSM.Advance(BattlePhase.Engage, new BattlePhaseInput
+            { OwnSurvival = 0.8f, EnemySurvival = 0.6f, TimeInPhase = 6f });
+            Check(!r8.Changed, "atc1 stable engage not changed (修订5 同态不重播)");
+
+            // 10) 任意相→Retreat：存活<0.4 终态（修订3）
+            var r9 = BattlePhaseFSM.Advance(BattlePhase.Engage, new BattlePhaseInput
+            { OwnSurvival = 0.3f, TimeInPhase = 6f });
+            Check(r9.Phase == BattlePhase.Retreat && r9.Changed, "atc1 engage -> retreat (surv 0.3)");
+            var r10 = BattlePhaseFSM.Advance(BattlePhase.Advance, new BattlePhaseInput
+            { OwnSurvival = 0.2f, TimeInPhase = 6f });
+            Check(r10.Phase == BattlePhase.Retreat, "atc1 advance -> retreat (surv 0.2)");
+
+            // 11) Retreat 终态：存活回升也不转出（修订3，删除不可达的回升→Advance）
+            var r11 = BattlePhaseFSM.Advance(BattlePhase.Retreat, new BattlePhaseInput
+            { OwnSurvival = 0.9f, TimeInPhase = 6f });
+            Check(r11.Phase == BattlePhase.Retreat && !r11.Changed, "atc1 retreat terminal (no recovery advance, 修订3)");
+
+            // 12) Retreat 不因任何输入转出（EnemyWeakening/Pursue 也无效）
+            var r12 = BattlePhaseFSM.Advance(BattlePhase.Retreat, new BattlePhaseInput
+            { OwnSurvival = 0.9f, EnemyWeakening = true, Intent = IntentType.Pursue, TimeInPhase = 6f });
+            Check(r12.Phase == BattlePhase.Retreat, "atc1 retreat immune to exploit signals");
+
+            // 13) 早期伤亡不误进 Exploit：Deployment 存活 0.6（战斗初期短促掉人）→ 不 Advance 更不 Exploit
+            var r13 = BattlePhaseFSM.Advance(BattlePhase.Deployment, new BattlePhaseInput
+            { OwnSurvival = 0.6f, TimeInPhase = 6f });
+            Check(r13.Phase == BattlePhase.Deployment, "atc1 early casualties stay deployment (不误进)");
+
+            // 14) 最短驻留守卫：Deployment 存活 0.9 但驻留 4.9s → 不转移（修订4）
+            var r14 = BattlePhaseFSM.Advance(BattlePhase.Deployment, new BattlePhaseInput
+            { OwnSurvival = 0.9f, TimeInPhase = 4.9f });
+            Check(r14.Phase == BattlePhase.Deployment && !r14.Changed, "atc1 dwell 4.9s boundary blocks (修订4)");
+
+            // 15) Exploit 无出边（除 Retreat 守卫）：存活正常保持 Exploit
+            var r15 = BattlePhaseFSM.Advance(BattlePhase.Exploit, new BattlePhaseInput
+            { OwnSurvival = 0.6f, TimeInPhase = 6f });
+            Check(r15.Phase == BattlePhase.Exploit && !r15.Changed, "atc1 exploit stable no out-edge");
+
+            // 16) 五态枚举值契约（§3.1）
+            Check((int)BattlePhase.Deployment == 0 && (int)BattlePhase.Advance == 1
+                && (int)BattlePhase.Engage == 2 && (int)BattlePhase.Exploit == 3
+                && (int)BattlePhase.Retreat == 4, "atc1 phase enum 0..4");
+
+            // 17) 阈值常量契约（供胶水层引用一致）
+            Check(BattlePhaseFSM.RetreatSurvival == 0.4f && BattlePhaseFSM.AdvanceSurvival == 0.7f
+                && BattlePhaseFSM.MinDwellSeconds == 5f && BattlePhaseFSM.ExploitEnemySurvival == 0.4f,
+                "atc1 threshold constants");
         }
 
         private static int idxDefend()

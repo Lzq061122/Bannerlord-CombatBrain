@@ -58,6 +58,7 @@
     <Compile Include="..\CombatBrain\Ai\Narrator.cs" Link="Ai\Narrator.cs" />
     <Compile Include="..\CombatBrain\Ai\NarrativeEvents.cs" Link="Ai\NarrativeEvents.cs" />
     <Compile Include="..\CombatBrain\Coordination\CommandProvenance.cs" Link="Coordination\CommandProvenance.cs" />
+    <Compile Include="..\CombatBrain\Battle\BattlePhaseFSM.cs" Link="Battle\BattlePhaseFSM.cs" />
   </ItemGroup>
 
 </Project>
