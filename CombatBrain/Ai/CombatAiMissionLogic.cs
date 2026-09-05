@@ -69,6 +69,10 @@ namespace CombatBrain.Ai
             public SeparationIntent Separation = SeparationIntent.None;
             public IsolationDecision Isolation;
             public float FormationPrevDist; // ATC-3 距离趋势基准（上拍距 MainBody 距离，0=首拍）
+
+            // ATC-4 Commitment 影子判定（0.5s；每编队一条，只记录「若执行层接线将允许/拒绝什么」，零行为变化）。
+            // 键=Formation.Index；日志变化才写（Permission/Reasons 边沿），禁每拍每队刷。
+            public readonly Dictionary<int, CommitmentDecision> Commitments = new Dictionary<int, CommitmentDecision>();
         }
 
         private bool _initialized;
@@ -521,6 +525,7 @@ namespace CombatBrain.Ai
                 _bench.BeginSection("coordination");
                 TickArmyContext(state, own, enemy);
                 TickFormationMissions(state, own, enemy); // ATC-3：Mission/Separation/Isolation 影子判定（不下命令）
+                TickCommitment(state, own, enemy);        // ATC-4：Commitment 影子判定（只记录，零行为变化）
                 _bench.EndSection("coordination");
 
                 // P0-④ 玩家队豁免意图决策：意图是玩家指挥的领域——玩家队不 Evaluate/不发布
@@ -740,6 +745,124 @@ namespace CombatBrain.Ai
                         own.TeamIndex, f.Index, mission.Mission, mission.Separation,
                         iso.UnauthorizedIsolation ? "UnauthorizedIsolation" : "OK",
                         dist, mbX, mbY));
+                }
+            }
+        }
+
+        // ATC-4 Commitment 影子判定（0.5s 队级拍，零行为变化）：对每个己方 Formation 的候选投入做统一
+        // 许可判断，只记录「若执行层接线将允许/拒绝什么」，不 SetMovementOrder / 不下召回 / 不动
+        // FormationTargeting 优先级（规格 §10：影子模式）。消费：ATC-1 Phase + ATC-2 Army（Objective/
+        // MainBody）+ ATC-3 任务映射纯函数（per-formation 重算，不触碰 state.Mission 队级近似）+ X1 目标缓存
+        // （TacticalTarget 对齐度）。§4.3 编队级近似经 CommitmentEstimator 纯函数（O(F²)，禁逐兵）。
+        // Fog 一致：敌快照经 IsEnemyFormationKnown 过滤后传入（未知敌不参与 EnemyLocalForce，§2.2.2）。
+        // 日志：Permission/Reasons 变化才写（[Commit] 行 §14 固定字段顺序），禁每拍每队刷。
+        private void TickCommitment(TeamState state, Team own, Team enemy)
+        {
+            // 快照（复用 BuildSnapshot 口径：己方全量 + 敌迷雾过滤）
+            var ownSnaps = new List<FormationCoordSnapshot>();
+            var enemySnaps = new List<FormationCoordSnapshot>();
+            foreach (Formation f in own.FormationsIncludingEmpty)
+            {
+                if (f == null || f.CountOfUnits == 0 || f.QuerySystem == null) continue;
+                ownSnaps.Add(BuildSnapshot(f, true));
+            }
+            if (enemy != null)
+            {
+                foreach (Formation f in enemy.FormationsIncludingEmpty)
+                {
+                    if (f == null || f.CountOfUnits == 0 || f.QuerySystem == null) continue;
+                    enemySnaps.Add(BuildSnapshot(f, IsEnemyFormationKnown(own, f))); // X6 迷雾过滤
+                }
+            }
+
+            float mbX = state.Army.MainBodyX, mbY = state.Army.MainBodyY;
+            float prevDist = state.FormationPrevDist; // 距离趋势基准（与 ATC-3 同源）
+
+            foreach (Formation f in own.FormationsIncludingEmpty)
+            {
+                if (f == null || f.CountOfUnits == 0 || f.QuerySystem == null) continue;
+                Vec2 fc = TeamGeometry.GetFormationPosition(f, TeamPosKind.CachedMedian); // 编队层下令系口径
+                FormationCoordSnapshot self = FormationCoordSnapshot.Empty;
+                for (int i = 0; i < ownSnaps.Count; i++)
+                {
+                    if (ownSnaps[i].FormationId == f.Index) { self = ownSnaps[i]; break; }
+                }
+                if (self.FormationId < 0) continue;
+
+                float dist = (float)Math.Sqrt((fc.x - mbX) * (fc.x - mbX) + (fc.y - mbY) * (fc.y - mbY));
+                bool distIncreasing = prevDist > 0f && dist > prevDist;
+
+                // 候选目标：X1 目标缓存优先（TacticalTarget）；无 → Operational Objective 中心；再无 → 无候选（跳评）
+                TargetSelection sel;
+                float tx, ty;
+                bool hasTarget;
+                if (TryGetFormationTarget(f, out sel) && sel.HasTarget)
+                {
+                    tx = sel.X; ty = sel.Y; hasTarget = true;
+                }
+                else if (state.Army.HasOperationalObjective)
+                {
+                    tx = state.Army.ObjectiveX; ty = state.Army.ObjectiveY; hasTarget = true;
+                }
+                else
+                {
+                    tx = 0f; ty = 0f; hasTarget = false;
+                }
+                if (!hasTarget) continue; // 无候选目标 → 本拍不判定（交原版）
+
+                // §4.3 编队级近似（含 TacticalTarget 对齐度）
+                LocalForceEstimate est = CommitmentEstimator.Estimate(
+                    fc.x, fc.y, tx, ty, self.NominalSpeed,
+                    self.Count, self.Kind, self.Integrity, ownSnaps, enemySnaps);
+                bool aligned = VecMath.Dist(tx, ty, state.Army.ObjectiveX, state.Army.ObjectiveY) <= CommitmentEvaluator.AlignMeters;
+
+                // ATC-3 任务映射（per-formation 重算：影子判定独立，不触碰 state.Mission 队级近似）
+                FormationCoordKind kind = self.Kind;
+                string moraleState = _morale.GetStateName(f); // F11 撤退 FSM（"-"=无记录）
+                bool inRetreat = moraleState != "-" && moraleState != "Hold";
+                var mission = FormationMissionAssigner.Assign(new MissionInput
+                {
+                    Kind = kind,
+                    Phase = state.Phase,
+                    Intent = state.LastIntent,
+                    InRetreat = inRetreat,
+                    IsReserve = dist < 30f && !inRetreat && state.Army.MainBodyStrength > 0
+                });
+
+                CommitmentDecision decision = CommitmentEvaluator.Evaluate(new CommitmentInput
+                {
+                    Phase = state.Phase,
+                    Mission = mission.Mission,
+                    Separation = mission.Separation,
+                    HasOperationalObjective = state.Army.HasOperationalObjective,
+                    TargetAlignedWithObjective = aligned,
+                    MainBodyDistance = dist,
+                    DistanceIncreasing = distIncreasing,
+                    FriendlySupport = est.FriendlySupport,
+                    LocalForceRatio = est.LocalForceRatio,
+                    FriendlyArrivalEta = est.FriendlyEta,
+                    EnemyContactEta = est.EnemyContactEta,
+                    Integrity = self.Integrity,
+                    IsReserve = dist < 30f && !inRetreat && state.Army.MainBodyStrength > 0, // 与 ATC-3 同口径
+                    InContact = false,        // 近战接触信号：本卡无独立源，第一版保守 false（不影响 Limited 分支测试）
+                    DefensiveOverride = false, // Brace/Protect/脱困 override：第一版 false（影子观测）
+                    EmergencyOverride = false  // Emergency/Survival override：第一版 false（影子观测）
+                });
+
+                // 日志：Permission/Reasons 变化才写（限频；§14 [Commit] 固定字段顺序）
+                CommitmentDecision last;
+                bool changed = !state.Commitments.TryGetValue(f.Index, out last)
+                    || last.Permission != decision.Permission || last.Reasons != decision.Reasons;
+                state.Commitments[f.Index] = decision;
+                if (changed)
+                {
+                    CombatLog.Log(string.Format(
+                        "[Commit] Team {0} f={1} mission={2} sep={3} aligned={4} support={5:F2} ratio={6:F2} " +
+                        "friendlyEta={7:F1} enemyEta={8:F1} isolation={9} permission={10} reasons={11}",
+                        own.TeamIndex, f.Index, mission.Mission, mission.Separation, aligned ? 1 : 0,
+                        decision.SupportScore, decision.LocalForceRatio,
+                        decision.FriendlyArrivalEta, decision.EnemyContactEta,
+                        decision.IsolationRisk ? 1 : 0, decision.Permission, decision.Reasons));
                 }
             }
         }

@@ -65,6 +65,7 @@
     <Compile Include="..\CombatBrain\Coordination\OperationalObjectiveSelector.cs" Link="Coordination\OperationalObjectiveSelector.cs" />
     <Compile Include="..\CombatBrain\Coordination\FormationMissionAssigner.cs" Link="Coordination\FormationMissionAssigner.cs" />
     <Compile Include="..\CombatBrain\Coordination\IsolationDetector.cs" Link="Coordination\IsolationDetector.cs" />
+    <Compile Include="..\CombatBrain\Coordination\CommitmentEvaluator.cs" Link="Coordination\CommitmentEvaluator.cs" />
   </ItemGroup>
 
 </Project>

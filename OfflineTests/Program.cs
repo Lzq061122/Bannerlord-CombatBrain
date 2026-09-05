@@ -176,6 +176,9 @@ namespace OfflineTests
             Console.WriteLine("== ATC3 Mission/Isolation ==");
             TestFormationMission();
 
+            Console.WriteLine("== ATC4 CommitmentEvaluator ==");
+            TestCommitmentEvaluator();
+
             Console.WriteLine();
             if (_failures == 0)
             {
@@ -2506,6 +2509,301 @@ namespace OfflineTests
             // 20) 常量契约
             Check(IsolationDetector.SafeDistanceMeters == 80f && IsolationDetector.SupportThreshold == 0.3f
                 && IsolationDetector.RatioThreshold == 1.0f, "atc3 isolation constants");
+        }
+
+        // ATC-4 CommitmentEvaluator（纯逻辑）：§3.4 枚举契约 + §10 判定纪律 6 条 + 80 人回归 + 例外（Flank/Intercept/Occupy）+ §4.3 Estimator
+        private static void TestCommitmentEvaluator()
+        {
+            // 1) §3.4 枚举契约：Permission 五值 0..4
+            Check((int)CommitmentPermission.Denied == 0 && (int)CommitmentPermission.Hold == 1
+                && (int)CommitmentPermission.ScreenOnly == 2 && (int)CommitmentPermission.Limited == 3
+                && (int)CommitmentPermission.Granted == 4, "atc4 permission enum 0..4");
+
+            // 2) §3.4 CommitmentReason flags 九位值
+            Check((int)CommitmentReason.None == 0 && (int)CommitmentReason.NoArmyObjective == 1
+                && (int)CommitmentReason.NotAlignedWithMainEffort == 2 && (int)CommitmentReason.InsufficientSupport == 4
+                && (int)CommitmentReason.LocalInferiority == 8 && (int)CommitmentReason.ArrivalGap == 16
+                && (int)CommitmentReason.UnauthorizedIsolation == 32 && (int)CommitmentReason.ReserveProtected == 64
+                && (int)CommitmentReason.DefensiveOverride == 128 && (int)CommitmentReason.EmergencyOverride == 256,
+                "atc4 reason flags nine bits");
+
+            // 3) 阈值常量契约
+            Check(CommitmentEvaluator.SupportThreshold == 0.3f && CommitmentEvaluator.RatioThreshold == 1.0f
+                && CommitmentEvaluator.RiskDenyCount == 2 && CommitmentEvaluator.AlignMeters == 60f,
+                "atc4 evaluator constants");
+
+            // 4) §4.3 Estimator 常量契约
+            Check(CommitmentEstimator.MinSpeed == 1.0f && CommitmentEstimator.SupportRadius == 60f
+                && CommitmentEstimator.ArrivalSlack == 10f && CommitmentEstimator.LocalRadius == 100f
+                && CommitmentEstimator.ContactClampMeters == 40f
+                && CommitmentEstimator.IntegrityCoeffMin == 0.5f && CommitmentEstimator.IntegrityCoeffMax == 1.0f,
+                "atc4 estimator constants");
+
+            // 5) 系数只读表：长度 5（五类兵种）+ 骑兵冲击 > 步兵基准
+            Check(CommitmentEstimator.KindCoefficient.Length == 5
+                && CommitmentEstimator.KindCoefficient[(int)FormationCoordKind.MeleeCavalry] > 1.0f
+                && CommitmentEstimator.KindCoefficient[(int)FormationCoordKind.Infantry] == 1.0f,
+                "atc4 kind coefficient table (cav > infantry)");
+
+            // 6) IntegrityCoefficient 边界/中点
+            CheckApprox(CommitmentEstimator.IntegrityCoefficient(0f), 0.5f, "atc4 integrity coeff min 0.5", 1e-4f);
+            CheckApprox(CommitmentEstimator.IntegrityCoefficient(1f), 1.0f, "atc4 integrity coeff max 1.0", 1e-4f);
+            CheckApprox(CommitmentEstimator.IntegrityCoefficient(0.5f), 0.75f, "atc4 integrity coeff mid 0.75", 1e-4f);
+
+            // ---- 纪律1：Retreat/Emergency 直接 override，不走普通进攻评分 ----
+
+            // 7) Emergency：全劣势输入也直接 Limited + EmergencyOverride
+            var e0 = CommitmentEvaluator.Evaluate(new CommitmentInput
+            {
+                Phase = BattlePhase.Engage, Mission = FormationMission.SupportMainEffort, Separation = SeparationIntent.None,
+                HasOperationalObjective = true, TargetAlignedWithObjective = false,
+                MainBodyDistance = 200f, DistanceIncreasing = true,
+                FriendlySupport = 0.05f, LocalForceRatio = 0.3f, FriendlyArrivalEta = 40f, EnemyContactEta = 8f,
+                EmergencyOverride = true
+            });
+            Check(e0.Permission == CommitmentPermission.Limited, "atc4 emergency override -> Limited (不走进攻评分)");
+            Check((e0.Reasons & CommitmentReason.EmergencyOverride) != 0, "atc4 emergency reason flag set");
+
+            // 8) Retreat Mission → Limited + DefensiveOverride（撤退不被 Army Commitment 否决）
+            var e1 = CommitmentEvaluator.Evaluate(new CommitmentInput
+            {
+                Phase = BattlePhase.Engage, Mission = FormationMission.Retreat, Separation = SeparationIntent.Retreat,
+                HasOperationalObjective = true, TargetAlignedWithObjective = true,
+                MainBodyDistance = 300f, DistanceIncreasing = true, FriendlySupport = 0.1f, LocalForceRatio = 0.4f,
+                FriendlyArrivalEta = 50f, EnemyContactEta = 10f
+            });
+            Check(e1.Permission == CommitmentPermission.Limited && (e1.Reasons & CommitmentReason.DefensiveOverride) != 0,
+                "atc4 retreat mission -> Limited + DefensiveOverride");
+
+            // 9) Retreat Phase（终态）→ Limited + DefensiveOverride
+            var e2 = CommitmentEvaluator.Evaluate(new CommitmentInput
+            {
+                Phase = BattlePhase.Retreat, Mission = FormationMission.SupportMainEffort, Separation = SeparationIntent.None,
+                HasOperationalObjective = true, TargetAlignedWithObjective = true,
+                MainBodyDistance = 100f, FriendlySupport = 0.8f, LocalForceRatio = 2.0f
+            });
+            Check(e2.Permission == CommitmentPermission.Limited && (e2.Reasons & CommitmentReason.DefensiveOverride) != 0,
+                "atc4 retreat phase -> Limited (撤退优先于继续进攻, §4.5)");
+
+            // 10) DefensiveOverride（Immediate Defensive：Brace/Protect/脱困）→ Limited
+            var e3 = CommitmentEvaluator.Evaluate(new CommitmentInput
+            {
+                Phase = BattlePhase.Engage, Mission = FormationMission.SupportMainEffort, Separation = SeparationIntent.None,
+                HasOperationalObjective = true, TargetAlignedWithObjective = false,
+                MainBodyDistance = 120f, FriendlySupport = 0.2f, LocalForceRatio = 0.6f, DefensiveOverride = true
+            });
+            Check(e3.Permission == CommitmentPermission.Limited && (e3.Reasons & CommitmentReason.DefensiveOverride) != 0,
+                "atc4 defensive override -> Limited (不被 Denied 锁死)");
+
+            // ---- 纪律2：已贴身接战 → Limited（不突然 Denied 原地不动） ----
+
+            // 11) InContact + 全劣势 → Limited + DefensiveOverride（允许脱困/后撤/维持接触）
+            var e4 = CommitmentEvaluator.Evaluate(new CommitmentInput
+            {
+                Phase = BattlePhase.Engage, Mission = FormationMission.SupportMainEffort, Separation = SeparationIntent.None,
+                HasOperationalObjective = true, TargetAlignedWithObjective = false,
+                MainBodyDistance = 150f, DistanceIncreasing = true,
+                FriendlySupport = 0.1f, LocalForceRatio = 0.5f, FriendlyArrivalEta = 45f, EnemyContactEta = 5f,
+                InContact = true
+            });
+            Check(e4.Permission == CommitmentPermission.Limited, "atc4 in contact -> Limited (不突然 Denied)");
+            Check((e4.Reasons & CommitmentReason.DefensiveOverride) != 0, "atc4 in contact defensive flag");
+
+            // ---- 纪律3：Reserve 默认不得主动 Charge ----
+
+            // 12) Reserve 未释放 → Hold + ReserveProtected
+            var e5 = CommitmentEvaluator.Evaluate(new CommitmentInput
+            {
+                Phase = BattlePhase.Engage, Mission = FormationMission.Reserve, Separation = SeparationIntent.Reserve,
+                HasOperationalObjective = true, TargetAlignedWithObjective = false,
+                MainBodyDistance = 20f, FriendlySupport = 0.9f, LocalForceRatio = 1.5f, IsReserve = true
+            });
+            Check(e5.Permission == CommitmentPermission.Hold && (e5.Reasons & CommitmentReason.ReserveProtected) != 0,
+                "atc4 reserve unreleased -> Hold + ReserveProtected (纪律3)");
+
+            // 13) Reserve + Army Plan 释放（HasObj+Aligned）→ 走评分（Granted，无 ReserveProtected）
+            var e6 = CommitmentEvaluator.Evaluate(new CommitmentInput
+            {
+                Phase = BattlePhase.Engage, Mission = FormationMission.Reserve, Separation = SeparationIntent.Reserve,
+                HasOperationalObjective = true, TargetAlignedWithObjective = true,
+                MainBodyDistance = 20f, FriendlySupport = 0.9f, LocalForceRatio = 1.5f, IsReserve = true
+            });
+            Check(e6.Permission == CommitmentPermission.Granted && (e6.Reasons & CommitmentReason.ReserveProtected) == 0,
+                "atc4 reserve army-released -> Granted (释放后可投入)");
+
+            // 14) Reserve + Mission=Intercept → Limited（纪律3 例外：Intercept 防御性投入不 Hold）
+            var e7 = CommitmentEvaluator.Evaluate(new CommitmentInput
+            {
+                Phase = BattlePhase.Engage, Mission = FormationMission.Intercept, Separation = SeparationIntent.Intercept,
+                HasOperationalObjective = true, TargetAlignedWithObjective = false,
+                MainBodyDistance = 30f, FriendlySupport = 0.8f, LocalForceRatio = 1.2f, IsReserve = true
+            });
+            Check(e7.Permission == CommitmentPermission.Limited && (e7.Reasons & CommitmentReason.ReserveProtected) == 0,
+                "atc4 reserve intercept -> Limited (可投入, 无保护)");
+
+            // ---- 纪律4：TacticalTarget 与 Objective 不一致不是单独死刑 ----
+
+            // 15) Screen 目标不一致 → ScreenOnly（处理次要威胁，非 Denied）
+            var e8 = CommitmentEvaluator.Evaluate(new CommitmentInput
+            {
+                Phase = BattlePhase.Engage, Mission = FormationMission.Screen, Separation = SeparationIntent.Screen,
+                HasOperationalObjective = true, TargetAlignedWithObjective = false,
+                MainBodyDistance = 180f, FriendlySupport = 0.4f, LocalForceRatio = 1.1f
+            });
+            Check(e8.Permission == CommitmentPermission.ScreenOnly, "atc4 screen misaligned -> ScreenOnly (纪律4)");
+            Check((e8.Reasons & CommitmentReason.NotAlignedWithMainEffort) == 0,
+                "atc4 screen no misalignment flag (次要威胁合法)");
+
+            // 16) Intercept 目标不一致 → Limited（非 Denied）
+            var e9 = CommitmentEvaluator.Evaluate(new CommitmentInput
+            {
+                Phase = BattlePhase.Engage, Mission = FormationMission.Intercept, Separation = SeparationIntent.Intercept,
+                HasOperationalObjective = true, TargetAlignedWithObjective = false,
+                MainBodyDistance = 150f, FriendlySupport = 0.5f, LocalForceRatio = 1.0f
+            });
+            Check(e9.Permission == CommitmentPermission.Limited, "atc4 intercept misaligned -> Limited (纪律4)");
+
+            // 17) 推进型未对齐 → NotAlignedWithMainEffort flag 置位，但单因子不单独 Denied（纪律4/5 复合）
+            var e10 = CommitmentEvaluator.Evaluate(new CommitmentInput
+            {
+                Phase = BattlePhase.Engage, Mission = FormationMission.SupportMainEffort, Separation = SeparationIntent.None,
+                HasOperationalObjective = true, TargetAlignedWithObjective = false,
+                MainBodyDistance = 100f, FriendlySupport = 0.7f, LocalForceRatio = 1.4f
+            });
+            Check((e10.Reasons & CommitmentReason.NotAlignedWithMainEffort) != 0, "atc4 misalignment flag on advance mission");
+            Check(e10.Permission == CommitmentPermission.Granted, "atc4 misalignment alone not denied (纪律4 非死刑)");
+
+            // ---- 纪律5：Support+LocalInferiority+Isolation ≥2 才 Denied（防单阈值误杀） ----
+
+            // 18) 三因子全中 → Denied（推进型）
+            var e11 = CommitmentEvaluator.Evaluate(new CommitmentInput
+            {
+                Phase = BattlePhase.Engage, Mission = FormationMission.SupportMainEffort, Separation = SeparationIntent.None,
+                HasOperationalObjective = true, TargetAlignedWithObjective = false,
+                MainBodyDistance = 200f, DistanceIncreasing = true,
+                FriendlySupport = 0.1f, LocalForceRatio = 0.5f, FriendlyArrivalEta = 40f, EnemyContactEta = 10f
+            });
+            Check(e11.Permission == CommitmentPermission.Denied, "atc4 three factors -> Denied (纪律5)");
+
+            // 19) 单因子（仅 Support 不足）→ 不 Denied（Granted；纪律5 防误杀）
+            var e12 = CommitmentEvaluator.Evaluate(new CommitmentInput
+            {
+                Phase = BattlePhase.Engage, Mission = FormationMission.SupportMainEffort, Separation = SeparationIntent.None,
+                HasOperationalObjective = true, TargetAlignedWithObjective = true,
+                MainBodyDistance = 40f, FriendlySupport = 0.2f, LocalForceRatio = 1.6f
+            });
+            Check(e12.Permission == CommitmentPermission.Granted, "atc4 single factor support -> not denied");
+
+            // 20) 两因子（Support+Local，无隔离）→ Denied
+            var e13 = CommitmentEvaluator.Evaluate(new CommitmentInput
+            {
+                Phase = BattlePhase.Engage, Mission = FormationMission.SupportMainEffort, Separation = SeparationIntent.None,
+                HasOperationalObjective = true, TargetAlignedWithObjective = true,
+                MainBodyDistance = 60f, FriendlySupport = 0.2f, LocalForceRatio = 0.6f
+            });
+            Check(e13.Permission == CommitmentPermission.Denied, "atc4 two factors (support+local) -> Denied (纪律5 恰好两项)");
+
+            // 21) 无 Army Objective 推进型 → Hold + NoArmyObjective（不主动推进）
+            var e14 = CommitmentEvaluator.Evaluate(new CommitmentInput
+            {
+                Phase = BattlePhase.Advance, Mission = FormationMission.SupportMainEffort, Separation = SeparationIntent.None,
+                HasOperationalObjective = false, TargetAlignedWithObjective = false,
+                MainBodyDistance = 80f, FriendlySupport = 0.8f, LocalForceRatio = 1.8f
+            });
+            Check(e14.Permission == CommitmentPermission.Hold && (e14.Reasons & CommitmentReason.NoArmyObjective) != 0,
+                "atc4 no objective -> Hold + NoArmyObjective");
+
+            // ---- 80 人回归正式断言（§10：Denied 或 Hold，Reasons 含三因子，不得 Granted） ----
+
+            // 22-24) 80 人案例：Mission=SupportMainEffort/Separation=None、敌 Main Body 显著更强、Parent 未 commit、支援晚到
+            var r80 = CommitmentEvaluator.Evaluate(new CommitmentInput
+            {
+                Phase = BattlePhase.Advance, Mission = FormationMission.SupportMainEffort, Separation = SeparationIntent.None,
+                HasOperationalObjective = true, TargetAlignedWithObjective = false, // Parent 未对同一 Objective commit
+                MainBodyDistance = 180f, DistanceIncreasing = true,
+                FriendlySupport = 0.1f, LocalForceRatio = 0.6f, FriendlyArrivalEta = 42f, EnemyContactEta = 11.5f
+            });
+            Check(r80.Permission == CommitmentPermission.Denied || r80.Permission == CommitmentPermission.Hold,
+                "atc4 80-men case -> Denied or Hold");
+            Check(r80.Permission != CommitmentPermission.Granted, "atc4 80-men case never Granted");
+            Check((r80.Reasons & CommitmentReason.InsufficientSupport) != 0
+                && (r80.Reasons & CommitmentReason.LocalInferiority) != 0
+                && (r80.Reasons & CommitmentReason.UnauthorizedIsolation) != 0,
+                "atc4 80-men reasons contain three factors (flags 完整)");
+
+            // ---- 例外：Flank/Intercept/Occupy 合法远离不自动 Denied（R2 骑兵合法侧击） ----
+
+            // 25) Flank 合法侧击：远离 MainBody + 支援正常 + 局部均衡 → Granted（不因距离召回）
+            var f0 = CommitmentEvaluator.Evaluate(new CommitmentInput
+            {
+                Phase = BattlePhase.Engage, Mission = FormationMission.Flank, Separation = SeparationIntent.Flank,
+                HasOperationalObjective = true, TargetAlignedWithObjective = false, // 侧击目标非主目标（合法）
+                MainBodyDistance = 220f, DistanceIncreasing = true,
+                FriendlySupport = 0.5f, LocalForceRatio = 1.2f, FriendlyArrivalEta = 30f, EnemyContactEta = 40f
+            });
+            Check(f0.Permission == CommitmentPermission.Granted, "atc4 flank far away -> Granted (合法侧击不召回)");
+
+            // 26) Occupy 合法远离低风险 → Granted（不自动 Denied）
+            var f1 = CommitmentEvaluator.Evaluate(new CommitmentInput
+            {
+                Phase = BattlePhase.Advance, Mission = FormationMission.Occupy, Separation = SeparationIntent.Occupy,
+                HasOperationalObjective = true, TargetAlignedWithObjective = false,
+                MainBodyDistance = 250f, DistanceIncreasing = true,
+                FriendlySupport = 0.6f, LocalForceRatio = 1.3f, FriendlyArrivalEta = 35f, EnemyContactEta = 45f
+            });
+            Check(f1.Permission == CommitmentPermission.Granted, "atc4 occupy far away -> Granted (例外不误杀)");
+
+            // ---- §4.3 Estimator 纯函数 ----
+
+            // 27) EffectiveStrength = Count × KindCoefficient × IntegrityCoefficient
+            float effInf = CommitmentEstimator.EffectiveStrength(80, FormationCoordKind.Infantry, 1f);
+            float effCav = CommitmentEstimator.EffectiveStrength(80, FormationCoordKind.MeleeCavalry, 1f);
+            CheckApprox(effInf, 80f, "atc4 effective strength infantry 80", 1e-3f);
+            CheckApprox(effCav, 80f * 1.2f, "atc4 effective strength cavalry x1.2", 1e-3f);
+            CheckApprox(CommitmentEstimator.EffectiveStrength(100, FormationCoordKind.Infantry, 0f), 50f,
+                "atc4 effective strength integrity 0 -> x0.5", 1e-3f);
+
+            // 28) ETA = dist / max(NominalSpeed, MinSpeed)（低速下限）
+            CheckApprox(CommitmentEstimator.Eta(100f, 10f), 10f, "atc4 eta 100m @10m/s = 10s", 1e-3f);
+            CheckApprox(CommitmentEstimator.Eta(100f, 0.2f), 100f, "atc4 eta low speed floored at MinSpeed", 1e-3f);
+
+            // 29) ContactPoint：连线方向 + 40m 截断（不过冲）
+            float cx, cy, d;
+            CommitmentEstimator.ContactPoint(0f, 0f, 200f, 0f, out cx, out cy, out d);
+            CheckApprox(cx, 40f, "atc4 contact point clamped 40m", 1e-3f);
+            CheckApprox(d, 40f, "atc4 contact distance 40m", 1e-3f);
+            CommitmentEstimator.ContactPoint(0f, 0f, 20f, 0f, out cx, out cy, out d);
+            CheckApprox(cx, 20f, "atc4 contact point short dist unclamped", 1e-3f);
+            CheckApprox(d, 20f, "atc4 contact distance 20m", 1e-3f);
+
+            // 30) FriendlySupport：只算 SupportRadius 内 且 ETA <= 自身 ETA + ArrivalSlack 的己方编队
+            var friendlies = new List<FormationCoordSnapshot>
+            {
+                new FormationCoordSnapshot { FormationId = 1, Count = 50, X = 10f, Y = 0f, Kind = FormationCoordKind.Infantry, Integrity = 1f, NominalSpeed = 4f, IsKnown = true },  // 近 + 及时
+                new FormationCoordSnapshot { FormationId = 2, Count = 50, X = 200f, Y = 0f, Kind = FormationCoordKind.Infantry, Integrity = 1f, NominalSpeed = 4f, IsKnown = true }   // 远（>60m 半径）
+            };
+            // 自身 A：80 步兵 @(0,0)，目标 @(200,0)，速度 4m/s → selfEta=40/4=10s
+            var est0 = CommitmentEstimator.Estimate(0f, 0f, 200f, 0f, 4f,
+                80, FormationCoordKind.Infantry, 1f, friendlies, null);
+            CheckApprox(est0.SelfEta, 10f, "atc4 self eta 10s", 1e-3f);
+            // 支援 1（10m 处，eta=2.5s ≤ 10+10）计入；支援 2（200m 处，>60m 半径）不计 → support=50/180
+            CheckApprox(est0.FriendlySupport, 50f / 180f, "atc4 friendly support radius+eta gated", 1e-3f);
+            CheckApprox(est0.FriendlyEta, 2.5f, "atc4 friendly eta min support", 1e-3f);
+
+            // 31) Fog 一致：未知敌不参与 EnemyLocalForce（§2.2.2）
+            var enemies = new List<FormationCoordSnapshot>
+            {
+                new FormationCoordSnapshot { FormationId = 10, Count = 300, X = 100f, Y = 0f, Kind = FormationCoordKind.Infantry, Integrity = 1f, NominalSpeed = 4f, IsKnown = false }, // 未知大敌 → 排除
+                new FormationCoordSnapshot { FormationId = 11, Count = 60, X = 45f, Y = 0f, Kind = FormationCoordKind.Infantry, Integrity = 1f, NominalSpeed = 4f, IsKnown = true }
+            };
+            // 自身 A @(0,0) 目标 @(200,0)：contact=(40,0)；敌 11 距 contact 5m ≤100m 且 eta=5/4=1.25 ≤ 10+10 → 计入
+            var est1 = CommitmentEstimator.Estimate(0f, 0f, 200f, 0f, 4f,
+                80, FormationCoordKind.Infantry, 1f, friendlies, enemies);
+            CheckApprox(est1.EnemyLocalForce, 60f, "atc4 unknown enemy excluded from local force (迷雾)", 1e-3f);
+
+            // 32) LocalForceRatio = (自身+支援) / max(敌局部, 1)
+            // 自身 80 + 支援 50 = 130；敌局部 60 → ratio = 130/60
+            CheckApprox(est1.LocalForceRatio, 130f / 60f, "atc4 local force ratio (self+support)/enemy", 1e-3f);
         }
 
         private static int idxDefend()
