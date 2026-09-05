@@ -81,6 +81,32 @@ namespace CombatBrain.Coordination
     }
 
     /// <summary>
+    /// 编队接敌判定（atc4-fog-contact-fix P0-2 纯函数）：己方编队中心与任一已知敌编队中心距离 ≤
+    /// contactMeters 视为贴身接战。只消费 IsKnown=true 的敌编队——未知敌（迷雾未观测/超期）不得参与
+    /// 接敌状态/局部兵力/接触 ETA/Commitment 等级及原因码（统一 IsKnown 迷雾契约，规格 §2.2.2）。
+    /// FogOfWar 关闭时胶水层 IsEnemyFormationKnown 直通 true（快照 IsKnown=true），同一敌按已知参与——
+    /// 本函数不做 Fog 开关判断，语义由快照构建层保证。
+    /// </summary>
+    public static class CommitmentContact
+    {
+        /// <summary>是否贴身接战（O(F)，只查已知敌编队）。enemySnaps 为 null/空 → false。</summary>
+        public static bool IsInContact(float fx, float fy, IList<FormationCoordSnapshot> enemySnaps, float contactMeters)
+        {
+            if (enemySnaps == null || contactMeters <= 0f) return false;
+            float sq = contactMeters * contactMeters;
+            for (int i = 0; i < enemySnaps.Count; i++)
+            {
+                FormationCoordSnapshot e = enemySnaps[i];
+                if (e.FormationId < 0) continue;
+                if (!e.IsKnown) continue; // P0-2：未知敌不参与接敌判定（迷雾契约）
+                float dx = e.X - fx, dy = e.Y - fy;
+                if (dx * dx + dy * dy <= sq) return true;
+            }
+            return false;
+        }
+    }
+
+    /// <summary>
     /// 编队距离趋势判定（atc4-fix finding1 纯函数）：per-formation 距离基线的读/判时序辅助。
     /// 用途：ATC-3（TickFormationMissions）与 ATC-4（TickCommitment）各自维护独立基线字典，
     ///   避免共享字典同拍「先写后读」导致 ATC-4 读到本拍已更新值、distIncreasing 恒 false

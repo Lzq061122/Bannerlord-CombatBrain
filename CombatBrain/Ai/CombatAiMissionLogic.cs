@@ -822,13 +822,11 @@ namespace CombatBrain.Ai
                 if (!state.CommitmentPrevDist.TryGetValue(f.Index, out prevDist)) prevDist = 0f;
                 bool distIncreasing = FormationDistanceTrend.IsIncreasing(prevDist, dist);
 
-                // [临时还原 P0-2 前] inContact 判定（P0-2 提交恢复为 CommitmentContact.IsInContact）
-                bool inContact = false;
-                for (int i = 0; i < enemySnaps.Count; i++)
-                {
-                    FormationCoordSnapshot e = enemySnaps[i];
-                    if (VecMath.Dist(fc.x, fc.y, e.X, e.Y) <= CommitmentContactMeters) { inContact = true; break; }
-                }
+                // atc4-fog-contact-fix P0-2：InContact 判定走 CommitmentContact.IsInContact 纯函数——
+                //   只消费 IsKnown=true 的敌编队（未知敌不参与接敌状态/局部兵力/接触 ETA/Commitment 等级及原因码，
+                //   统一 IsKnown 迷雾契约）；TeamGeometry CachedMedian 口径；纪律2 由此真实生效：
+                //   接战中返回 Limited 而非突然 Denied 原地不动。
+                bool inContact = CommitmentContact.IsInContact(fc.x, fc.y, enemySnaps, CommitmentContactMeters);
 
                 // 候选目标：X1 目标缓存优先（TacticalTarget）；无 → Operational Objective 中心；再无 → 无候选（跳评）
                 TargetSelection sel;

@@ -155,6 +155,9 @@ namespace OfflineTests
             Console.WriteLine("== atc4-perc PerceptionPipeline 完整流程 ==");
             TestPerceptionPipeline();
 
+            Console.WriteLine("== atc4-fog CommitmentContact ==");
+            TestCommitmentContact();
+
             Console.WriteLine("== N1 NarratorPure ==");
             TestNarratorPure();
 
@@ -2877,7 +2880,54 @@ namespace OfflineTests
             Check(!PerceptionFilter.IsKnown(true, false), "atc4-perc fog-on unseen -> unknown (保守降级)");
         }
 
-        // [临时移除 P0-2 测试方法：TestCommitmentContact 将在 atc4-fog-contact-fix 提交恢复]
+        // atc4-fog-contact-fix P0-2：未知敌不触发 InContact（四场景 + 迷雾契约）
+        private static void TestCommitmentContact()
+        {
+            const float ContactMeters = 20f; // 与胶水层 CommitmentContactMeters 同口径
+
+            // 1) 未知敌 10m → 不触发 InContact（IsKnown=false 排除）
+            var unknown10 = new List<FormationCoordSnapshot>
+            {
+                new FormationCoordSnapshot { FormationId = 1, Count = 80, X = 10f, Y = 0f, IsKnown = false }
+            };
+            Check(!CommitmentContact.IsInContact(0f, 0f, unknown10, ContactMeters),
+                "atc4-fog unknown enemy @10m -> no contact (迷雾排除)");
+
+            // 2) 已知敌 10m → 触发 InContact
+            var known10 = new List<FormationCoordSnapshot>
+            {
+                new FormationCoordSnapshot { FormationId = 1, Count = 80, X = 10f, Y = 0f, IsKnown = true }
+            };
+            Check(CommitmentContact.IsInContact(0f, 0f, known10, ContactMeters),
+                "atc4-fog known enemy @10m -> contact");
+
+            // 3) 未知近（5m）+ 已知远（100m）→ 按未接敌（未知不参与，已知超 20m）
+            var mix = new List<FormationCoordSnapshot>
+            {
+                new FormationCoordSnapshot { FormationId = 1, Count = 200, X = 5f, Y = 0f, IsKnown = false },   // 未知很近
+                new FormationCoordSnapshot { FormationId = 2, Count = 60, X = 100f, Y = 0f, IsKnown = true }    // 已知很远
+            };
+            Check(!CommitmentContact.IsInContact(0f, 0f, mix, ContactMeters),
+                "atc4-fog unknown near + known far -> no contact");
+
+            // 4) FogOff 后同一敌按已知参与（快照 IsKnown=true 模拟 IsEnemyFormationKnown 直通）
+            var fogOff = new List<FormationCoordSnapshot>
+            {
+                new FormationCoordSnapshot { FormationId = 1, Count = 80, X = 10f, Y = 0f, IsKnown = true } // 关闭迷雾=直通 known
+            };
+            Check(CommitmentContact.IsInContact(0f, 0f, fogOff, ContactMeters),
+                "atc4-fog fog-off same enemy treated known -> contact");
+
+            // 5) 边界：null/空列表 → false；恰好 20m → 触发（<= 含界）
+            Check(!CommitmentContact.IsInContact(0f, 0f, null, ContactMeters), "atc4-fog null snaps -> no contact");
+            var empty = new List<FormationCoordSnapshot>();
+            Check(!CommitmentContact.IsInContact(0f, 0f, empty, ContactMeters), "atc4-fog empty snaps -> no contact");
+            var boundary = new List<FormationCoordSnapshot>
+            {
+                new FormationCoordSnapshot { FormationId = 1, Count = 40, X = 20f, Y = 0f, IsKnown = true }
+            };
+            Check(CommitmentContact.IsInContact(0f, 0f, boundary, ContactMeters), "atc4-fog exact 20m boundary -> contact");
+        }
 
         private static int idxDefend()
         {
