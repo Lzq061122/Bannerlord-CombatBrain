@@ -162,6 +162,9 @@ namespace OfflineTests
             Console.WriteLine("== ATC0 CommandProvenance ==");
             TestCommandProvenance();
 
+            Console.WriteLine("== ATC0 OutputLayer ==");
+            TestProvenanceOutput();
+
             Console.WriteLine();
             if (_failures == 0)
             {
@@ -2090,6 +2093,59 @@ namespace OfflineTests
             p6.Record(1, CommandSource.Cavalry, CommandKind.Charge);
             p6.Record(2, CommandSource.Morale, CommandKind.Retreat);
             Check(!p6.At(0).WasOverridden, "atc0 different formation same tick not overridden (隔离)");
+        }
+
+        // ATC-0 输出层（GetDirtyFormations/BuildOrderTrace/BuildSourceAggregate 纯逻辑）：窗口限频/只输出覆盖与变化/聚合计数/格式字段顺序
+        private static void TestProvenanceOutput()
+        {
+            // 1) 5s 汇总限频：窗口外记录不进入 dirty（GetDirtyFormations(start, now) 只查窗口内）
+            var p = new CommandProvenance();
+            p.BeginLogicalTick(0f);
+            p.Record(1, CommandSource.Cavalry, CommandKind.Charge);   // t=0 窗口外
+            p.BeginLogicalTick(20f);
+            p.Record(1, CommandSource.Morale, CommandKind.Retreat);   // t=20 窗口内（单条，无覆盖无变化）
+            p.BeginLogicalTick(30f);
+            p.Record(1, CommandSource.Cavalry, CommandKind.Charge);   // t=30 窗口外
+            var dirtySingle = p.GetDirtyFormations(19f, 21f);          // 窗口 [19,21) 只含 t=20 单条
+            Check(dirtySingle.Count == 0, "atc0 windowed single record no change -> not dirty");
+            var dirtyOver = p.GetDirtyFormations(19f, 21f);            // 同上（无覆盖）
+            Check(dirtyOver.Count == 0, "atc0 windowed no override no change -> not dirty");
+            var dirtyOld = p.GetDirtyFormations(25f, 30f);            // 窗口 [25,30) 无记录
+            Check(dirtyOld.Count == 0, "atc0 dirty only windowed (t=0/20/30 outside)");
+
+            // 2) 只输出有覆盖的 Formation：无覆盖无变化的编队不出现在 dirty
+            var p2 = new CommandProvenance();
+            p2.BeginLogicalTick(0f);
+            p2.Record(2, CommandSource.Protect, CommandKind.Move); // 无覆盖
+            p2.BeginLogicalTick(1f);
+            p2.Record(2, CommandSource.Brace, CommandKind.Hold);   // 跨拍 → 不判覆盖，但 Kind 变化 Move→Hold → dirty
+            var d2 = p2.GetDirtyFormations(0f, 2f);
+            Check(d2.Contains(2), "atc0 dirty by kind change (Move->Hold)");
+            // 稳定编队（同 Kind 持续）不 dirty
+            var p3 = new CommandProvenance();
+            p3.BeginLogicalTick(0f);
+            p3.Record(3, CommandSource.Cavalry, CommandKind.Hold);
+            p3.BeginLogicalTick(1f);
+            p3.Record(3, CommandSource.Cavalry, CommandKind.Hold);
+            Check(p3.GetDirtyFormations(0f, 2f).Count == 0, "atc0 stable same-kind not dirty");
+
+            // 3) BuildOrderTrace §14 格式：覆盖链 "Protect:Move → Brace:Hold(overrode Protect) → final=Hold"
+            var p4 = new CommandProvenance();
+            p4.BeginLogicalTick(0f);
+            p4.Record(4, CommandSource.Protect, CommandKind.Move);
+            p4.Record(4, CommandSource.Brace, CommandKind.Hold); // 同拍覆盖
+            string trace = p4.BuildOrderTrace(4);
+            Check(trace == "Protect:Move → Brace:Hold(overrode Protect) → final=Hold", "atc0 OrderTrace format §14");
+            Check(p4.BuildOrderTrace(99) == string.Empty, "atc0 OrderTrace unknown formation -> empty");
+
+            // 4) BuildSourceAggregate：按 Source 统计命令数/覆盖数
+            var p5 = new CommandProvenance();
+            p5.BeginLogicalTick(0f);
+            p5.Record(5, CommandSource.Cavalry, CommandKind.Charge);
+            p5.Record(5, CommandSource.Morale, CommandKind.Retreat); // 覆盖 Cavalry
+            string agg = p5.BuildSourceAggregate();
+            Check(agg.Contains("Cavalry=1/o1") && agg.Contains("Morale=1/o0"), "atc0 source aggregate counts+overrides");
+            Check(agg.Contains("Protect=0/o0"), "atc0 source aggregate zero source included (固定顺序)");
         }
 
         private static int idxDefend()

@@ -76,6 +76,7 @@ namespace CombatBrain.Ai
         private float _intentTimer;
         private float _blockTimer;
         private float _formationLogTimer; // 日志增强：编队明细快照 5s 节拍
+        private float _provenanceTimer;   // ATC-0 命令来源 5s 汇总节拍（只输出覆盖/命令变化 Formation）
         private float _anomalyTimer;       // T39-01 异常检测节拍（0.5s 低频，O(队数×编队数)）
         private float _tacticsTimer;       // T2-01 阵型三态节拍（0.5s 编队级）
         private float _formationSlotsTimer; // X5-6 槽位布局节拍（0.5s 编队级，TickFormationTactics 之后）
@@ -258,6 +259,14 @@ namespace CombatBrain.Ai
             {
                 _formationLogTimer = 5f;
                 LogFormationDetails(mission);
+            }
+
+            // ATC-0 输出层：5s 汇总——只输出有覆盖/命令变化的 Formation（规格 §14，禁每拍每队刷日志）。
+            _provenanceTimer -= dt;
+            if (_provenanceTimer <= 0f)
+            {
+                _provenanceTimer = 5f;
+                LogProvenanceSummary();
             }
 
             _bench.BeginSection("perception");
@@ -743,6 +752,33 @@ namespace CombatBrain.Ai
             }
         }
 
+        // ATC-0 输出层：5s 汇总——只输出窗口内有覆盖/命令变化的 Formation（规格 §14 OrderTrace 格式：
+        //   [OrderTrace] team= f= tick= Source:Kind → Source:Kind(overrode) → final=Kind 固定字段顺序）。
+        // 反作弊闸：只读既有 CommandProvenance 记录数据，零新增游戏读取；5s 低频无逐帧分配。
+        private void LogProvenanceSummary()
+        {
+            float start = _elapsed - 5f;
+            var dirty = CommandProvenance.Instance.GetDirtyFormations(start, _elapsed);
+            if (dirty.Count == 0) return; // 无覆盖/命令变化 → 不刷日志
+            for (int i = 0; i < dirty.Count; i++)
+            {
+                int fid = dirty[i];
+                string trace = CommandProvenance.Instance.BuildOrderTrace(fid);
+                if (string.IsNullOrEmpty(trace)) continue;
+                CombatLog.Log(string.Format("[OrderTrace] f={0} tick={1:F1} {2}",
+                    fid, _elapsed, trace));
+            }
+        }
+
+        // ATC-0 战斗结束输出：按 CommandSource 聚合命令数/覆盖数（CombatLog 单渠道，规格 §14）。
+        // 反作弊闸：只读既有记录数据；OnMissionStateFinalized/OnClearScene 双钩子幂等调用。
+        private void LogProvenanceAggregate()
+        {
+            string agg = CommandProvenance.Instance.BuildSourceAggregate();
+            if (!string.IsNullOrEmpty(agg))
+                CombatLog.Log("[OrderTraceAgg] " + agg);
+        }
+
         // 编队"实际在射"比例：FormationQuerySystem.MakingRangedAttackRatio 按人数加权均值（引擎缓存）。
         // 弹药告罄的射手不再射击 → 该比例自然衰减，作为弹药余量的可观察代理（非逐兵读取）。
         // T4：0.5s 窗口缓存（带锁 WindowCache，键=队索引），避免同窗口内对同一队重复迭代编队聚合。
@@ -1022,6 +1058,7 @@ namespace CombatBrain.Ai
         {
             base.OnMissionStateFinalized();
             _experience.OnMissionEnd();
+            LogProvenanceAggregate(); // ATC-0 战斗结束按 CommandSource 聚合（幂等：只在收尾钩子输出一次）
             SaveTelemetry();
         }
 
@@ -1029,6 +1066,7 @@ namespace CombatBrain.Ai
         {
             base.OnClearScene();
             _experience.OnMissionEnd();
+            LogProvenanceAggregate(); // ATC-0 战斗结束聚合（OnClearScene 兜底，幂等）
             SaveTelemetry();
         }
 

@@ -142,5 +142,85 @@ namespace CombatBrain.Coordination
             int idx;
             return _lastByFormation.TryGetValue(formationId, out idx) ? idx : -1;
         }
+
+        // ---- ATC-0 输出层（t34 补齐；只读既有记录数据，零新增游戏读取）----
+
+        // 5s 汇总只输出「有覆盖 / 命令变化」的 Formation（禁每拍每队刷日志，规格 §14）：
+        // 收集在 [start, now) 窗口内有 WasOverridden 或 Kind 变化（同 Formation 相邻记录 Kind 不同）的 FormationId。
+        public System.Collections.Generic.List<int> GetDirtyFormations(float start, float now)
+        {
+            var dirty = new System.Collections.Generic.List<int>();
+            for (int i = 0; i < _count; i++)
+            {
+                FormationDecisionTrace t = At(i);
+                if (t.FormationId < 0) continue;
+                if (t.Time < start || t.Time >= now) continue; // 只查窗口内
+                if (t.WasOverridden) { if (!dirty.Contains(t.FormationId)) dirty.Add(t.FormationId); continue; }
+                // 命令变化：同 Formation 上一条（窗口内较早）Kind 不同
+                for (int j = i + 1; j < _count; j++)
+                {
+                    FormationDecisionTrace u = At(j);
+                    if (u.FormationId != t.FormationId) continue;
+                    if (u.Time < start || u.Time >= now) continue;
+                    if (u.Kind != t.Kind) { if (!dirty.Contains(t.FormationId)) dirty.Add(t.FormationId); }
+                    break;
+                }
+            }
+            return dirty;
+        }
+
+        /// <summary>
+        /// §14 OrderTrace 覆盖链格式：该 Formation 全部记录（按时间升序）重建覆盖链，
+        /// 输出 "Source:Kind → Source:Kind(overrode PrevSource) → ... → final=Kind"。
+        /// 覆盖标注加在「覆盖者」上（本条覆盖了前一条时）。空/无该编队 → 空串。只读记录数据。
+        /// </summary>
+        public string BuildOrderTrace(int formationId)
+        {
+            int idx = LastIndex(formationId);
+            if (idx < 0) return string.Empty;
+
+            // 收集该编队全部记录（按时间升序），重建覆盖链
+            var chain = new System.Collections.Generic.List<FormationDecisionTrace>();
+            for (int i = 0; i < _count; i++)
+            {
+                FormationDecisionTrace t = At(i);
+                if (t.FormationId == formationId) chain.Add(t);
+            }
+            if (chain.Count == 0) return string.Empty;
+
+            var sb = new System.Text.StringBuilder();
+            for (int i = 0; i < chain.Count; i++)
+            {
+                FormationDecisionTrace t = chain[i];
+                if (i > 0) sb.Append(" → ");
+                sb.Append(t.Source.ToString()).Append(":").Append(t.Kind.ToString());
+                // 本条是覆盖者：前一条 WasOverridden 且 OverriddenBy == 本条 Source
+                if (i > 0 && chain[i - 1].WasOverridden && chain[i - 1].OverriddenBy == t.Source)
+                    sb.Append("(overrode ").Append(chain[i - 1].Source.ToString()).Append(")");
+            }
+            sb.Append(" → final=").Append(chain[chain.Count - 1].Kind.ToString());
+            return sb.ToString();
+        }
+
+        /// <summary>按 CommandSource 聚合（命令数/覆盖数，全部 9 源固定顺序输出 0/o0 亦含），供战斗结束输出。只读记录数据。</summary>
+        public string BuildSourceAggregate()
+        {
+            var sb = new System.Text.StringBuilder();
+            int srcCount = System.Enum.GetValues(typeof(CommandSource)).Length;
+            for (int s = 0; s < srcCount; s++)
+            {
+                int total = 0, overridden = 0;
+                for (int i = 0; i < _count; i++)
+                {
+                    FormationDecisionTrace t = At(i);
+                    if (t.Source != (CommandSource)s) continue;
+                    total++;
+                    if (t.WasOverridden) overridden++;
+                }
+                sb.Append((CommandSource)s).Append("=").Append(total)
+                  .Append("/o").Append(overridden).Append(";");
+            }
+            return sb.ToString();
+        }
     }
 }
