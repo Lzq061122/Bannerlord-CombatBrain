@@ -2811,6 +2811,27 @@ namespace OfflineTests
             // 32) LocalForceRatio = (自身+支援) / max(敌局部, 1)
             // 自身 80 + 支援 50 = 130；敌局部 60 → ratio = 130/60
             CheckApprox(est1.LocalForceRatio, 130f / 60f, "atc4 local force ratio (self+support)/enemy", 1e-3f);
+
+            // ---- atc4-fix finding1：距离基线时序修复（共享字典同拍先写后读 → distIncreasing 恒 false） ----
+
+            // 33) 修复前语义（共享字典）：ATC-3 先写本拍 → ATC-4 读本拍已更新值 → distIncreasing 恒 false（bug 可复现）
+            var sharedBaseline = new Dictionary<int, float> { { 0, 100f } }; // 上拍基线
+            sharedBaseline[0] = 120f; // ATC-3 写本拍距离（共享字典被污染）
+            Check(!FormationDistanceTrend.IsIncreasing(sharedBaseline[0], 120f),
+                "atc4-fix shared baseline read-after-write -> distIncreasing false (bug 语义)");
+
+            // 34) 修复后（独立字典）：ATC-3 写本拍不影响 ATC-4 读到自己上一拍基线 → 距离增加真实反映
+            var d3 = new Dictionary<int, float> { { 0, 100f } }; // ATC-3 基线（上拍）
+            var d4 = new Dictionary<int, float> { { 0, 100f } }; // ATC-4 基线（上拍）
+            d3[0] = 120f; // ATC-3 写本拍（独立字典，不污染 ATC-4）
+            float atc4Prev = d4[0]; // ATC-4 读自己上一拍 → 100
+            Check(FormationDistanceTrend.IsIncreasing(atc4Prev, 120f),
+                "atc4-fix split baseline atc4 reads prev tick -> distIncreasing true (修复)");
+
+            // 35) FormationDistanceTrend 纯函数边界：首拍无基线（0 缺省）→ 非增加；等距/缩短 → 非增加
+            Check(!FormationDistanceTrend.IsIncreasing(0f, 120f), "atc4-fix first tick no baseline -> not increasing");
+            Check(!FormationDistanceTrend.IsIncreasing(100f, 100f), "atc4-fix same distance -> not increasing");
+            Check(!FormationDistanceTrend.IsIncreasing(120f, 100f), "atc4-fix closing distance -> not increasing");
         }
 
         private static int idxDefend()

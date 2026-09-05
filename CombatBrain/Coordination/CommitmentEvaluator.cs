@@ -80,6 +80,21 @@ namespace CombatBrain.Coordination
         public float EnemyContactEta;           // 敌预计接触（s）
     }
 
+    /// <summary>
+    /// 编队距离趋势判定（atc4-fix finding1 纯函数）：per-formation 距离基线的读/判时序辅助。
+    /// 用途：ATC-3（TickFormationMissions）与 ATC-4（TickCommitment）各自维护独立基线字典，
+    ///   避免共享字典同拍「先写后读」导致 ATC-4 读到本拍已更新值、distIncreasing 恒 false
+    ///   （Shadow Gate 审计失真）。语义：prevDist &gt; 0（首拍缺省 0=无趋势）且本拍距离大于上拍 → 距离增加。
+    /// </summary>
+    public static class FormationDistanceTrend
+    {
+        /// <summary>判定距离趋势：上拍基线有效（&gt;0）且本拍距离更大。</summary>
+        public static bool IsIncreasing(float prevDist, float dist)
+        {
+            return prevDist > 0f && dist > prevDist;
+        }
+    }
+
     /// <summary>§10 Commitment 统一许可判定（纯函数）。判定纪律 6 条逐条落实，详见各分支注释。</summary>
     public static class CommitmentEvaluator
     {

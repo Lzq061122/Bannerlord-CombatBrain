@@ -68,10 +68,12 @@ namespace CombatBrain.Ai
             public FormationMission Mission = FormationMission.SupportMainEffort;
             public SeparationIntent Separation = SeparationIntent.None;
             public IsolationDecision Isolation;
-            // atc4 nits 收口：FormationPrevDist 单字段共享基线（ATC-3/ATC-4 同拍互写、只保留最后一个编队的
-            //   近似）改为 per-formation 基线——键=Formation.Index、值=上拍该编队距 MainBody 距离（首拍缺省 0）。
-            //   距离趋势（DistanceIncreasing）按各编队自身历史判定，行为等价（零命令/阈值变化，影子输出更准）。
-            public readonly Dictionary<int, float> FormationPrevDist = new Dictionary<int, float>();
+            // atc4-fix finding1：距离趋势基线拆分为 ATC-3/ATC-4 两个独立 per-formation 字典（键=Formation.Index、
+            //   值=上拍该编队距 MainBody 距离，首拍缺省 0）。共享单字典会「同拍先写后读」（TickFormationMissions
+            //   先写本拍 → TickCommitment 后读本拍值）→ ATC-4 distIncreasing 恒 false（Shadow Gate 审计失真）。
+            //   各层按自身编队历史判趋势（FormationDistanceTrend.IsIncreasing 纯函数），零命令/阈值变化。
+            public readonly Dictionary<int, float> MissionPrevDist = new Dictionary<int, float>();      // ATC-3 距离趋势基线
+            public readonly Dictionary<int, float> CommitmentPrevDist = new Dictionary<int, float>();   // ATC-4 距离趋势基线（独立）
 
             // ATC-4 Commitment 影子判定（0.5s；每编队一条，只记录「若执行层接线将允许/拒绝什么」，零行为变化）。
             // 键=Formation.Index；日志变化才写（Permission/Reasons 边沿），禁每拍每队刷。
@@ -708,10 +710,10 @@ namespace CombatBrain.Ai
                 if (f == null || f.CountOfUnits == 0 || f.QuerySystem == null) continue;
                 Vec2 pos = TeamGeometry.GetFormationPosition(f, TeamPosKind.CachedMedian);
                 float dist = (float)Math.Sqrt((pos.x - mbX) * (pos.x - mbX) + (pos.y - mbY) * (pos.y - mbY));
-                // atc4 nits 收口：per-formation 距离趋势基线（键=Formation.Index；首拍缺省 0=无趋势）
+                // atc4-fix finding1：ATC-3 用独立 MissionPrevDist 基线（per-formation；首拍缺省 0=无趋势）
                 float prevDist;
-                if (!state.FormationPrevDist.TryGetValue(f.Index, out prevDist)) prevDist = 0f;
-                bool distIncreasing = prevDist > 0f && dist > prevDist;
+                if (!state.MissionPrevDist.TryGetValue(f.Index, out prevDist)) prevDist = 0f;
+                bool distIncreasing = FormationDistanceTrend.IsIncreasing(prevDist, dist);
 
                 // §9 任务映射输入
                 FormationCoordKind kind = MapKind(f);
@@ -741,7 +743,7 @@ namespace CombatBrain.Ai
                     InRetreat = inRetreat
                 });
 
-                state.FormationPrevDist[f.Index] = dist; // per-formation 基线更新（atc4 nits 收口）
+                state.MissionPrevDist[f.Index] = dist; // ATC-3 per-formation 基线更新（atc4-fix finding1 独立字典）
                 bool changed = mission.Mission != state.Mission || mission.Separation != state.Separation
                     || iso.UnauthorizedIsolation != state.Isolation.UnauthorizedIsolation;
                 state.Mission = mission.Mission;
@@ -788,9 +790,13 @@ namespace CombatBrain.Ai
             }
 
             float mbX = state.Army.MainBodyX, mbY = state.Army.MainBodyY;
-            // atc4 nits 收口：DefensiveOverride 接线到既有编队级公开状态（Brace/Protect 激活，编队级聚合，
-            //   非逐兵读取；§4.5 Immediate Defensive 高于 Army Commitment——Brace/Protect 激活时影子判定
-            //   允许 Limited 脱困/维持，不被普通 Denied 锁死）。
+            // atc4-fix finding2：DefensiveOverride 为队级布尔（全队统一），设计理由（保持现状，非 per-formation）：
+            //   BraceGlue.IsBracing/BraceGlue.cs:50 与 ProtectGlue.IsProtecting/ProtectGlue.cs:106 的公开状态
+            //   均为队级（键=TeamIndex，_episode/_protecting 队级字典）——BraceFormation/ProtectArcher 是 F2 意图
+            //   引擎的队级意图，Brace/Protect 以队级剧集状态驱动全队防御；队级防御激活时全队编队均处
+            //   Immediate Defensive 语境（§4.5 高优先），影子判定统一 Limited 授权是保守正确近似（不误杀防御动作、
+            //   不被普通 Denied 锁死）。per-formation 化需先给 BraceGlue/ProtectGlue 增编队级查询接口（涉及
+            //   Ai/ 其它文件，超出本卡范围），后续 feature 再做。
             bool defensiveActive = _brace.IsBracing(own.TeamIndex) || _protect.IsProtecting(own.TeamIndex);
 
             foreach (Formation f in own.FormationsIncludingEmpty)
@@ -805,10 +811,12 @@ namespace CombatBrain.Ai
                 if (self.FormationId < 0) continue;
 
                 float dist = (float)Math.Sqrt((fc.x - mbX) * (fc.x - mbX) + (fc.y - mbY) * (fc.y - mbY));
-                // atc4 nits 收口：per-formation 距离趋势基线（键=Formation.Index；首拍缺省 0=无趋势）
+                // atc4-fix finding1：ATC-4 用独立 CommitmentPrevDist 基线（per-formation；首拍缺省 0=无趋势）。
+                // 与 ATC-3 的 MissionPrevDist 互不读写——TickFormationMissions 先写本拍不影响本层读到上一拍基线，
+                // distIncreasing 真实反映距离趋势（FormationDistanceTrend.IsIncreasing 纯函数）。
                 float prevDist;
-                if (!state.FormationPrevDist.TryGetValue(f.Index, out prevDist)) prevDist = 0f;
-                bool distIncreasing = prevDist > 0f && dist > prevDist;
+                if (!state.CommitmentPrevDist.TryGetValue(f.Index, out prevDist)) prevDist = 0f;
+                bool distIncreasing = FormationDistanceTrend.IsIncreasing(prevDist, dist);
 
                 // atc4 nits 收口：InContact 接线到既有公开聚合——己方编队中心距最近已知敌编队中心 ≤20m
                 //   视为贴身接战（编队级近似；TeamGeometry CachedMedian 口径；enemySnaps 已按迷雾过滤，
@@ -880,7 +888,7 @@ namespace CombatBrain.Ai
                 });
 
                 // 日志：Permission/Reasons 变化才写（限频；§14 [Commit] 固定字段顺序）
-                state.FormationPrevDist[f.Index] = dist; // per-formation 基线更新（atc4 nits 收口）
+                state.CommitmentPrevDist[f.Index] = dist; // ATC-4 per-formation 基线更新（atc4-fix finding1 独立字典）
                 CommitmentDecision last;
                 bool changed = !state.Commitments.TryGetValue(f.Index, out last)
                     || last.Permission != decision.Permission || last.Reasons != decision.Reasons;
