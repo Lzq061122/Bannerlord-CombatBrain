@@ -161,6 +161,9 @@ namespace OfflineTests
             Console.WriteLine("== atc4-reserve ReserveClassifier ==");
             TestReserveClassifier();
 
+            Console.WriteLine("== atc4-opt CoordinationController ==");
+            TestCoordinationController();
+
             Console.WriteLine("== N1 NarratorPure ==");
             TestNarratorPure();
 
@@ -3081,6 +3084,41 @@ namespace OfflineTests
             // 8) 常量契约（与胶水层同口径）
             Check(ReserveClassifier.ReserveRadiusMeters == 30f && ReserveClassifier.HysteresisMeters == 10f
                 && ReserveClassifier.ContactMeters == 20f, "atc4-reserve constants 30/10/20");
+        }
+
+        // atc4-snapshot-optimization OPT-3/OPT-4：CoordinationController Army 日志适配层（距离阈值/离散变化/格式）
+        private static void TestCoordinationController()
+        {
+            // 1) 坐标变化用距离阈值（≥3m）而非浮点精确不等：位移 2m → 不触发；3m → 触发
+            var a = new ArmyContextSnapshot { MainBodyX = 0f, MainBodyY = 0f, MainBodyStrength = 100, MainBodyConfidence = 0.9f, Phase = BattlePhase.Advance };
+            var b2 = new ArmyContextSnapshot { MainBodyX = 2f, MainBodyY = 0f, MainBodyStrength = 100, MainBodyConfidence = 0.9f, Phase = BattlePhase.Advance };
+            Check(!CoordinationController.ArmyLogChanged(a, b2, CoordinationController.MainBodyMoveLogMeters),
+                "atc4-opt move 2m < threshold -> no log (距离阈值降噪)");
+            var b3 = new ArmyContextSnapshot { MainBodyX = 3f, MainBodyY = 0f, MainBodyStrength = 100, MainBodyConfidence = 0.9f, Phase = BattlePhase.Advance };
+            Check(CoordinationController.ArmyLogChanged(a, b3, CoordinationController.MainBodyMoveLogMeters),
+                "atc4-opt move 3m >= threshold -> log");
+
+            // 2) 离散状态变化（Phase/Objective/Strength/Confidence）→ 触发（不依赖坐标）
+            var bPhase = new ArmyContextSnapshot { MainBodyX = 0f, MainBodyY = 0f, MainBodyStrength = 100, MainBodyConfidence = 0.9f, Phase = BattlePhase.Engage };
+            Check(CoordinationController.ArmyLogChanged(a, bPhase, CoordinationController.MainBodyMoveLogMeters),
+                "atc4-opt phase change -> log (离散状态)");
+            var bObj = new ArmyContextSnapshot { MainBodyX = 0f, MainBodyY = 0f, MainBodyStrength = 100, MainBodyConfidence = 0.9f, Phase = BattlePhase.Advance, HasOperationalObjective = true, ObjectiveFormationId = 3 };
+            Check(CoordinationController.ArmyLogChanged(a, bObj, CoordinationController.MainBodyMoveLogMeters),
+                "atc4-opt objective appear -> log");
+            var bStr = new ArmyContextSnapshot { MainBodyX = 0f, MainBodyY = 0f, MainBodyStrength = 90, MainBodyConfidence = 0.9f, Phase = BattlePhase.Advance };
+            Check(CoordinationController.ArmyLogChanged(a, bStr, CoordinationController.MainBodyMoveLogMeters),
+                "atc4-opt strength change -> log");
+
+            // 3) 首拍（prev 全 0 无有效 MainBody）→ 触发（开战首条记录）
+            var zero = new ArmyContextSnapshot();
+            Check(CoordinationController.ArmyLogChanged(zero, a, CoordinationController.MainBodyMoveLogMeters),
+                "atc4-opt first tick -> log");
+
+            // 4) §14 [ArmyCtx] 格式（固定字段顺序，Shadow 诊断字段保留）
+            string line = CoordinationController.FormatArmyLog(1, bObj);
+            Check(line.StartsWith("[ArmyCtx] Team 1 phase=") && line.Contains("MB=") && line.Contains("obj=3"),
+                "atc4-opt ArmyCtx format §14");
+            Check(CoordinationController.MainBodyMoveLogMeters == 3f, "atc4-opt move threshold const 3m");
         }
 
         private static int idxDefend()

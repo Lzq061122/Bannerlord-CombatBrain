@@ -66,6 +66,16 @@ namespace CombatBrain.Ai
 
             // ATC-2 Army Context 影子快照（0.5s 更新；MainBody/Objective 只算不改行为）
             public ArmyContextSnapshot Army = ArmyContextSnapshot.None;
+            // OPT-3：Army 日志节流每 Team 独立（原实例级全局计时器多队互相抑制；OnMissionTick 按 dt 递减）
+            public float ArmyLogTimer;
+
+            // OPT-1：单拍协调帧——每个 0.5s 协调周期只采集一次编队快照（己方全量 + 敌迷雾过滤），
+            //   ArmyContext（构建帧）/Mission/Commitment（复用帧）禁止同拍重复构建 ownSnaps/enemySnaps。
+            //   帧只在单个逻辑拍内有效（TickArmyContext 每拍重建，FrameValid 防异常路径复用过期帧）；
+            //   值为 FormationCoordSnapshot 值列表（非 TaleWorlds 可变集合枚举器缓存，无悬挂枚举风险）。
+            public readonly List<FormationCoordSnapshot> FrameOwn = new List<FormationCoordSnapshot>();
+            public readonly List<FormationCoordSnapshot> FrameEnemy = new List<FormationCoordSnapshot>();
+            public bool FrameValid;
 
             // ATC-3 Formation Mission / Separation / Isolation 影子判定（0.5s；只判断不下召回命令）。
             // atc4-state-lifecycle P1-1：输出按 FormationId 保存（每支编队结果独立）——原单值字段被
@@ -110,7 +120,7 @@ namespace CombatBrain.Ai
         private float _blockTimer;
         private float _formationLogTimer; // 日志增强：编队明细快照 5s 节拍
         private float _provenanceTimer;   // ATC-0 命令来源 5s 汇总节拍（只输出覆盖/命令变化 Formation）
-        private float _armyLogTimer;      // ATC-2 Army Context 日志 5s 兜底节拍（变化即写，兜底 5s）
+        // OPT-3：_armyLogTimer 已改 per-team（TeamState.ArmyLogTimer，OnMissionTick 统一 dt 递减）——删除实例字段
         private float _anomalyTimer;       // T39-01 异常检测节拍（0.5s 低频，O(队数×编队数)）
         private float _tacticsTimer;       // T2-01 阵型三态节拍（0.5s 编队级）
         private float _formationSlotsTimer; // X5-6 槽位布局节拍（0.5s 编队级，TickFormationTactics 之后）
@@ -228,13 +238,10 @@ namespace CombatBrain.Ai
             if (_initialized) return;
             _initialized = true;
 
-            // atc4-state-lifecycle P1-4：Mission 初始化幂等清理入口——CommandProvenance 为静态单例，
-            //   跨战斗残留会串场（上一场的覆盖链/聚合污染本场）；InGameFeedback 静态去重/计数同理；
-            //   _opponent/_attackSuppression 虽实例级也一并清（幂等，双保险）。
-            CommandProvenance.Instance.Clear();
-            InGameFeedback.ClearAll();
-            _opponent.ClearAll();
-            _attackSuppression.ClearAll();
+            // atc4-state-lifecycle P1-4 / OPT-4：Mission 初始化幂等清理入口——CommandProvenance 为静态单例，
+            //   跨战斗残留会串场；InGameFeedback 静态去重/计数同理；_opponent/_attackSuppression 实例级也一并清
+            //   （统一走 MissionStateLifecycle 单一入口，双保险）。
+            MissionStateLifecycle.ClearStatic(_opponent, _attackSuppression);
 
             // T1 观测管线：挂载决策分支计数器 + 补丁/管线活性自检（单一 CombatLog 渠道）
             DecisionObservatory.Attach();
@@ -311,9 +318,12 @@ namespace CombatBrain.Ai
                 LogProvenanceSummary();
             }
 
-            // atc3 nits 收口：ATC-2 Army Context 日志 5s 兜底节拍改由 OnMissionTick 按真实 dt 递减
-            // （原在 TickArmyContext 内固定 -= 0.5f，依赖 0.5s 拍频；两者行为等价，5s 汇总周期不变）。
-            _armyLogTimer -= dt;
+            // OPT-3：ATC-2 Army 日志 5s 兜底节拍每 Team 独立按真实 dt 递减（原实例级全局计时器多队互相
+            //   抑制——一队日志触发重置会推迟其他队兜底；per-team 后各队独立 5s 周期）。
+            foreach (TeamState st in _states.Values)
+            {
+                st.ArmyLogTimer -= dt;
+            }
 
             _bench.BeginSection("perception");
             // X7：FogOfWarEnabled=false 时直接跳过感知计算（关闭降开销，开启才增开销——派单④方向）；
@@ -637,36 +647,24 @@ namespace CombatBrain.Ai
         // ATC-2 Army Context 影子计算（0.5s 队级拍；MainBody/Objective 只算不改行为）。
         // 输入=既有公开聚合（Formation.QuerySystem 兵种旗标/CountOfUnits/CachedMedianPosition/
         //   CachedFormationIntegrityData）+ X6 迷雾（IsEnemyFormationKnown 过滤敌编队，不绕过）。
+        // OPT-1：单拍协调帧——本方法构建 Frame（CoordinationFrameBuilder 一次采集，FogOfWar 标记统一确定），
+        //   Mission/Commitment 同拍复用（禁止重复构建 ownSnaps/enemySnaps）；帧每拍重建，仅拍内有效。
+        // OPT-3：Army 日志节流每 Team 独立（state.ArmyLogTimer，OnMissionTick dt 递减）；坐标变化用距离阈值
+        //   ≥3m（CoordinationController.ArmyLogChanged）而非浮点精确不等；离散状态改变才记录；诊断字段保留。
         // 反作弊闸：零新增禁读；O(编队数²)；coordination Bench 段可单独观测。
         private void TickArmyContext(TeamState state, Team own, Team enemy)
         {
-            // atc3 nits 收口：_armyLogTimer 已改由 OnMissionTick 按 dt 递减（5s 兜底周期不变），此处不再固定 -= 0.5f
-            // 己方快照（全部非空编队）
-            var ownSnaps = new List<FormationCoordSnapshot>();
-            var enemySnaps = new List<FormationCoordSnapshot>();
-            int idx = 0;
-            foreach (Formation f in own.FormationsIncludingEmpty)
-            {
-                if (f == null || f.CountOfUnits == 0 || f.QuerySystem == null) continue;
-                ownSnaps.Add(BuildSnapshot(f, true));
-                idx++;
-            }
-            idx = 0;
-            if (enemy != null)
-            {
-                foreach (Formation f in enemy.FormationsIncludingEmpty)
-                {
-                    if (f == null || f.CountOfUnits == 0 || f.QuerySystem == null) continue;
-                    bool known = IsEnemyFormationKnown(own, f); // X6 迷雾过滤（未知/过期→false）
-                    enemySnaps.Add(BuildSnapshot(f, known));
-                    idx++;
-                }
-            }
+            // 单拍协调帧：清空复用值列表后一次采集（己方全量 + 敌迷雾过滤；FrameValid 标记拍内有效）
+            state.FrameOwn.Clear();
+            state.FrameEnemy.Clear();
+            CoordinationFrameBuilder.BuildOwn(own, state.FrameOwn);
+            CoordinationFrameBuilder.BuildEnemy(own, enemy, IsEnemyFormationKnown, state.FrameEnemy);
+            state.FrameValid = true;
 
-            // Main Body（最大连通簇，§4.1）
-            var main = MainBodySelector.Select(ownSnaps);
-            // Operational Objective（已知敌最大有效兵力簇，§4.2；迷雾一致）
-            var obj = OperationalObjectiveSelector.Select(enemySnaps);
+            // Main Body（最大连通簇，§4.1）复用帧
+            var main = MainBodySelector.Select(state.FrameOwn);
+            // Operational Objective（已知敌最大有效兵力簇，§4.2；迷雾一致）复用帧
+            var obj = OperationalObjectiveSelector.Select(state.FrameEnemy);
 
             var snap = new ArmyContextSnapshot
             {
@@ -680,48 +678,18 @@ namespace CombatBrain.Ai
                 ObjectiveStrength = obj.Strength
             };
 
-            // 日志：变化或 5s 汇总才写（限频）
-            bool changed = snap.MainBodyX != state.Army.MainBodyX || snap.MainBodyY != state.Army.MainBodyY
-                || snap.ObjectiveFormationId != state.Army.ObjectiveFormationId
-                || snap.HasOperationalObjective != state.Army.HasOperationalObjective;
+            // 日志：变化（距离阈值/离散状态）或 5s 兜底才写（OPT-3 降噪；每 Team 独立节流）
+            bool changed = CoordinationController.ArmyLogChanged(state.Army, snap,
+                CoordinationController.MainBodyMoveLogMeters);
             state.Army = snap;
-            if (changed || _armyLogTimer <= 0f)
+            if (changed || state.ArmyLogTimer <= 0f)
             {
-                _armyLogTimer = 5f;
-                CombatLog.Log(string.Format(
-                    "[ArmyCtx] Team {0} phase={1} MB=({2:F0},{3:F0}) str={4} conf={5:F2} | obj={6} ({7:F0},{8:F0}) str={9}",
-                    own.TeamIndex, snap.Phase, snap.MainBodyX, snap.MainBodyY,
-                    snap.MainBodyStrength, snap.MainBodyConfidence,
-                    snap.HasOperationalObjective ? snap.ObjectiveFormationId.ToString() : "无",
-                    snap.ObjectiveX, snap.ObjectiveY, snap.ObjectiveStrength));
+                state.ArmyLogTimer = 5f;
+                CombatLog.Log(CoordinationController.FormatArmyLog(own.TeamIndex, snap));
             }
         }
 
-        // 编队快照（QuerySystem 聚合；Integrity 用 CachedFormationIntegrityData 只读）
-        private static FormationCoordSnapshot BuildSnapshot(Formation f, bool isKnown)
-        {
-            var kind = f.QuerySystem.IsRangedCavalryFormation ? FormationCoordKind.RangedCavalry
-                : f.QuerySystem.IsCavalryFormation ? FormationCoordKind.MeleeCavalry
-                : f.QuerySystem.IsRangedFormation ? FormationCoordKind.Ranged
-                : f.QuerySystem.IsInfantryFormation ? FormationCoordKind.Infantry
-                : FormationCoordKind.Other;
-            Vec2 pos = TeamGeometry.GetFormationPosition(f, TeamPosKind.CachedMedian);
-            var ig = f.CachedFormationIntegrityData; // struct（LogFormationDetails L1085 同款先例）
-            float integrity = FormationIntegrity.Compute(
-                ig.DeviationOfPositionsExcludeFarAgents, ig.MaxDeviationOfPositionExcludeFarAgents,
-                VecMath.Dist(0f, 0f, ig.AverageVelocityExcludeFarAgents.x, ig.AverageVelocityExcludeFarAgents.y),
-                ig.AverageMaxUnlimitedSpeedExcludeFarAgents, f.CountOfUnits);
-            return new FormationCoordSnapshot
-            {
-                FormationId = f.Index,
-                Count = f.CountOfUnits,
-                X = pos.x, Y = pos.y,
-                Integrity = integrity,
-                NominalSpeed = ig.AverageMaxUnlimitedSpeedExcludeFarAgents,
-                Kind = kind,
-                IsKnown = isKnown
-            };
-        }
+        // 编队快照已迁至 CoordinationFrameBuilder.BuildSnapshot（OPT-4 有限拆分；单拍协调帧复用）
 
         // ATC-3 Formation Mission / Separation / Isolation 影子判定（0.5s 队级拍）。
         // 只产出判断与 Why 日志，不下召回命令（ATC 规格 §4.4/§9）；Isolation 输出仅作 CommitmentReason
@@ -833,22 +801,11 @@ namespace CombatBrain.Ai
         // 日志：Permission/Reasons 变化才写（[Commit] 行 §14 固定字段顺序），禁每拍每队刷。
         private void TickCommitment(TeamState state, Team own, Team enemy)
         {
-            // 快照（复用 BuildSnapshot 口径：己方全量 + 敌迷雾过滤）
-            var ownSnaps = new List<FormationCoordSnapshot>();
-            var enemySnaps = new List<FormationCoordSnapshot>();
-            foreach (Formation f in own.FormationsIncludingEmpty)
-            {
-                if (f == null || f.CountOfUnits == 0 || f.QuerySystem == null) continue;
-                ownSnaps.Add(BuildSnapshot(f, true));
-            }
-            if (enemy != null)
-            {
-                foreach (Formation f in enemy.FormationsIncludingEmpty)
-                {
-                    if (f == null || f.CountOfUnits == 0 || f.QuerySystem == null) continue;
-                    enemySnaps.Add(BuildSnapshot(f, IsEnemyFormationKnown(own, f))); // X6 迷雾过滤
-                }
-            }
+            // OPT-1：复用单拍协调帧（TickArmyContext 本拍已构建，禁止重复构建 ownSnaps/enemySnaps）。
+            // 防御：FrameValid=false（异常路径：ArmyContext 未跑/失败）→ 本拍跳过判定（影子层零命令，安全）
+            if (!state.FrameValid) return;
+            var ownSnaps = state.FrameOwn;
+            var enemySnaps = state.FrameEnemy;
 
             float mbX = state.Army.MainBodyX, mbY = state.Army.MainBodyY;
             // atc4-fix finding2：DefensiveOverride 为队级布尔（全队统一），设计理由（保持现状，非 per-formation）：
@@ -1637,15 +1594,11 @@ namespace CombatBrain.Ai
             ClearMissionStaticState(); // atc4-state-lifecycle P1-4（双钩子幂等，OnClearScene 兜底）
         }
 
-        // atc4-state-lifecycle P1-4：跨 Mission 静态状态幂等清理入口（OnMissionStateFinalized/OnClearScene
-        //   双钩子共用，先聚合后清理；CommandProvenance 静态单例/InGameFeedback 静态去重/
-        //   _suppressedAttack 静态抑制集合/对手模型与攻击抑制实例级一并清，防索引复用继承旧状态）
+        // atc4-state-lifecycle P1-4 / atc4-snapshot-optimization OPT-4：跨 Mission 静态状态幂等清理入口
+        //   （OnMissionStateFinalized/OnClearScene 双钩子共用，先聚合后清理；逻辑已拆至 MissionStateLifecycle）
         private void ClearMissionStaticState()
         {
-            CommandProvenance.Instance.Clear();
-            InGameFeedback.ClearAll();
-            _opponent.ClearAll();
-            _attackSuppression.ClearAll();
+            MissionStateLifecycle.ClearStatic(_opponent, _attackSuppression);
         }
 
         // T38-01 遥测事件分发：仅映射已有事件 → 计数（各计数点的详细调用留给后续 feature 各自补，

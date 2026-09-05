@@ -64,6 +64,7 @@
     <Compile Include="..\CombatBrain\Battle\BattlePhaseFSM.cs" Link="Battle\BattlePhaseFSM.cs" />
     <Compile Include="..\CombatBrain\Coordination\FormationCoordSnapshot.cs" Link="Coordination\FormationCoordSnapshot.cs" />
     <Compile Include="..\CombatBrain\Coordination\ArmyContextSnapshot.cs" Link="Coordination\ArmyContextSnapshot.cs" />
+    <Compile Include="..\CombatBrain\Coordination\CoordinationController.cs" Link="Coordination\CoordinationController.cs" />
     <Compile Include="..\CombatBrain\Coordination\MainBodySelector.cs" Link="Coordination\MainBodySelector.cs" />
     <Compile Include="..\CombatBrain\Coordination\OperationalObjectiveSelector.cs" Link="Coordination\OperationalObjectiveSelector.cs" />
     <Compile Include="..\CombatBrain\Coordination\FormationMissionAssigner.cs" Link="Coordination\FormationMissionAssigner.cs" />
