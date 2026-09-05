@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using CombatBrain;
 using CombatBrain.Combat;
 using CombatBrain.Movement;
@@ -168,6 +169,9 @@ namespace OfflineTests
 
             Console.WriteLine("== ATC1 BattlePhaseFSM ==");
             TestBattlePhaseFSM();
+
+            Console.WriteLine("== ATC2 ArmyContext ==");
+            TestArmyContext();
 
             Console.WriteLine();
             if (_failures == 0)
@@ -2242,6 +2246,115 @@ namespace OfflineTests
             Check(BattlePhaseFSM.RetreatSurvival == 0.4f && BattlePhaseFSM.AdvanceSurvival == 0.7f
                 && BattlePhaseFSM.MinDwellSeconds == 5f && BattlePhaseFSM.ExploitEnemySurvival == 0.4f,
                 "atc1 threshold constants");
+        }
+
+        // ATC-2 ArmyContext（MainBodySelector/OperationalObjectiveSelector 纯逻辑）：最大簇/平局/加权中心/孤立骑兵/空队/单编队/两集团/迷雾三态
+        private static void TestArmyContext()
+        {
+            // 1) 空输入 → MainBody 零结果
+            var empty = new List<FormationCoordSnapshot>();
+            var r0 = MainBodySelector.Select(empty);
+            Check(r0.Strength == 0 && r0.Confidence == 0f && r0.MemberCount == 0, "atc2 empty formations -> zero main body");
+
+            // 2) 单编队 → 中心=该编队，Confidence=1
+            var single = new List<FormationCoordSnapshot>
+            {
+                new FormationCoordSnapshot { FormationId = 3, Count = 40, X = 10f, Y = 20f, Kind = FormationCoordKind.Infantry, IsKnown = true }
+            };
+            var r1 = MainBodySelector.Select(single);
+            Check(r1.Strength == 40 && Math.Abs(r1.X - 10f) < 0.01f && Math.Abs(r1.Y - 20f) < 0.01f
+                && Math.Abs(r1.Confidence - 1f) < 0.01f, "atc2 single formation -> center/conf 1");
+
+            // 3) 两个连通簇 → 总兵力最大簇（§4.1）
+            var two = new List<FormationCoordSnapshot>
+            {
+                new FormationCoordSnapshot { FormationId = 0, Count = 50, X = 0f, Y = 0f, Kind = FormationCoordKind.Infantry, IsKnown = true },
+                new FormationCoordSnapshot { FormationId = 1, Count = 10, X = 50f, Y = 0f, Kind = FormationCoordKind.MeleeCavalry, IsKnown = true },
+                new FormationCoordSnapshot { FormationId = 2, Count = 30, X = 1000f, Y = 0f, Kind = FormationCoordKind.Infantry, IsKnown = true }
+            };
+            var r2 = MainBodySelector.Select(two);
+            Check(r2.Strength == 60, "atc2 largest cluster by strength (0+1=60 > 2=30)");
+            Check(Math.Abs(r2.X - (0f * 50 + 50f * 10) / 60f) < 0.01f, "atc2 weighted center of largest cluster");
+
+            // 4) 孤立骑兵不拉偏中心（§4.1.6）：大步兵簇 + 远处孤立骑 → 中心仍在步兵簇
+            var iso = new List<FormationCoordSnapshot>
+            {
+                new FormationCoordSnapshot { FormationId = 0, Count = 80, X = 0f, Y = 0f, Kind = FormationCoordKind.Infantry, IsKnown = true },
+                new FormationCoordSnapshot { FormationId = 1, Count = 15, X = 500f, Y = 500f, Kind = FormationCoordKind.MeleeCavalry, IsKnown = true }
+            };
+            var r3 = MainBodySelector.Select(iso);
+            Check(Math.Abs(r3.X) < 0.01f && Math.Abs(r3.Y) < 0.01f && r3.Strength == 80,
+                "atc2 isolated cavalry does not pull center");
+
+            // 5) 平局确定性：兵力相同 → 更多 Infantry/Ranged 优先；再同 → 最小 FormationId
+            var tie1 = new List<FormationCoordSnapshot>
+            {
+                new FormationCoordSnapshot { FormationId = 0, Count = 20, X = 0f, Y = 0f, Kind = FormationCoordKind.Infantry, IsKnown = true },
+                new FormationCoordSnapshot { FormationId = 1, Count = 20, X = 1000f, Y = 0f, Kind = FormationCoordKind.MeleeCavalry, IsKnown = true }
+            };
+            var r4 = MainBodySelector.Select(tie1);
+            Check(r4.Strength == 20 && Math.Abs(r4.X) < 0.01f, "atc2 tie -> more infantry (id 0) wins");
+            var tie2 = new List<FormationCoordSnapshot>
+            {
+                new FormationCoordSnapshot { FormationId = 5, Count = 20, X = 0f, Y = 0f, Kind = FormationCoordKind.MeleeCavalry, IsKnown = true },
+                new FormationCoordSnapshot { FormationId = 2, Count = 20, X = 1000f, Y = 0f, Kind = FormationCoordKind.RangedCavalry, IsKnown = true }
+            };
+            var r5 = MainBodySelector.Select(tie2);
+            Check(r5.Strength == 20 && Math.Abs(r5.X - 1000f) < 0.01f, "atc2 tie no inf/rng -> min FormationId (2)");
+
+            // 6) 两个独立集团（距离 > 60m 不连通）→ 各自成簇，取大者
+            var groups = new List<FormationCoordSnapshot>
+            {
+                new FormationCoordSnapshot { FormationId = 0, Count = 25, X = 0f, Y = 0f, Kind = FormationCoordKind.Infantry, IsKnown = true },
+                new FormationCoordSnapshot { FormationId = 1, Count = 25, X = 50f, Y = 0f, Kind = FormationCoordKind.Infantry, IsKnown = true },  // 连通 0
+                new FormationCoordSnapshot { FormationId = 2, Count = 40, X = 200f, Y = 0f, Kind = FormationCoordKind.Infantry, IsKnown = true }   // 独立（>60m）
+            };
+            var r6 = MainBodySelector.Select(groups);
+            Check(r6.Strength == 50, "atc2 two independent groups -> cluster 0+1 (50) beats 2 (40)");
+
+            // 7) 迷雾：OperationalObjective 只消费已知（§4.2 + 迷雾一致）
+            var fogAll = new List<FormationCoordSnapshot>
+            {
+                new FormationCoordSnapshot { FormationId = 0, Count = 100, X = 0f, Y = 0f, Kind = FormationCoordKind.Infantry, IsKnown = false } // 未知大敌
+            };
+            var o0 = OperationalObjectiveSelector.Select(fogAll);
+            Check(!o0.HasObjective, "atc2 unknown big enemy cannot be objective (迷雾)");
+
+            // 8) 重新观察（IsKnown=true）→ 可成为 Objective
+            var fogSeen = new List<FormationCoordSnapshot>
+            {
+                new FormationCoordSnapshot { FormationId = 0, Count = 100, X = 0f, Y = 0f, Kind = FormationCoordKind.Infantry, IsKnown = true }
+            };
+            var o1 = OperationalObjectiveSelector.Select(fogSeen);
+            Check(o1.HasObjective && o1.FormationId == 0 && o1.Strength == 100, "atc2 re-observed enemy -> objective");
+
+            // 9) 过期（IsKnown=false）→ 撤销
+            var o2 = OperationalObjectiveSelector.Select(fogAll);
+            Check(!o2.HasObjective, "atc2 expired enemy -> objective revoked (迷雾)");
+
+            // 10) 混合：已知小簇 + 未知大簇 → 选已知（迷雾一致，未知不得补齐）
+            var mix = new List<FormationCoordSnapshot>
+            {
+                new FormationCoordSnapshot { FormationId = 0, Count = 200, X = 0f, Y = 0f, Kind = FormationCoordKind.Infantry, IsKnown = false },
+                new FormationCoordSnapshot { FormationId = 1, Count = 30, X = 1000f, Y = 0f, Kind = FormationCoordKind.Infantry, IsKnown = true },
+                new FormationCoordSnapshot { FormationId = 2, Count = 20, X = 1040f, Y = 0f, Kind = FormationCoordKind.Ranged, IsKnown = true }
+            };
+            var o3 = OperationalObjectiveSelector.Select(mix);
+            Check(o3.HasObjective && o3.Strength == 50 && o3.FormationId == 1, "atc2 known cluster selected (unknown excluded)");
+
+            // 11) 置信不足 → 无目标（MinObjectiveConfidence 0.5）
+            var lowConf = new List<FormationCoordSnapshot>
+            {
+                new FormationCoordSnapshot { FormationId = 0, Count = 5, X = 0f, Y = 0f, Kind = FormationCoordKind.Infantry, IsKnown = true },
+                new FormationCoordSnapshot { FormationId = 1, Count = 5, X = 1000f, Y = 0f, Kind = FormationCoordKind.Infantry, IsKnown = true },
+                new FormationCoordSnapshot { FormationId = 2, Count = 9, X = 2000f, Y = 0f, Kind = FormationCoordKind.Infantry, IsKnown = true }
+            };
+            var o4 = OperationalObjectiveSelector.Select(lowConf);
+            Check(!o4.HasObjective, "atc2 confidence 0.47 < 0.5 -> no objective (最大簇 9/19)");
+
+            // 12) 常量契约
+            Check(MainBodySelector.MainBodyLinkMeters == 60f && OperationalObjectiveSelector.ObjectiveLinkMeters == 60f,
+                "atc2 link meters 60 const");
         }
 
         private static int idxDefend()

@@ -60,6 +60,9 @@ namespace CombatBrain.Ai
             // ATC-1 战局阶段（队级五态上下文；只更新状态+发事件/播报，不下命令）
             public BattlePhase Phase = BattlePhase.Deployment; // 当前战局阶段
             public float PhaseEnteredAt = 0f; // 进入当前阶段的时刻（相位内时间基准，强制修订4）
+
+            // ATC-2 Army Context 影子快照（0.5s 更新；MainBody/Objective 只算不改行为）
+            public ArmyContextSnapshot Army = ArmyContextSnapshot.None;
         }
 
         private bool _initialized;
@@ -82,6 +85,7 @@ namespace CombatBrain.Ai
         private float _blockTimer;
         private float _formationLogTimer; // 日志增强：编队明细快照 5s 节拍
         private float _provenanceTimer;   // ATC-0 命令来源 5s 汇总节拍（只输出覆盖/命令变化 Formation）
+        private float _armyLogTimer;      // ATC-2 Army Context 日志 5s 兜底节拍（变化即写，兜底 5s）
         private float _anomalyTimer;       // T39-01 异常检测节拍（0.5s 低频，O(队数×编队数)）
         private float _tacticsTimer;       // T2-01 阵型三态节拍（0.5s 编队级）
         private float _formationSlotsTimer; // X5-6 槽位布局节拍（0.5s 编队级，TickFormationTactics 之后）
@@ -507,6 +511,11 @@ namespace CombatBrain.Ai
                 // TimeInPhase=_elapsed-PhaseEnteredAt（强制修订4）；Stalemate=_stalemateActive（修订5）。
                 TickBattlePhase(state, own, enemy, aliveSelf, aliveEnemy);
 
+                // ATC-2 Army Context 影子计算（0.5s 拍内；MainBody/Objective 只算不改行为，迷雾一致）。
+                _bench.BeginSection("coordination");
+                TickArmyContext(state, own, enemy);
+                _bench.EndSection("coordination");
+
                 // P0-④ 玩家队豁免意图决策：意图是玩家指挥的领域——玩家队不 Evaluate/不发布
                 // IntentSwitched（否则 F10 把自家引擎输出当玩家套路，循环自证；玩家队也不消费本层
                 // 意图，4 个编队层 Glue 已同步豁免）。态势向量/士气照算（LastVector 仍供 GetMorale
@@ -573,6 +582,94 @@ namespace CombatBrain.Ai
                     state.LastStrategicClass = newClass;
                 }
             }
+        }
+
+        // ATC-2 Army Context 影子计算（0.5s 队级拍；MainBody/Objective 只算不改行为）。
+        // 输入=既有公开聚合（Formation.QuerySystem 兵种旗标/CountOfUnits/CachedMedianPosition/
+        //   CachedFormationIntegrityData）+ X6 迷雾（IsEnemyFormationKnown 过滤敌编队，不绕过）。
+        // 反作弊闸：零新增禁读；O(编队数²)；coordination Bench 段可单独观测。
+        private void TickArmyContext(TeamState state, Team own, Team enemy)
+        {
+            // 己方快照（全部非空编队）
+            var ownSnaps = new List<FormationCoordSnapshot>();
+            var enemySnaps = new List<FormationCoordSnapshot>();
+            int idx = 0;
+            foreach (Formation f in own.FormationsIncludingEmpty)
+            {
+                if (f == null || f.CountOfUnits == 0 || f.QuerySystem == null) continue;
+                ownSnaps.Add(BuildSnapshot(f, true));
+                idx++;
+            }
+            idx = 0;
+            if (enemy != null)
+            {
+                foreach (Formation f in enemy.FormationsIncludingEmpty)
+                {
+                    if (f == null || f.CountOfUnits == 0 || f.QuerySystem == null) continue;
+                    bool known = IsEnemyFormationKnown(own, f); // X6 迷雾过滤（未知/过期→false）
+                    enemySnaps.Add(BuildSnapshot(f, known));
+                    idx++;
+                }
+            }
+
+            // Main Body（最大连通簇，§4.1）
+            var main = MainBodySelector.Select(ownSnaps);
+            // Operational Objective（已知敌最大有效兵力簇，§4.2；迷雾一致）
+            var obj = OperationalObjectiveSelector.Select(enemySnaps);
+
+            var snap = new ArmyContextSnapshot
+            {
+                Phase = state.Phase,
+                MainBodyX = main.X, MainBodyY = main.Y,
+                MainBodyStrength = main.Strength,
+                MainBodyConfidence = main.Confidence,
+                HasOperationalObjective = obj.HasObjective,
+                ObjectiveFormationId = obj.FormationId,
+                ObjectiveX = obj.X, ObjectiveY = obj.Y,
+                ObjectiveStrength = obj.Strength
+            };
+
+            // 日志：变化或 5s 汇总才写（限频）
+            bool changed = snap.MainBodyX != state.Army.MainBodyX || snap.MainBodyY != state.Army.MainBodyY
+                || snap.ObjectiveFormationId != state.Army.ObjectiveFormationId
+                || snap.HasOperationalObjective != state.Army.HasOperationalObjective;
+            state.Army = snap;
+            if (changed || _armyLogTimer <= 0f)
+            {
+                _armyLogTimer = 5f;
+                CombatLog.Log(string.Format(
+                    "[ArmyCtx] Team {0} phase={1} MB=({2:F0},{3:F0}) str={4} conf={5:F2} | obj={6} ({7:F0},{8:F0}) str={9}",
+                    own.TeamIndex, snap.Phase, snap.MainBodyX, snap.MainBodyY,
+                    snap.MainBodyStrength, snap.MainBodyConfidence,
+                    snap.HasOperationalObjective ? snap.ObjectiveFormationId.ToString() : "无",
+                    snap.ObjectiveX, snap.ObjectiveY, snap.ObjectiveStrength));
+            }
+        }
+
+        // 编队快照（QuerySystem 聚合；Integrity 用 CachedFormationIntegrityData 只读）
+        private static FormationCoordSnapshot BuildSnapshot(Formation f, bool isKnown)
+        {
+            var kind = f.QuerySystem.IsRangedCavalryFormation ? FormationCoordKind.RangedCavalry
+                : f.QuerySystem.IsCavalryFormation ? FormationCoordKind.MeleeCavalry
+                : f.QuerySystem.IsRangedFormation ? FormationCoordKind.Ranged
+                : f.QuerySystem.IsInfantryFormation ? FormationCoordKind.Infantry
+                : FormationCoordKind.Other;
+            Vec2 pos = TeamGeometry.GetFormationPosition(f, TeamPosKind.CachedMedian);
+            var ig = f.CachedFormationIntegrityData; // struct（LogFormationDetails L1085 同款先例）
+            float integrity = FormationIntegrity.Compute(
+                ig.DeviationOfPositionsExcludeFarAgents, ig.MaxDeviationOfPositionExcludeFarAgents,
+                VecMath.Dist(0f, 0f, ig.AverageVelocityExcludeFarAgents.x, ig.AverageVelocityExcludeFarAgents.y),
+                ig.AverageMaxUnlimitedSpeedExcludeFarAgents, f.CountOfUnits);
+            return new FormationCoordSnapshot
+            {
+                FormationId = f.Index,
+                Count = f.CountOfUnits,
+                X = pos.x, Y = pos.y,
+                Integrity = integrity,
+                NominalSpeed = ig.AverageMaxUnlimitedSpeedExcludeFarAgents,
+                Kind = kind,
+                IsKnown = isKnown
+            };
         }
 
         // N2 L0 战场事件 E1-E4（§3）：边沿检测 + Narrator.Notify 播报。消费既有态势/信念/存活代理，
