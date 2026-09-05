@@ -56,6 +56,54 @@ namespace CombatBrain.Coordination
         Retreat = 7
     }
 
+    /// <summary>
+    /// P0-4 Reserve 判定输入（atc4-reserve-classifier）：胶水层从既有公开聚合填充。
+    /// 语义：Reserve 需同时满足——非主动任务（推进/突击/主动支援意图）+ 未投入接敌 +
+    ///   (显式预备队分配 或 距离辅助带内含迟滞)。距离只能作辅助不能单独决定（主动任务/接敌硬否决优先）；
+    ///   MainBody 成员不因仅靠近中心成为 Reserve。
+    /// </summary>
+    public struct ReserveInput
+    {
+        public bool IsActiveTask;      // 处于推进/突击/主动支援任务（队级意图主动进攻）→ 硬否决
+        public bool InContact;         // 已投入接敌（近战接触）→ 硬否决
+        public bool ExplicitReserve;   // 显式预备队分配（第一版无命令源，胶水层恒 false；预留可靠角色依据接口）
+        public float MainBodyDistance; // 距 MainBody 距离（m，辅助条件）
+    }
+
+    /// <summary>
+    /// P0-4 Reserve 判定器（纯逻辑，零 TaleWorlds 可单测）：ATC-3（FormationMissionAssigner 输入构建）与
+    ///   ATC-4（Commitment 输入构建）共用的唯一 Reserve 判定源（规格 §二 P0-4④：禁止复制两套表达式）。
+    /// 距离只作辅助（带内才可能 Reserve），主动任务/接敌为硬否决；ExplicitReserve 显式分配直接 Reserve；
+    ///   迟滞（HysteresisMeters）防位置微小变化造成 Reserve/非 Reserve 抖动。
+    /// </summary>
+    public static class ReserveClassifier
+    {
+        public const float ReserveRadiusMeters = 30f; // 预备带半径（辅助条件：进入 ≤30m 才可能 Reserve）
+        public const float HysteresisMeters = 10f;    // 迟滞带（已 Reserve 需 >40m 才解除，防抖动）
+        public const float ContactMeters = 20f;       // 接敌近似阈值（ATC-3 队级近似用；ATC-4 用 CommitmentContact 编队级）
+
+        /// <summary>判定是否 Reserve（lastIsReserve=上拍结果，供迟滞；首拍 false）。</summary>
+        public static bool IsReserve(ReserveInput input, bool lastIsReserve)
+        {
+            // 硬否决：推进/突击/主动支援任务（不属 MainEffort 的近似——主动任务=参与 MainEffort）
+            if (input.IsActiveTask) return false;
+            // 硬否决：已投入接敌
+            if (input.InContact) return false;
+            // 显式预备队分配 → Reserve（可靠角色依据；第一版无命令源恒 false，预留）
+            if (input.ExplicitReserve) return true;
+            // 无显式分配：距离仅辅助 + 迟滞防抖（lastIsReserve=true 时需超出半径+迟滞才解除）
+            float threshold = lastIsReserve ? ReserveRadiusMeters + HysteresisMeters : ReserveRadiusMeters;
+            return input.MainBodyDistance <= threshold;
+        }
+
+        /// <summary>队级意图是否主动（推进/突击/主动支援）——Reserve 硬否决输入之一。</summary>
+        public static bool IsActiveIntent(IntentType intent)
+        {
+            return intent == IntentType.Attack || intent == IntentType.Flank
+                || intent == IntentType.Harass || intent == IntentType.Pursue;
+        }
+    }
+
     public static class FormationMissionAssigner
     {
         /// <summary>§9 第一版任务映射（纯函数，可替换）。</summary>

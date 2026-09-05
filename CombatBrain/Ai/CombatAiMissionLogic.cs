@@ -74,6 +74,10 @@ namespace CombatBrain.Ai
             //   各层按自身编队历史判趋势（FormationDistanceTrend.IsIncreasing 纯函数），零命令/阈值变化。
             public readonly Dictionary<int, float> MissionPrevDist = new Dictionary<int, float>();      // ATC-3 距离趋势基线
             public readonly Dictionary<int, float> CommitmentPrevDist = new Dictionary<int, float>();   // ATC-4 距离趋势基线（独立）
+            // atc4-reserve-classifier P0-4：Reserve 判定迟滞状态（ReserveClassifier 唯一判定源；
+            //   ATC-3/ATC-4 各自维护防同拍先写后读——同 prevdist 教训）
+            public readonly Dictionary<int, bool> MissionReserveLast = new Dictionary<int, bool>();       // ATC-3 Reserve 上拍结果
+            public readonly Dictionary<int, bool> CommitmentReserveLast = new Dictionary<int, bool>();    // ATC-4 Reserve 上拍结果
 
             // ATC-4 Commitment 影子判定（0.5s；每编队一条，只记录「若执行层接线将允许/拒绝什么」，零行为变化）。
             // 键=Formation.Index；日志变化才写（Permission/Reasons 边沿），禁每拍每队刷。
@@ -708,6 +712,10 @@ namespace CombatBrain.Ai
             float aliveSelf = own.ActiveAgents.Count;
             int aliveEnemy = enemy != null ? enemy.ActiveAgents.Count : 0;
             float localRatio = aliveEnemy > 0 ? aliveSelf / (float)aliveEnemy : 1f; // 局部兵力比近似（队级存活比）
+            // atc4-reserve-classifier P0-4：ATC-3 接敌近似（队级口径：编队距敌队中心 ≤ ReserveClassifier.ContactMeters；
+            //   ATC-4 用 CommitmentContact 编队级精确口径——Reserve 判定源唯一，输入近似层级不同，注释说明）
+            Vec2 enemyCenter = enemy != null ? GetTeamCenter(enemy) : Vec2.Zero;
+            bool hasEnemy = enemy != null;
 
             foreach (Formation f in own.FormationsIncludingEmpty)
             {
@@ -719,17 +727,30 @@ namespace CombatBrain.Ai
                 if (!state.MissionPrevDist.TryGetValue(f.Index, out prevDist)) prevDist = 0f;
                 bool distIncreasing = FormationDistanceTrend.IsIncreasing(prevDist, dist);
 
-                // §9 任务映射输入
+                // §9 任务映射输入（P0-4：Reserve 判定走 ReserveClassifier 唯一源——主动任务/接敌硬否决 +
+                //   距离辅助 + 迟滞防抖，替代旧「距 MainBody<30m 即 Reserve」单条件误判）
                 FormationCoordKind kind = MapKind(f);
                 string moraleState = _morale.GetStateName(f); // F11 撤退 FSM（"-"=无记录）
                 bool inRetreat = moraleState != "-" && moraleState != "Hold"; // 非 Hold 即撤退中
+                bool inContact = hasEnemy
+                    && VecMath.Dist(pos.x, pos.y, enemyCenter.x, enemyCenter.y) <= ReserveClassifier.ContactMeters;
+                bool lastReserve;
+                if (!state.MissionReserveLast.TryGetValue(f.Index, out lastReserve)) lastReserve = false;
+                bool isReserve = ReserveClassifier.IsReserve(new ReserveInput
+                {
+                    IsActiveTask = ReserveClassifier.IsActiveIntent(state.LastIntent),
+                    InContact = inContact,
+                    ExplicitReserve = false, // 第一版无显式预备队命令源，预留
+                    MainBodyDistance = dist
+                }, lastReserve);
+                state.MissionReserveLast[f.Index] = isReserve;
                 var mission = FormationMissionAssigner.Assign(new MissionInput
                 {
                     Kind = kind,
                     Phase = state.Phase,
                     Intent = state.LastIntent,
                     InRetreat = inRetreat,
-                    IsReserve = dist < 30f && !inRetreat && state.Army.MainBodyStrength > 0 // 未投入且靠近 MainBody
+                    IsReserve = isReserve && state.Army.MainBodyStrength > 0 // 无主力存在时不标 Reserve
                 });
 
                 // §4.4 隔离判定（SupportScore 第一版近似：MainBody 兵力占比；ArrivalGap 缺省=false）
@@ -857,13 +878,25 @@ namespace CombatBrain.Ai
                 FormationCoordKind kind = self.Kind;
                 string moraleState = _morale.GetStateName(f); // F11 撤退 FSM（"-"=无记录）
                 bool inRetreat = moraleState != "-" && moraleState != "Hold";
+                // atc4-reserve-classifier P0-4：Reserve 判定走 ReserveClassifier 唯一源（与 ATC-3 同判定逻辑，
+                //   InContact 用编队级 CommitmentContact 精确口径；迟滞状态独立防同拍先写后读）
+                bool lastReserve;
+                if (!state.CommitmentReserveLast.TryGetValue(f.Index, out lastReserve)) lastReserve = false;
+                bool isReserve = ReserveClassifier.IsReserve(new ReserveInput
+                {
+                    IsActiveTask = ReserveClassifier.IsActiveIntent(state.LastIntent),
+                    InContact = inContact,
+                    ExplicitReserve = false,
+                    MainBodyDistance = dist
+                }, lastReserve);
+                state.CommitmentReserveLast[f.Index] = isReserve;
                 var mission = FormationMissionAssigner.Assign(new MissionInput
                 {
                     Kind = kind,
                     Phase = state.Phase,
                     Intent = state.LastIntent,
                     InRetreat = inRetreat,
-                    IsReserve = dist < 30f && !inRetreat && state.Army.MainBodyStrength > 0
+                    IsReserve = isReserve && state.Army.MainBodyStrength > 0
                 });
 
                 CommitmentDecision decision = CommitmentEvaluator.Evaluate(new CommitmentInput
@@ -880,7 +913,7 @@ namespace CombatBrain.Ai
                     FriendlyArrivalEta = est.FriendlyEta,
                     EnemyContactEta = est.EnemyContactEta,
                     Integrity = self.Integrity,
-                    IsReserve = dist < 30f && !inRetreat && state.Army.MainBodyStrength > 0, // 与 ATC-3 同口径
+                    IsReserve = isReserve && state.Army.MainBodyStrength > 0, // 与 ATC-3 同口径（ReserveClassifier 唯一源）
                     InContact = inContact,           // ④ 接线：距最近已知敌编队 ≤20m（编队级近似，纪律2 生效）
                     DefensiveOverride = defensiveActive, // ④ 接线：Brace/Protect 激活（既有公开状态，§4.5 优先）
                     EmergencyOverride = false // ④ 收口：编队级无既有 Emergency 聚合——个体级 SurvivalGlue 属 LOD

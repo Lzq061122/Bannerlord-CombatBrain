@@ -158,6 +158,9 @@ namespace OfflineTests
             Console.WriteLine("== atc4-fog CommitmentContact ==");
             TestCommitmentContact();
 
+            Console.WriteLine("== atc4-reserve ReserveClassifier ==");
+            TestReserveClassifier();
+
             Console.WriteLine("== N1 NarratorPure ==");
             TestNarratorPure();
 
@@ -2962,6 +2965,65 @@ namespace OfflineTests
                 new FormationCoordSnapshot { FormationId = 1, Count = 40, X = 20f, Y = 0f, IsKnown = true }
             };
             Check(CommitmentContact.IsInContact(0f, 0f, boundary, ContactMeters), "atc4-fog exact 20m boundary -> contact");
+        }
+
+        // atc4-reserve-classifier P0-4：Reserve 判定重构（ReserveClassifier 唯一源：距离仅辅助 + 主动任务/接敌硬否决 + 迟滞防抖）
+        private static void TestReserveClassifier()
+        {
+            // 1) 主力步兵在 MainBody 中心（队级意图 Attack=主动任务）→ 不得自动 Reserve（不属 MainEffort 近似硬否决）
+            Check(!ReserveClassifier.IsReserve(new ReserveInput
+            { IsActiveTask = true, InContact = false, MainBodyDistance = 5f }, false),
+                "atc4-reserve main-body infantry active task -> not reserve");
+
+            // 2) 明确分配后备（ExplicitReserve=true）→ Reserve（可靠角色依据）
+            Check(ReserveClassifier.IsReserve(new ReserveInput
+            { IsActiveTask = false, InContact = false, ExplicitReserve = true, MainBodyDistance = 200f }, false),
+                "atc4-reserve explicit reserve -> reserve");
+
+            // 3) 已接敌（InContact=true）→ 不得 Reserve
+            Check(!ReserveClassifier.IsReserve(new ReserveInput
+            { IsActiveTask = false, InContact = true, MainBodyDistance = 10f }, false),
+                "atc4-reserve in contact -> not reserve");
+
+            // 4) 执行 MainEffort（IsActiveTask=true）→ 不得 Reserve（即使距离近）
+            Check(!ReserveClassifier.IsReserve(new ReserveInput
+            { IsActiveTask = true, InContact = false, MainBodyDistance = 8f }, false),
+                "atc4-reserve main effort -> not reserve");
+
+            // 5) 距离仅辅助：非主动+未接敌+带内（25m ≤30）→ Reserve
+            Check(ReserveClassifier.IsReserve(new ReserveInput
+            { IsActiveTask = false, InContact = false, MainBodyDistance = 25f }, false),
+                "atc4-reserve idle within 30m -> reserve (距离辅助)");
+            // 带外（35m > 30）且未 Reserve → 非 Reserve（距离辅助不单独决定 Reserve 但决定进入）
+            Check(!ReserveClassifier.IsReserve(new ReserveInput
+            { IsActiveTask = false, InContact = false, MainBodyDistance = 35f }, false),
+                "atc4-reserve idle beyond 30m not reserved -> not reserve");
+
+            // 6) 抖动迟滞：已 Reserve 时 35m 仍保持（≤30+10 迟滞带）；45m 解除；未 Reserve 时 35m 不进入
+            Check(ReserveClassifier.IsReserve(new ReserveInput
+            { IsActiveTask = false, InContact = false, MainBodyDistance = 35f }, true),
+                "atc4-reserve hysteresis keeps reserve at 35m");
+            Check(!ReserveClassifier.IsReserve(new ReserveInput
+            { IsActiveTask = false, InContact = false, MainBodyDistance = 45f }, true),
+                "atc4-reserve hysteresis releases at 45m");
+            Check(!ReserveClassifier.IsReserve(new ReserveInput
+            { IsActiveTask = false, InContact = false, MainBodyDistance = 35f }, false),
+                "atc4-reserve no jitter: 35m not reserved stays not reserved");
+
+            // 7) IsActiveIntent 映射：进攻/侧击/骚扰/追击=主动；防御/重整=非主动
+            Check(ReserveClassifier.IsActiveIntent(IntentType.Attack)
+                && ReserveClassifier.IsActiveIntent(IntentType.Flank)
+                && ReserveClassifier.IsActiveIntent(IntentType.Harass)
+                && ReserveClassifier.IsActiveIntent(IntentType.Pursue),
+                "atc4-reserve active intents attack/flank/harass/pursue");
+            Check(!ReserveClassifier.IsActiveIntent(IntentType.Defend)
+                && !ReserveClassifier.IsActiveIntent(IntentType.Reform)
+                && !ReserveClassifier.IsActiveIntent(IntentType.ProtectArcher),
+                "atc4-reserve non-active intents defend/reform/protect");
+
+            // 8) 常量契约（与胶水层同口径）
+            Check(ReserveClassifier.ReserveRadiusMeters == 30f && ReserveClassifier.HysteresisMeters == 10f
+                && ReserveClassifier.ContactMeters == 20f, "atc4-reserve constants 30/10/20");
         }
 
         private static int idxDefend()
