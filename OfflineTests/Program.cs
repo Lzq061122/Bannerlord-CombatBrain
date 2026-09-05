@@ -659,6 +659,23 @@ namespace OfflineTests
             m4.ApplySignal(SignalKind.CeaseFire, 1f, 4f);
             CheckApprox(m4.BeliefRaw()[(int)EnemyIntent.FrontalAttack], 0.40f, "CeaseFire caps FrontalAttack 0.40");
 
+            // ---- atc4-phase-provenance-fix P1-6：多观察方隔离——两个己方 Team（own A/B）观察同一敌编队，
+            //   各自独立 OpponentModel 实例（胶水层 ModelFor(ownTeamId) 每观察方一实例），信念互不串扰 ----
+            var obsA = new OpponentModel(t);
+            var obsB = new OpponentModel(t);
+            obsA.Tick(0f);
+            obsB.Tick(0f);
+            obsA.ApplySignal(SignalKind.SkeinCharge, 1f, 0f);   // A 观察到敌编队冲锋
+            obsB.ApplySignal(SignalKind.ShieldWallHold, 1f, 0f); // B 观察到同一敌编队据守（各自独立轨迹基线）
+            CheckApprox(obsA.BeliefRaw()[(int)EnemyIntent.FrontalAttack], 0.80f, "atc4-phase obsA front 0.80 (isolation)");
+            CheckApprox(obsB.BeliefRaw()[(int)EnemyIntent.FrontalAttack], 0f, "atc4-phase obsB front 0 (负 prior 钳位, 无 A 串扰)");
+            CheckApprox(obsA.BeliefRaw()[(int)EnemyIntent.Reform], 0f, "atc4-phase obsA unaffected by obsB signal");
+            CheckApprox(obsB.BeliefRaw()[(int)EnemyIntent.Reform], 0.30f, "atc4-phase obsB reform 0.30 (own baseline)");
+            // 同一信号时间线各自独立（A 的 SkeinCharge 冷却不影响 B 的 SkeinCharge 触发；
+            //   B 内部信念 = ShieldWall 的 -0.20 + SkeinCharge 的 +0.80 = 0.60）
+            obsB.ApplySignal(SignalKind.SkeinCharge, 1f, 1f);
+            CheckApprox(obsB.BeliefRaw()[(int)EnemyIntent.FrontalAttack], -0.20f + 0.80f, "atc4-phase obsB own skein signal accumulates");
+
             // ---- TacticManual 评分接入（score = ΣV·W + ΣB·C）----
             Check(TacticManual.EnemyIntentCount == 6, "EnemyIntentCount 6");
             int idxDef = idxDefend();
@@ -2169,6 +2186,34 @@ namespace OfflineTests
             string agg = p5.BuildSourceAggregate();
             Check(agg.Contains("Cavalry=1/o1") && agg.Contains("Morale=1/o0"), "atc0 source aggregate counts+overrides");
             Check(agg.Contains("Protect=0/o0"), "atc0 source aggregate zero source included (固定顺序)");
+
+            // 5) atc4-phase-provenance-fix P1-3：环形缓冲绕回——旧 Formation 映射不得指向其他编队的新记录
+            //   （槽位被覆盖前清理旧映射 + LastIndex 槽位验证双保险）
+            var p6 = new CommandProvenance();
+            p6.BeginLogicalTick(0f);
+            p6.Record(0, CommandSource.Cavalry, CommandKind.Charge); // 编队 0 记录 @槽位 0
+            // 编队 1 反复写填满 ring（i=1..255 写槽位 1..255）→ 共 256 条，head 回到 0
+            for (int i = 1; i < CommandProvenance.Capacity; i++)
+            {
+                p6.BeginLogicalTick(i);
+                p6.Record(1, CommandSource.Morale, CommandKind.Move);
+            }
+            // 再写一条编队 1 → 覆盖槽位 0（原属编队 0 的记录）。修复后：覆盖时清理 _lastByFormation[0]
+            p6.BeginLogicalTick(256f);
+            p6.Record(1, CommandSource.Morale, CommandKind.Move);
+            Check(p6.LastIndex(0) == -1, "atc4-phase overwritten slot mapping cleaned (编队0 不指向编队1 记录)");
+            Check(p6.BuildOrderTrace(0) == string.Empty, "atc4-phase formation 0 trace empty after slot stolen");
+            // 编队 1 记录链完整（未被误指破坏）
+            string tr1 = p6.BuildOrderTrace(1);
+            Check(tr1.StartsWith("Morale:Move") && tr1.EndsWith("final=Move"), "atc4-phase formation 1 trace intact");
+
+            // 6) P1-3：同拍覆盖链绕回后仍正确（编队 1 同拍两条 → 第二条 overrode 第一条）
+            var p7 = new CommandProvenance();
+            p7.BeginLogicalTick(1f);
+            p7.Record(1, CommandSource.Protect, CommandKind.Move);
+            p7.Record(1, CommandSource.Brace, CommandKind.Hold);
+            string trace7 = p7.BuildOrderTrace(1);
+            Check(trace7 == "Protect:Move → Brace:Hold(overrode Protect) → final=Hold", "atc4-phase same-tick override after fix");
         }
 
         // ATC-1 战局阶段机（BattlePhaseFSM 纯逻辑）：五态全边界/最短驻留/同态不重播/Retreat 终态/早期伤亡不误进 Exploit
@@ -2189,10 +2234,10 @@ namespace OfflineTests
             { OwnSurvival = 0.5f, TimeInPhase = 6f });
             Check(r2.Phase == BattlePhase.Deployment, "atc1 low survival blocks advance");
 
-            // 4) Advance→Engage：驻留够即接敌
+            // 4) Advance→Engage：真实接触（EnemyContact=true）+ 驻留够（P1-2 接入后接触为转移条件）
             var r3 = BattlePhaseFSM.Advance(BattlePhase.Advance, new BattlePhaseInput
-            { OwnSurvival = 0.8f, TimeInPhase = 6f });
-            Check(r3.Phase == BattlePhase.Engage && r3.Changed, "atc1 advance -> engage");
+            { OwnSurvival = 0.8f, TimeInPhase = 6f, EnemyContact = true });
+            Check(r3.Phase == BattlePhase.Engage && r3.Changed, "atc1 advance -> engage (contact, P1-2)");
 
             // 5) Engage→Exploit：敌弱化 + 敌存活<0.4（修订6 双条件之一）
             var r4 = BattlePhaseFSM.Advance(BattlePhase.Engage, new BattlePhaseInput
@@ -2262,12 +2307,24 @@ namespace OfflineTests
                 && BattlePhaseFSM.MinDwellSeconds == 5f && BattlePhaseFSM.ExploitEnemySurvival == 0.4f,
                 "atc1 threshold constants");
 
-            // 18) atc1 nits 收口：EnemyContact 契约字段默认 false 不参与转移——Advance→Engage 无条件转移保持现状
-            // （可选输入契约补全，未接线前胶水层不设该字段，语义零变化）
+            // 18) atc4-phase-provenance-fix P1-2：EnemyContact 已接入——无有效接触不得仅因计时结束进入 Engage
+            // （双方距离很远且无接触时保持 Advance；最短驻留守卫不变）
             var rEC = BattlePhaseFSM.Advance(BattlePhase.Advance, new BattlePhaseInput
             { OwnSurvival = 0.8f, TimeInPhase = 6f, EnemyContact = false });
-            Check(rEC.Phase == BattlePhase.Engage && rEC.Changed,
-                "atc1 advance->engage unconditional with EnemyContact default false (契约字段保持)");
+            Check(rEC.Phase == BattlePhase.Advance && !rEC.Changed,
+                "atc4-phase no contact -> stay Advance (无接触不自动 Engage, P1-2)");
+
+            // 19) P1-2：有真实接触（EnemyContact=true）→ Advance→Engage
+            var rEC2 = BattlePhaseFSM.Advance(BattlePhase.Advance, new BattlePhaseInput
+            { OwnSurvival = 0.8f, TimeInPhase = 6f, EnemyContact = true });
+            Check(rEC2.Phase == BattlePhase.Engage && rEC2.Changed,
+                "atc4-phase contact -> Engage (P1-2 真实接触推进)");
+
+            // 20) P1-2：无接触 + 驻留不足 → 保持 Advance（双重守卫）
+            var rEC3 = BattlePhaseFSM.Advance(BattlePhase.Advance, new BattlePhaseInput
+            { OwnSurvival = 0.8f, TimeInPhase = 2f, EnemyContact = true });
+            Check(rEC3.Phase == BattlePhase.Advance && !rEC3.Changed,
+                "atc4-phase contact but dwell<5s -> stay Advance (最短驻留保留)");
         }
 
         // ATC-2 ArmyContext（MainBodySelector/OperationalObjectiveSelector 纯逻辑）：最大簇/平局/加权中心/孤立骑兵/空队/单编队/两集团/迷雾三态

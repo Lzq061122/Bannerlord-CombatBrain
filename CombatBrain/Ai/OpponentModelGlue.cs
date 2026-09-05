@@ -32,7 +32,10 @@ namespace CombatBrain.Ai
         private const float RoutIsReal = 0.15f;           // 敌逃跑率 ≥15% → 撤退视为真退（不判佯退）
 
         private readonly Dictionary<int, OpponentModel> _models = new Dictionary<int, OpponentModel>();
-        private readonly Dictionary<Formation, FormationTrack> _tracks = new Dictionary<Formation, FormationTrack>();
+        // atc4-phase-provenance-fix P1-6：轨迹键改 (ownTeamId, formationId) 复合——原以敌方 Formation 对象为
+        //   唯一键但 DistToUs 与观察方 Team 有关（多己方 Team 观察同一敌编队时互相覆盖串线）；
+        //   现每个观察方维护独立距离/速度基线。键=TrackKey(ownTeamId, formationId)（long 复合，避免引用滞留）。
+        private readonly Dictionary<long, FormationTrack> _tracks = new Dictionary<long, FormationTrack>();
         private readonly Dictionary<int, float> _enemyFiring = new Dictionary<int, float>(); // 队 → 上一拍在射比例
         private readonly Dictionary<int, float> _enemyInitialAlive = new Dictionary<int, float>();
         private readonly Dictionary<int, Vec2> _teamCenter = new Dictionary<int, Vec2>();    // 队 → 上次中心（无一兵保持）
@@ -84,6 +87,21 @@ namespace CombatBrain.Ai
             Vec2 ec = TeamCenter(enemy);
             float dist = VecMath.Dist(oc.x, oc.y, ec.x, ec.y);
 
+            // P1-6：清理本观察方 (own) 已不存在/已空的敌编队轨迹（编队解散/移除后不滞留——
+            //   先收集当前有效轨迹键，再删 own 域内不在有效集的旧键）
+            var validTracks = new HashSet<long>();
+            foreach (Formation f in enemy.FormationsIncludingEmpty)
+            {
+                if (f == null || f.CountOfUnits == 0 || f.QuerySystem == null) continue;
+                validTracks.Add(TrackKey(own.TeamIndex, f.Index));
+            }
+            var staleTracks = new List<long>();
+            foreach (long k in _tracks.Keys)
+            {
+                if (TrackOwner(k) == own.TeamIndex && !validTracks.Contains(k)) staleTracks.Add(k);
+            }
+            for (int i = 0; i < staleTracks.Count; i++) _tracks.Remove(staleTracks[i]);
+
             // ---- 一次敌方编队遍历：收集信号证据 + 编队中心（读集：位置/朝向/阵宽/完整度，抗作弊 ✅）----
             _enemyFcs.Clear();
             float total = 0f, skein = 0f, wall = 0f;
@@ -102,7 +120,8 @@ namespace CombatBrain.Ai
                 _enemyFcs.Add(fc);
 
                 FormationTrack tr;
-                if (!_tracks.TryGetValue(f, out tr)) { tr = new FormationTrack { DistToUs = fd }; _tracks[f] = tr; }
+                long tk = TrackKey(own.TeamIndex, f.Index); // P1-6：复合键（own×formation，观察方独立基线）
+                if (!_tracks.TryGetValue(tk, out tr)) { tr = new FormationTrack { DistToUs = fd }; _tracks[tk] = tr; }
                 float prev = tr.DistToUs;
                 tr.DistToUs = fd;
                 float radialSpeed = prev > 0f ? Math.Abs(fd - prev) / TickSeconds : 0f; // 速度代理 ✅
@@ -331,6 +350,19 @@ namespace CombatBrain.Ai
         private static float Clamp01(float x)
         {
             return x < 0f ? 0f : (x > 1f ? 1f : x);
+        }
+
+        // atc4-phase-provenance-fix P1-6：轨迹复合键——(ownTeamId, formationId) 编码进 long
+        //   （ownTeamId 高 16 位，formationId 低 16 位；编队索引 <100 余量充足，观察方维度独立）
+        private static long TrackKey(int ownTeamId, int formationId)
+        {
+            return ((long)ownTeamId << 16) | (formationId & 0xFFFFL);
+        }
+
+        // P1-6：从复合键取观察方 TeamId（own 域清理用）
+        private static int TrackOwner(long key)
+        {
+            return (int)(key >> 16);
         }
 
         private static Vec2 Norm(float x, float y)

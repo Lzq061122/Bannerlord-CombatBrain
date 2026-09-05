@@ -78,7 +78,16 @@ namespace CombatBrain.Coordination
         private int _head;                        // 下一条写入位置（破顶覆盖最旧）
         private int _count;                       // 已写入条数（≤Capacity）
         private readonly Dictionary<int, int> _lastByFormation = new Dictionary<int, int>(); // 编队 → ring 中最近 trace 下标
+        private readonly int[] _slotFormation;    // atc4-phase-provenance-fix P1-3：ring 槽位 → FormationId 反向映射
+                                                  //   （-1=空槽；槽位被覆盖前清理指向该槽位的旧 Formation 映射，
+                                                  //    防旧 Formation 的 _lastByFormation 指向其他编队的新记录）
         private float _lastTick = -1f;            // 当前逻辑拍（BeginLogicalTick 设置；-1=未开始）
+
+        public CommandProvenance()
+        {
+            _slotFormation = new int[Capacity];
+            for (int i = 0; i < _slotFormation.Length; i++) _slotFormation[i] = -1;
+        }
 
         public int Count { get { return _count; } }
 
@@ -93,8 +102,8 @@ namespace CombatBrain.Coordination
             int reasonCode = 0, int targetId = -1, float tx = 0f, float ty = 0f)
         {
             float now = _lastTick >= 0f ? _lastTick : 0f;
-            int prev;
-            if (_lastByFormation.TryGetValue(formationId, out prev))
+            int prev = LastIndex(formationId); // P1-3：读取映射后验证槽位 FormationId 匹配（绕回后旧映射不误判覆盖链）
+            if (prev >= 0)
             {
                 FormationDecisionTrace last = _ring[prev];
                 // 同一编队同一逻辑拍：上一条被本条覆盖（同拍覆盖链可复原）
@@ -106,7 +115,15 @@ namespace CombatBrain.Coordination
                 }
             }
 
+            // P1-3：槽位被覆盖前，清理指向该槽位的旧 Formation 映射（防旧编队指向其他编队的新记录）
+            int oldOwner = _slotFormation[_head];
+            if (oldOwner >= 0 && _lastByFormation.ContainsKey(oldOwner) && _lastByFormation[oldOwner] == _head)
+            {
+                _lastByFormation.Remove(oldOwner);
+            }
+
             _ring[_head] = new FormationDecisionTrace(formationId, now, source, kind, reasonCode, targetId, tx, ty);
+            _slotFormation[_head] = formationId;
             _lastByFormation[formationId] = _head;
             _head = (_head + 1) % Capacity;
             if (_count < Capacity) _count++;
@@ -124,6 +141,7 @@ namespace CombatBrain.Coordination
             _head = 0;
             _count = 0;
             _lastByFormation.Clear();
+            for (int i = 0; i < _slotFormation.Length; i++) _slotFormation[i] = -1;
             _lastTick = -1f;
         }
 
@@ -136,11 +154,17 @@ namespace CombatBrain.Coordination
             return _ring[idx];
         }
 
-        /// <summary>最近一条（-1=空；供同拍覆盖链判定）。</summary>
+        /// <summary>
+        /// 最近一条（-1=空；供同拍覆盖链判定）。P1-3：读取映射后验证槽位中的 FormationId 匹配——
+        ///   环形缓冲绕回后旧映射若未被清理，此处返回 -1（不指向其他编队的新记录）。
+        /// </summary>
         public int LastIndex(int formationId)
         {
             int idx;
-            return _lastByFormation.TryGetValue(formationId, out idx) ? idx : -1;
+            if (!_lastByFormation.TryGetValue(formationId, out idx)) return -1;
+            if (idx < 0 || idx >= Capacity) return -1;
+            if (_ring[idx].FormationId != formationId) return -1; // 槽位验证（绕回误指防护）
+            return idx;
         }
 
         // ---- ATC-0 输出层（t34 补齐；只读既有记录数据，零新增游戏读取）----

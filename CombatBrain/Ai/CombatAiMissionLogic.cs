@@ -60,6 +60,9 @@ namespace CombatBrain.Ai
             // ATC-1 战局阶段（队级五态上下文；只更新状态+发事件/播报，不下命令）
             public BattlePhase Phase = BattlePhase.Deployment; // 当前战局阶段
             public float PhaseEnteredAt = 0f; // 进入当前阶段的时刻（相位内时间基准，强制修订4）
+            // P1-2：稳定敌军初始兵力基线（开战首拍缓存最近敌队存活数；不再用滚动队列 Peek 代替开战初始值。
+            //   多敌队场景口径：GetEnemyTeam 取最近敌队，基线=该敌队开战存活数；-1=未初始化）
+            public float EnemyInitialCount = -1f;
 
             // ATC-2 Army Context 影子快照（0.5s 更新；MainBody/Objective 只算不改行为）
             public ArmyContextSnapshot Army = ArmyContextSnapshot.None;
@@ -1082,15 +1085,40 @@ namespace CombatBrain.Ai
         // 强制修订落实：OwnSurvival=aliveSelf/InitialCount 真实存活比（修订2）；Retreat 终态（修订3）；
         //   TimeInPhase=_elapsed-PhaseEnteredAt（修订4）；Stalemate 不触发转移（修订5）；
         //   EnemyWeakening 需配合敌存活<阈值或 Pursue 才进 Exploit（修订6）。
-        // 反作弊闸：输入=己方/敌方存活聚合（ActiveAgents 公开）+ 既有僵局判定，零新增禁读。
+        // P1-2：①稳定敌军初始基线=state.EnemyInitialCount（开战首拍缓存最近敌队存活数，绝不用滚动队列
+        //   Peek 代替开战初始值；多敌队口径：GetEnemyTeam 取最近敌队，基线=该敌队开战存活数）；
+        //   ②Advance→EnemyContact 接入真实且符合迷雾约束的接触信号（己方编队与已知敌编队中心 ≤20m，
+        //   未知敌不触发）——无接触不得仅因计时结束进入 Engage；最短驻留保留。
+        // 反作弊闸：输入=己方/敌方存活聚合（ActiveAgents 公开）+ 编队中心（TeamGeometry）+ 既有僵局判定，
+        //   零新增禁读；O(编队数²) 0.5s 拍。
         private void TickBattlePhase(TeamState state, Team own, Team enemy, int aliveSelf, int aliveEnemy)
         {
             float ownSurvival = state.InitialCount > 0f ? (float)aliveSelf / state.InitialCount : 1f; // 修订2
-            float enemySurvival = 1f; // 敌初始存活基线（首拍=1）；EnemyCountHistory 首值作敌初始近似
-            if (state.EnemyCountHistory.Count > 0)
+            // P1-2①：稳定敌军初始基线（首拍缓存；滚动队列 Peek 已弃用）
+            if (state.EnemyInitialCount < 0f) state.EnemyInitialCount = aliveEnemy;
+            float enemySurvival = state.EnemyInitialCount > 0f ? aliveEnemy / state.EnemyInitialCount : 1f;
+
+            // P1-2②：真实且符合迷雾约束的敌接触（己方编队 vs 已知敌编队 ≤20m；未知敌不触发）
+            bool enemyContact = false;
+            if (enemy != null)
             {
-                float enemyInitial = state.EnemyCountHistory.Peek();
-                if (enemyInitial > 0f) enemySurvival = aliveEnemy / enemyInitial;
+                foreach (Formation f in own.FormationsIncludingEmpty)
+                {
+                    if (f == null || f.CountOfUnits == 0 || f.QuerySystem == null) continue;
+                    Vec2 fc = TeamGeometry.GetFormationPosition(f, TeamPosKind.CachedMedian);
+                    foreach (Formation ef in enemy.FormationsIncludingEmpty)
+                    {
+                        if (ef == null || ef.CountOfUnits == 0 || ef.QuerySystem == null) continue;
+                        if (!IsEnemyFormationKnown(own, ef)) continue; // 迷雾约束：未知敌不触发接触
+                        Vec2 ec2 = TeamGeometry.GetFormationPosition(ef, TeamPosKind.CachedMedian);
+                        if (VecMath.Dist(fc.x, fc.y, ec2.x, ec2.y) <= ReserveClassifier.ContactMeters)
+                        {
+                            enemyContact = true;
+                            break;
+                        }
+                    }
+                    if (enemyContact) break;
+                }
             }
 
             var input = new BattlePhaseInput
@@ -1098,6 +1126,7 @@ namespace CombatBrain.Ai
                 OwnSurvival = ownSurvival,
                 EnemySurvival = enemySurvival,
                 Stalemate = _stalemateActive,          // 修订5：不触发转移
+                EnemyContact = enemyContact,           // P1-2②：真实接触才 Advance→Engage
                 EnemyWeakening = enemySurvival < 0.4f,  // 敌弱化信号（修订6 条件之一）
                 Intent = state.LastIntent,             // Pursue 直接触发 Exploit（修订6）
                 TimeInPhase = _elapsed - state.PhaseEnteredAt // 修订4：相位内时间

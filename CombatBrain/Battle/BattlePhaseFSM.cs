@@ -33,14 +33,14 @@ namespace CombatBrain.Battle
     {
         public float OwnSurvival;     // 己方真实存活比 aliveSelf/InitialCount（强制修订2：禁 v.Moral）
         public float EnemySurvival;   // 敌存活比 aliveEnemy/EnemyInitial（强制修订6）
-        // Stalemate：僵局信号（强制修订5：Stalemate 不触发转移）。atc1 nits 收口：本字段为契约占位——
-        //   当前实现通过「不消费 Stalemate 即不因僵局转移」自然满足修订5（Advance→Engage 无条件转移由
-        //   EnemyContact 契约字段承载未来门控），故无读取点；作为输入契约字段保留并注明语义，禁止删除，
-        //   若未来 Advance→Engage 引入 EnemyContact 门控时 Stalemate 可作为「不推进」信号接入。
+        // Stalemate：僵局信号（强制修订5：Stalemate 不触发转移）。atc1 nits 收口：契约占位——
+        //   当前实现通过「不消费 Stalemate 即不因僵局转移」自然满足修订5（Advance→Engage 由
+        //   EnemyContact 门控承载）；保留字段与语义说明，禁止删除，未来可作「不推进」信号接入。
         public bool Stalemate;
-        public bool EnemyContact;     // 敌接触信号（atc1 nits 收口：可选输入契约字段）。当前默认 false 保持现状
-                                      //   （Advance→Engage 无条件转移语义不变，见 Advance() 注释）；预留供胶水层
-                                      //   未来以真实敌接触事件（意图切换/编队距敌阈值）驱动，消费前不得删除。
+        public bool EnemyContact;     // 敌接触信号（P1-2 已接入，非预留）：真实且符合迷雾约束的敌接触——
+                                      //   胶水层按「己方编队与已知敌编队中心 ≤20m」判定传入（未知敌不触发）。
+                                      //   Advance→Engage 仅在 EnemyContact=true 时转移：双方距离很远且无有效
+                                      //   接触时不得仅因计时结束进入 Engage；最短驻留仍守卫。
         public bool EnemyWeakening;   // 敌弱化信号（强制修订6：Engage→Exploit 必要条件之一）
         public IntentType Intent;     // 当前意图（Pursue 触发 Exploit，强制修订6）
         public float TimeInPhase;     // 相位内时间（强制修订4：绝不用 BattleElapsed）
@@ -95,12 +95,14 @@ namespace CombatBrain.Battle
                     break;
 
                 case BattlePhase.Advance:
-                    // Advance → Engage：敌接战（存活比下降至 <100% 即已接触，或僵局解除后接战）
-                    // 简化（现状语义，零变化）：任何非僵局且己方仍存活的推进相视为已接战——Engage 进入条件=
-                    // 非 Retreat 守卫已通过 + 存活正常 + 非 Deployment。atc1 nits 收口：EnemyContact 输入契约
-                    // 字段默认 false 不参与本转移（无条件转移保持）；胶水层未来以真实敌接触信号驱动时再接入。
-                    r.Phase = BattlePhase.Engage;
-                    r.Changed = true;
+                    // Advance → Engage：敌接战（P1-2：真实且符合迷雾约束的 EnemyContact 信号驱动——胶水层按
+                    //   己方编队与已知敌编队中心 ≤20m 判定传入；未知敌不触发）。无有效接触不得仅因计时结束
+                    //   进入 Engage（双方距离很远时保持 Advance，不假装已接战）；最短驻留仍由上方守卫保证。
+                    if (input.EnemyContact)
+                    {
+                        r.Phase = BattlePhase.Engage;
+                        r.Changed = true;
+                    }
                     break;
 
                 case BattlePhase.Engage:
