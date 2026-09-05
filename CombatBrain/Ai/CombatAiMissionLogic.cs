@@ -251,7 +251,9 @@ namespace CombatBrain.Ai
             }
 
             _bench.BeginSection("perception");
-            if (PerceptionEnabled) // P0-③ 停用：KnowledgeView 无消费者，白烧全图遍历；保留方法供接线恢复
+            // X7：FogOfWarEnabled=false 时直接跳过感知计算（关闭降开销，开启才增开销——派单④方向）；
+            // PerceptionEnabled 为 X6 接线开关（static true），FogOfWarEnabled 为玩家可关迷雾。
+            if (PerceptionEnabled && CombatBrainSettings.FogOfWarEnabled)
             {
                 TickPerception(mission);
             }
@@ -368,11 +370,14 @@ namespace CombatBrain.Ai
             }
         }
 
-        // X6：敌编队 KnowledgeView 查询（供 4 个编队级 Glue 过滤）——开关关=现状全可见（PerceptionFilter 折叠）；
-        // 开关开=查询 own 队 KnowledgeView，未见/超期 → false（视为不存在，Glue 保守降级）。
+        // X6/X7：敌编队 KnowledgeView 查询（供 4 个编队级 Glue 过滤）——
+        //   FogOfWarEnabled=false（迷雾关=全知）→ 直通 true（现状全可见，不新增信息——Glue 仍只读
+        //   己方聚合/公开编队位置，关闭不改变信息源，只去掉过滤）；
+        //   开启 → 查询 own 队 KnowledgeView，未见/超期 → false（视为不存在，Glue 保守降级）。
         private bool IsEnemyFormationKnown(Team own, Formation enemyFormation)
         {
             if (enemyFormation == null) return false;
+            if (!CombatBrainSettings.FogOfWarEnabled) return true; // X7 迷雾关=直通真实值（现状等价）
             TeamState state;
             if (!_states.TryGetValue(own.TeamIndex, out state)) return false;
             KnowledgeView.SightedInfo info;

@@ -34,5 +34,16 @@ namespace CombatBrain.Mcm
             get => CombatBrainSettings.DecisionDelayStrength <= 0f;
             set => CombatBrainSettings.DecisionDelayStrength = value ? 0f : 1f;
         }
+
+        // X7 战场信息迷雾开关（观感补强 §X7，依赖 X6 接线）：开=迷雾生效（拟人，AI 只看得见已观察敌编队）；
+        // 关=全知（查询直通 + 跳过感知计算=降开销）。默认开。硬红线：只切迷雾/全知，不触及 C 层
+        // （禁读指针/禁全图遍历个体/性能红线）；关闭不新增信息读取（信息集= X6 前现状）。
+        [SettingPropertyBool("战场信息迷雾", RequireRestart = false)]
+        [SettingPropertyGroup("真实度")]
+        public bool FogOfWarEnabled
+        {
+            get => CombatBrainSettings.FogOfWarEnabled;
+            set => CombatBrainSettings.FogOfWarEnabled = value;
+        }
     }
 }

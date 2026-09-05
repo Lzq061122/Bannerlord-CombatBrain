@@ -1784,6 +1784,17 @@ namespace OfflineTests
             cd.Remove(5);
             Check(cd.CanRelease(5, 13f), "x56 cooldown allows after Remove (agent removed)");
             Check(cd.CanRelease(6, 20f), "x56 cooldown per-agent: unmarked other agent allows");
+
+            // X7 战场信息迷雾开关：默认开（拟人）；关闭=直通（PerceptionFilter 折叠恒 true）；开启=走迷雾路径
+            Check(CombatBrainSettings.FogOfWarEnabled, "x7 fog default on (拟人)");
+            Check(PerceptionFilter.IsKnown(false, false), "x7 fog off -> known even unseen (直通=现状)");
+            Check(PerceptionFilter.IsKnown(false, true), "x7 fog off -> known (直通)");
+            Check(PerceptionFilter.IsKnown(true, true), "x7 fog on + visible -> known (迷雾路径)");
+            Check(!PerceptionFilter.IsKnown(true, false), "x7 fog on + unseen -> unknown (迷雾过滤)");
+            // 关闭迷雾=跳过感知计算（IsKnown 直通不依赖 KnowledgeView 查询结果），开启才增加开销
+            CombatBrainSettings.FogOfWarEnabled = false;
+            Check(!CombatBrainSettings.FogOfWarEnabled, "x7 fog can be turned off (热切)");
+            CombatBrainSettings.FogOfWarEnabled = true; // 还原默认（后续测试依赖拟人基线）
         }
 
         // X6 感知接线（KnowledgeView 纯逻辑 + PerceptionFilter 折叠）：可见/超期/未见三态/衰减/噪声/开关折叠

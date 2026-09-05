@@ -23,5 +23,13 @@ namespace CombatBrain
         // 能力参数非信息（反作弊闸不违规）；只对 IsAIControlled 人类单位生效（玩家手控不覆盖）。
         // 默认 1=满效果；MCM 装载后可在「通用」组里热切（RequireRestart=false）。
         public static float HandSkillStrength = 1f;
+
+        // X7 战场信息迷雾开关（观感补强 §X7，依赖 X6 接线）：true=迷雾生效（拟人，AI 只看得见
+        // KnowledgeView 已观察的敌编队，未见/超期→保守降级）；false=全知（查询直通返回真实值，
+        // 且直接跳过感知计算——关闭降开销，开启才增开销）。
+        // 硬红线：C 层（禁读指针/禁全图遍历个体/性能红线）永不开放，本开关只允许「迷雾/全知」切换，
+        // 不新增任何信息读取；关闭后 AI 信息集等于 X6 前现状（全可见公开聚合），而非大于现状。
+        // 默认 true=拟人；MCM 装载后可在「真实度」组里热切（RequireRestart=false）。
+        public static bool FogOfWarEnabled = true;
     }
 }

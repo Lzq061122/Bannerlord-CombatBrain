@@ -9,6 +9,7 @@
 
   <ItemGroup>
     <Compile Include="..\CombatBrain\Enums.cs" Link="Enums.cs" />
+    <Compile Include="..\CombatBrain\CombatBrainSettings.cs" Link="CombatBrainSettings.cs" />
     <Compile Include="..\CombatBrain\Combat\FighterProfile.cs" Link="Combat\FighterProfile.cs" />
     <Compile Include="..\CombatBrain\Movement\MovementController.cs" Link="Movement\MovementController.cs" />
     <Compile Include="..\CombatBrain\Survival\SurvivalInstinct.cs" Link="Survival\SurvivalInstinct.cs" />
