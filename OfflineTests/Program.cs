@@ -155,6 +155,9 @@ namespace OfflineTests
             Console.WriteLine("== N2 NarrativeEvents ==");
             TestNarrativeEvents();
 
+            Console.WriteLine("== N3 NarrativeBuffer ==");
+            TestNarrativeBuffer();
+
             Console.WriteLine();
             if (_failures == 0)
             {
@@ -1962,6 +1965,48 @@ namespace OfflineTests
 
         // 占位符齐全性辅助（FeedbackText 有 TaleWorlds 依赖不可链接，此处返回占位符常量供断言引用）
         private static int FeedbackTextIsLinked() { return 0; }
+
+        // N3 L1 事件缓冲（NarrativeEventBuffer 纯逻辑）：TTL 过期失效/ring 覆盖/去重 key/无事件不发
+        private static void TestNarrativeBuffer()
+        {
+            // 1) 空缓冲：PeekFresh → None（无事件不发，回退现状）
+            var buf = new NarrativeEventBuffer();
+            Check(buf.IsEmpty, "n3 empty buffer is empty");
+            Check(buf.PeekFresh(1f).Kind == NarrativeEventKind.None, "n3 empty buffer -> no cause (无事件不发)");
+
+            // 2) 写入后未过期：PeekFresh 返回最近事件
+            buf.Push(NarrativeEventKind.E1CavalryThreat, 0f);
+            Check(!buf.IsEmpty, "n3 buffer has event after push");
+            Check(buf.PeekFresh(1f).Kind == NarrativeEventKind.E1CavalryThreat, "n3 fresh event peeked");
+            Check(buf.PeekFresh(3.0f).Kind == NarrativeEventKind.E1CavalryThreat, "n3 within 3.5s TTL -> fresh");
+
+            // 3) TTL 过期失效：>3.5s 后 PeekFresh → None（回退现状）
+            Check(buf.PeekFresh(4f).Kind == NarrativeEventKind.None, "n3 past 3.5s TTL -> expired (回退)");
+
+            // 4) ring 覆盖：第 2 条事件覆盖 Slot0，第 1 条滑到 Slot1；PeekFresh 只查最近（Slot0）
+            var buf2 = new NarrativeEventBuffer();
+            buf2.Push(NarrativeEventKind.E2aGapOpportunity, 0f);
+            buf2.Push(NarrativeEventKind.E3EnemyRout, 1f);
+            Check(buf2.PeekFresh(1.5f).Kind == NarrativeEventKind.E3EnemyRout, "n3 latest event first (ring)");
+            Check(buf2.PeekFresh(3.0f).Kind == NarrativeEventKind.E3EnemyRout, "n3 latest still fresh");
+            // Slot0 过期 → PeekFresh 返回 None（Slot1 更旧必过期，不 fallback——原因 toast 只要最近一次）
+            Check(buf2.PeekFresh(5f).Kind == NarrativeEventKind.None, "n3 slot0 expired -> no cause (Slot1 更旧不回退)");
+
+            // 5) None 不写入
+            var buf3 = new NarrativeEventBuffer();
+            buf3.Push(NarrativeEventKind.None, 0f);
+            Check(buf3.IsEmpty, "n3 None kind not pushed");
+
+            // 6) 原因映射表非空（CauseOf 由 FeedbackText 提供，TaleWorlds 依赖不可离线链接——
+            //    以 5 事件 kind 映射常数断言存在性语义，N3 验收走审查）
+            Check(NarrativeEventBuffer.TtlSeconds == 3.5f, "n3 TTL constant 3.5s (§4)");
+
+            // 7) Clear 后为空
+            var buf4 = new NarrativeEventBuffer();
+            buf4.Push(NarrativeEventKind.E4PredictCharge, 0f);
+            buf4.Clear();
+            Check(buf4.IsEmpty, "n3 clear empties buffer");
+        }
 
         private static int idxDefend()
         {

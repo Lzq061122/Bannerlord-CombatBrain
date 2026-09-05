@@ -126,6 +126,22 @@ namespace CombatBrain.Ai
             }
         }
 
+        // N3 L1 动态原因（§4）：L0 事件 kind → 原因短语（短 ≤8 字，意图切换后追加第二条 toast）。
+        // kind 对应 NarrativeEventKind 枚举值 + E5 战术转折(6)。
+        public static string CauseOf(int kind)
+        {
+            switch (kind)
+            {
+                case 1: return "敌骑逼近";   // E1 骑兵威胁
+                case 2: return "敌阵缺口";   // E2a 缺口机会
+                case 3: return "侧翼受威胁"; // E2b 侧翼暴露
+                case 4: return "敌方已溃";   // E3 敌溃败
+                case 5: return "预判敌冲锋"; // E4 预测冲锋
+                case 6: return "战局转向";   // E5 战术转折
+                default: return string.Empty;
+            }
+        }
+
         // t54 阵营判定（士兵文化多数决）：GeneralAgent 文化在自定义战斗不可靠——可为 null 或
         // 与士兵不同阵营（实测选帝国显示瓦兰迪亚、日志读空 阵营=-）。改为遍历各编队士兵统计
         // 文化票数取多数；无兵 → GeneralAgent 兜底 → null（调用方自行再兜底）。

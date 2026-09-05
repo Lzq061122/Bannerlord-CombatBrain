@@ -53,6 +53,7 @@ namespace CombatBrain.Ai
             public NarrativeLatch LatchE1, LatchE2a, LatchE2b, LatchE3;
             public bool LatchE4;              // E4 预测冲锋边沿锁存
             public string LastStrategicClass = null; // E5 战术转折：上拍战略大类（进攻/防守/撤退/机动）
+            public NarrativeEventBuffer EventBuffer; // N3 L1 事件缓冲（ring 2，TTL 3.5s；意图切换后读原因）
         }
 
         private bool _initialized;
@@ -521,6 +522,21 @@ namespace CombatBrain.Ai
                             FeedbackText.Intent(newIntent), FeedbackText.TacticBrief(newIntent)),
                         InGameFeedback.TacticalColor, InGameFeedback.NotifyTactical);
 
+                    // N3 L1 动态原因（§4）：缓冲内最近未过期 L0 事件 → 追加第二条 toast。
+                    // category 用新 key "意图.原因"（不得用 "意图"——否则撞 3s 同类去重被吞）。
+                    // 无事件/过期 → 不发（回退=现状，固定 TacticBrief 已够）。反作弊闸：只读既有事件缓冲。
+                    NarrativeEventSlot cause = state.EventBuffer.PeekFresh(_elapsed);
+                    if (cause.Kind != NarrativeEventKind.None)
+                    {
+                        string causeText = FeedbackText.CauseOf((int)cause.Kind);
+                        if (!string.IsNullOrEmpty(causeText))
+                        {
+                            Narrator.Notify(NarrateInfo(own, Mission.PlayerTeam), "意图.原因",
+                                string.Format("{S}——{0}", causeText),
+                                InGameFeedback.TacticalColor, InGameFeedback.NotifyTactical);
+                        }
+                    }
+
                     // N2 E5 战术转折（特殊紫）：仅跨战略大类跳变时播（攻/守/撤/机动，§3 映射表）。
                     string newClass = FeedbackText.StrategicClass(newIntent);
                     if (state.LastStrategicClass != null && state.LastStrategicClass != newClass)
@@ -529,6 +545,7 @@ namespace CombatBrain.Ai
                             string.Format("战局变化：{S}由{0}转入{1}",
                                 state.LastStrategicClass, newClass),
                             InGameFeedback.SpecialColor, InGameFeedback.NotifyTactical);
+                        state.EventBuffer.Push(NarrativeEventKind.E5TacticalShift, _elapsed); // E5 也入缓冲（原因）
                     }
                     state.LastStrategicClass = newClass;
                 }
@@ -561,6 +578,9 @@ namespace CombatBrain.Ai
             Narrator.Notify(NarrateInfo(own, Mission.PlayerTeam), "事件",
                 FeedbackText.BattlefieldEvent((int)evt), color, InGameFeedback.NotifyTactical,
                 NarrateInfo(enemy, Mission.PlayerTeam)); // {O}=敌队（T 的敌队）
+
+            // N3 L1 事件缓冲写入（§4）：L0 事件触发时记入 ring 2，供意图切换后原因第二条 toast 消费。
+            state.EventBuffer.Push(evt, _elapsed);
         }
 
         private void ComposeVector(

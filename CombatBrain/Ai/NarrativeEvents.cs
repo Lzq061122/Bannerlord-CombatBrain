@@ -21,7 +21,8 @@ namespace CombatBrain.Ai
         E2aGapOpportunity = 2, // 缺口机会
         E2bFlankExposed = 3,   // 侧翼暴露
         E3EnemyRout = 4,       // 敌溃败
-        E4PredictCharge = 5    // 预测冲锋
+        E4PredictCharge = 5,   // 预测冲锋
+        E5TacticalShift = 6    // 战术转折（N3：仅入事件缓冲供原因 toast；播报在胶水层 E5 分支）
     }
 
     /// <summary>事件锁存（进/出双阈值 + 上次状态；E3 额外记上拍 routRatio 算斜率）。</summary>
@@ -29,6 +30,58 @@ namespace CombatBrain.Ai
     {
         public bool Active;      // 当前是否在事件内（防持续重播）
         public float PrevRout;   // E3 专用：上拍 routRatio（持续衰减斜率）
+    }
+
+    // N3 L1 事件缓冲槽（§4）：kind + 触发时刻。纯数据结构，零 TaleWorlds 依赖（可离线测）。
+    public struct NarrativeEventSlot
+    {
+        public NarrativeEventKind Kind;
+        public float Time;       // 触发时刻（战斗累计时间，秒）
+
+        public NarrativeEventSlot(NarrativeEventKind kind, float time)
+        {
+            Kind = kind;
+            Time = time;
+        }
+    }
+
+    // N3 L1 事件缓冲（ring 2，§4）：最近 2 条 L0 事件，TTL 3.5s。
+    // 意图切换后 PeekFresh 返回未过期最近事件（→ 原因第二条 toast）；无事件/过期 → None。
+    public struct NarrativeEventBuffer
+    {
+        public const float TtlSeconds = 3.5f; // §4：原因时效窗
+
+        public NarrativeEventSlot Slot0;      // 最近（新写入覆盖 Slot1）
+        public NarrativeEventSlot Slot1;
+
+        public bool IsEmpty
+        {
+            get { return Slot0.Kind == NarrativeEventKind.None && Slot1.Kind == NarrativeEventKind.None; }
+        }
+
+        /// <summary>写入事件（ring 2：Slot1 ← Slot0 ← 新事件）。</summary>
+        public void Push(NarrativeEventKind kind, float now)
+        {
+            if (kind == NarrativeEventKind.None) return;
+            Slot1 = Slot0;
+            Slot0 = new NarrativeEventSlot(kind, now);
+        }
+
+        /// <summary>读取最近未过期事件（now - time ≤ TTL；过期视为无事件）。ring 中 Slot0 恒最新——
+        /// Slot0 过期时 Slot1 必然更旧更过期，故只查 Slot0（原因 toast 只需「最近一次 L0 事件」）。</summary>
+        public NarrativeEventSlot PeekFresh(float now)
+        {
+            if (Slot0.Kind != NarrativeEventKind.None && now - Slot0.Time <= TtlSeconds)
+                return Slot0;
+            return new NarrativeEventSlot(NarrativeEventKind.None, -1f);
+        }
+
+        /// <summary>清理（编队解散/重置时调用，防滞留）。</summary>
+        public void Clear()
+        {
+            Slot0 = new NarrativeEventSlot(NarrativeEventKind.None, -1f);
+            Slot1 = new NarrativeEventSlot(NarrativeEventKind.None, -1f);
+        }
     }
 
     public static class NarrativeEvents
