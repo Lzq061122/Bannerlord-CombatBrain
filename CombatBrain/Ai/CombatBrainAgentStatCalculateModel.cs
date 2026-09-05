@@ -29,6 +29,13 @@ namespace CombatBrain.Ai
             _suppressedAttack.Remove(agentIndex);
         }
 
+        // atc4-state-lifecycle P1-4：跨 Mission 静态状态清理——AttackSuppression.ClearAll() 必须同时清空
+        //   属性模型静态抑制集合（否则下一场战斗抑制索引滞留，UpdateAgentStats 误跳过攻击概率覆盖）
+        public static void ClearAllSuppressed()
+        {
+            _suppressedAttack.Clear();
+        }
+
         public override void InitializeAgentStats(Agent agent, Equipment spawnEquipment, AgentDrivenProperties agentDrivenProperties, AgentBuildData agentBuildData)
         {
             if (BaseModel != null) BaseModel.InitializeAgentStats(agent, spawnEquipment, agentDrivenProperties, agentBuildData);

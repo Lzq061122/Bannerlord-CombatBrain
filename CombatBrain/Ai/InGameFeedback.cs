@@ -127,5 +127,19 @@ namespace CombatBrain.Ai
             _rateCount++;
             return true;
         }
+
+        // atc4-state-lifecycle P1-4：跨 Mission 幂等清理——清空静态去重/计数/速率状态
+        //   （否则上一场战斗的类别时间戳残留，下一场开局 3s 去重窗口误吞首条提示）
+        public static void ClearAll()
+        {
+            lock (_sync)
+            {
+                _lastNotify.Clear();
+                _counts.Clear();
+                _lastFlush.Clear();
+                _rateSecond = -1;
+                _rateCount = 0;
+            }
+        }
     }
 }

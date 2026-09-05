@@ -62,9 +62,12 @@ namespace CombatBrain.Ai
             CombatBrainAgentStatCalculateModel.UnmarkAttackSuppressed(agentIndex); // X2 协调：清理抑制标记
         }
 
+        // atc4-state-lifecycle P1-4：跨 Mission 幂等清理——同时清空状态表与属性模型静态抑制集合
+        //   （CombatBrainAgentStatCalculateModel._suppressedAttack，否则抑制索引跨战斗滞留）
         public void ClearAll()
         {
             _state.ClearAll();
+            CombatBrainAgentStatCalculateModel.ClearAllSuppressed();
         }
     }
 }

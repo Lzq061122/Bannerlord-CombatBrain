@@ -48,6 +48,21 @@ namespace CombatBrain.Ai
         public EnemyIntent LastDominantIntent { get; private set; }
         public float LastDominantConf { get; private set; }
 
+        // atc4-state-lifecycle P1-4：跨 Mission 幂等清理——清空信念模型/轨迹/队级缓存/透出值
+        //   （OpponentModelGlue 虽为实例字段随 MissionBehavior 实例销毁，但显式清理防未来复用与
+        //     CommandProvenance 同型单例化改造；Agent/Formation 索引复用不得继承旧状态）
+        public void ClearAll()
+        {
+            _models.Clear();
+            _tracks.Clear();
+            _enemyFiring.Clear();
+            _enemyInitialAlive.Clear();
+            _teamCenter.Clear();
+            LastRoutRatio = 0f;
+            LastDominantIntent = EnemyIntent.FrontalAttack;
+            LastDominantConf = 0f;
+        }
+
         private sealed class FormationTrack
         {
             public float DistToUs; // 上一拍到己方中心距离（0 = 首拍未记录）

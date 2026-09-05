@@ -64,10 +64,13 @@ namespace CombatBrain.Ai
             // ATC-2 Army Context 影子快照（0.5s 更新；MainBody/Objective 只算不改行为）
             public ArmyContextSnapshot Army = ArmyContextSnapshot.None;
 
-            // ATC-3 Formation Mission / Separation / Isolation 影子判定（0.5s；只判断不下召回命令）
-            public FormationMission Mission = FormationMission.SupportMainEffort;
-            public SeparationIntent Separation = SeparationIntent.None;
-            public IsolationDecision Isolation;
+            // ATC-3 Formation Mission / Separation / Isolation 影子判定（0.5s；只判断不下召回命令）。
+            // atc4-state-lifecycle P1-1：输出按 FormationId 保存（每支编队结果独立）——原单值字段被
+            //   编队循环覆盖、仅残留最后编队的结果（影子数据错位）；改 per-formation 字典后变化日志按
+            //   编队比较、编队解散清理对应记录、FormationId 复用不继承旧状态（OnFormationRemoved 清理）。
+            public readonly Dictionary<int, FormationMission> Missions = new Dictionary<int, FormationMission>();
+            public readonly Dictionary<int, SeparationIntent> Separations = new Dictionary<int, SeparationIntent>();
+            public readonly Dictionary<int, IsolationDecision> Isolations = new Dictionary<int, IsolationDecision>();
             // atc4-fix finding1：距离趋势基线拆分为 ATC-3/ATC-4 两个独立 per-formation 字典（键=Formation.Index、
             //   值=上拍该编队距 MainBody 距离，首拍缺省 0）。共享单字典会「同拍先写后读」（TickFormationMissions
             //   先写本拍 → TickCommitment 后读本拍值）→ ATC-4 distIncreasing 恒 false（Shadow Gate 审计失真）。
@@ -221,6 +224,14 @@ namespace CombatBrain.Ai
         {
             if (_initialized) return;
             _initialized = true;
+
+            // atc4-state-lifecycle P1-4：Mission 初始化幂等清理入口——CommandProvenance 为静态单例，
+            //   跨战斗残留会串场（上一场的覆盖链/聚合污染本场）；InGameFeedback 静态去重/计数同理；
+            //   _opponent/_attackSuppression 虽实例级也一并清（幂等，双保险）。
+            CommandProvenance.Instance.Clear();
+            InGameFeedback.ClearAll();
+            _opponent.ClearAll();
+            _attackSuppression.ClearAll();
 
             // T1 观测管线：挂载决策分支计数器 + 补丁/管线活性自检（单一 CombatLog 渠道）
             DecisionObservatory.Attach();
@@ -454,6 +465,13 @@ namespace CombatBrain.Ai
             };
         }
 
+        // atc4-state-lifecycle P1-4：叙事类别按 Team 区分（InGameFeedback 3s 去重键=category——
+        //   多队同拍用通用类别会互相压制第二条提示；拼 teamIndex 后各队独立去重，语义不变）
+        private static string NarrateCategory(Team own, string category)
+        {
+            return category + "_t" + (own != null ? own.TeamIndex.ToString() : "?");
+        }
+
         // 编队 Key：敌队索引*100 + 编队索引（跨队不冲突；编队索引 <100 上限防御）
         private static int FormationKey(Team team, Formation formation)
         {
@@ -576,7 +594,7 @@ namespace CombatBrain.Ai
                     CombatLog.Log(string.Format(
                         "Team {0} 意图切换 → {1}  [{2}]",
                         own.TeamIndex, newIntent, v.ToString()));
-                    Narrator.Notify(NarrateInfo(own, Mission.PlayerTeam), "意图", // N1 叙事统一出口：按模式代填 {S}=我军/敌军/阵营名
+                    Narrator.Notify(NarrateInfo(own, Mission.PlayerTeam), NarrateCategory(own, "意图"), // N1 统一出口（P1-4：category 按 Team 区分，多队同拍不互相压制）
                         // t62 战术层播报：{S}+战术名+态势摘要（正常模式显示；hold 6s 天然限频 +
                         // NotifyTactical 3s 去重/速率上限防刷屏；编队级跃迁仍为细节行）
                         string.Format("{S}战术：{1}——{2}",
@@ -592,7 +610,7 @@ namespace CombatBrain.Ai
                         string causeText = FeedbackText.CauseOf((int)cause.Kind);
                         if (!string.IsNullOrEmpty(causeText))
                         {
-                            Narrator.Notify(NarrateInfo(own, Mission.PlayerTeam), "意图.原因",
+                            Narrator.Notify(NarrateInfo(own, Mission.PlayerTeam), NarrateCategory(own, "意图.原因"),
                                 string.Format("{S}——{0}", causeText),
                                 InGameFeedback.TacticalColor, InGameFeedback.NotifyTactical);
                         }
@@ -602,7 +620,7 @@ namespace CombatBrain.Ai
                     string newClass = FeedbackText.StrategicClass(newIntent);
                     if (state.LastStrategicClass != null && state.LastStrategicClass != newClass)
                     {
-                        Narrator.Notify(NarrateInfo(own, Mission.PlayerTeam), "事件",
+                        Narrator.Notify(NarrateInfo(own, Mission.PlayerTeam), NarrateCategory(own, "事件"),
                             string.Format("战局变化：{S}由{0}转入{1}",
                                 state.LastStrategicClass, newClass),
                             InGameFeedback.SpecialColor, InGameFeedback.NotifyTactical);
@@ -708,6 +726,10 @@ namespace CombatBrain.Ai
         // 反作弊闸：零新增禁读；O(编队数²)。
         private void TickFormationMissions(TeamState state, Team own, Team enemy)
         {
+            // atc4-state-lifecycle P1-1/P1-4：编队解散/清空惰性清理（Bannerlord 编队不解散对象，
+            //   CountOfUnits==0 即空——FormationsIncludingEmpty 枚举含空编队；非空集合外的字典键为残留，
+            //   清理防 FormationId 复用继承旧状态，同时联动 CommandProvenance.RemoveFormation）
+            CleanupFormationState(state, own);
             float mbX = state.Army.MainBodyX, mbY = state.Army.MainBodyY;
             float aliveSelf = own.ActiveAgents.Count;
             int aliveEnemy = enemy != null ? enemy.ActiveAgents.Count : 0;
@@ -769,11 +791,22 @@ namespace CombatBrain.Ai
                 });
 
                 state.MissionPrevDist[f.Index] = dist; // ATC-3 per-formation 基线更新（atc4-fix finding1 独立字典）
-                bool changed = mission.Mission != state.Mission || mission.Separation != state.Separation
-                    || iso.UnauthorizedIsolation != state.Isolation.UnauthorizedIsolation;
-                state.Mission = mission.Mission;
-                state.Separation = mission.Separation;
-                state.Isolation = iso;
+                // atc4-state-lifecycle P1-1：per-formation 输出——变化日志按编队比较（单值残留 bug 修复）
+                bool changed;
+                FormationMission lastMission;
+                if (!state.Missions.TryGetValue(f.Index, out lastMission)) { changed = true; }
+                else
+                {
+                    SeparationIntent lastSep;
+                    IsolationDecision lastIso;
+                    bool sepOk = state.Separations.TryGetValue(f.Index, out lastSep) && mission.Separation == lastSep;
+                    bool isoOk = state.Isolations.TryGetValue(f.Index, out lastIso)
+                        && iso.UnauthorizedIsolation == lastIso.UnauthorizedIsolation;
+                    changed = mission.Mission != lastMission || !sepOk || !isoOk;
+                }
+                state.Missions[f.Index] = mission.Mission;
+                state.Separations[f.Index] = mission.Separation;
+                state.Isolations[f.Index] = iso;
                 if (changed)
                 {
                     CombatLog.Log(string.Format(
@@ -865,7 +898,30 @@ namespace CombatBrain.Ai
                 {
                     tx = 0f; ty = 0f; hasTarget = false;
                 }
-                if (!hasTarget) continue; // 无候选目标 → 本拍不判定（交原版）
+                if (!hasTarget)
+                {
+                    // atc4-state-lifecycle P1-5：无候选目标（无 Army Objective 且无 X1 目标）不得 continue
+                    //   残留旧 Commitment——写入明确 NoObjective/Hold 决策并产生一次状态变化记录，
+                    //   后续日志/消费者不读取过期 Commitment。
+                    var noTarget = new CommitmentDecision
+                    {
+                        Permission = CommitmentPermission.Hold,
+                        Reasons = CommitmentReason.NoArmyObjective,
+                        LocalForceRatio = 0f, SupportScore = 0f, IsolationRisk = false,
+                        FriendlyArrivalEta = 0f, EnemyContactEta = 0f
+                    };
+                    CommitmentDecision old;
+                    bool changedNoTarget = !state.Commitments.TryGetValue(f.Index, out old)
+                        || old.Permission != noTarget.Permission || old.Reasons != noTarget.Reasons;
+                    state.Commitments[f.Index] = noTarget;
+                    if (changedNoTarget)
+                    {
+                        CombatLog.Log(string.Format(
+                            "[Commit] Team {0} f={1} permission={2} reasons={3} (no objective, stale cleared)",
+                            own.TeamIndex, f.Index, noTarget.Permission, noTarget.Reasons));
+                    }
+                    continue;
+                }
 
                 // §4.3 编队级近似（含 TacticalTarget 对齐度；P0-3：传 selfFormationId 由估算器跳过自身，
                 //   ownSnaps 含自身不重复计入 SupportEff/AllFriendlyEff/LocalForceRatio）
@@ -940,6 +996,47 @@ namespace CombatBrain.Ai
             }
         }
 
+        // atc4-state-lifecycle P1-1/P1-4：编队解散/清空惰性清理——清理非空编队集合外的 ATC 状态字典键
+        //   （Missions/Separations/Isolations/Commitments/距离基线/Reserve 迟滞），并联动
+        //   CommandProvenance.RemoveFormation（P1-3④ 编队解散挂点：Bannerlord 无 OnFormationRemoved 钩子，
+        //   以 CountOfUnits==0 惰性判定）。FormationId 复用不得继承旧状态。
+        private void CleanupFormationState(TeamState state, Team own)
+        {
+            var valid = new HashSet<int>();
+            foreach (Formation f in own.FormationsIncludingEmpty)
+            {
+                if (f == null || f.CountOfUnits == 0) continue;
+                valid.Add(f.Index);
+            }
+            var stale = new List<int>();
+            CollectStale(state.Missions, valid, stale);
+            CollectStale(state.Separations, valid, stale);
+            CollectStale(state.Isolations, valid, stale);
+            CollectStale(state.Commitments, valid, stale);
+            CollectStale(state.MissionPrevDist, valid, stale);
+            CollectStale(state.CommitmentPrevDist, valid, stale);
+            CollectStale(state.MissionReserveLast, valid, stale);
+            CollectStale(state.CommitmentReserveLast, valid, stale);
+            for (int i = 0; i < stale.Count; i++)
+            {
+                CommandProvenance.Instance.RemoveFormation(stale[i]); // 幂等：ring 无该编队记录也安全
+            }
+        }
+
+        private static void CollectStale<T>(Dictionary<int, T> map, HashSet<int> valid, List<int> stale)
+        {
+            var removed = new List<int>();
+            foreach (int k in map.Keys)
+            {
+                if (!valid.Contains(k)) removed.Add(k);
+            }
+            for (int i = 0; i < removed.Count; i++)
+            {
+                map.Remove(removed[i]);
+                if (!stale.Contains(removed[i])) stale.Add(removed[i]); // 去重（CommandProvenance 清理用，小列表 O(n)）
+            }
+        }
+
         // 编队兵种映射（QuerySystem 旗标 → ATC-2 五类；与 BuildSnapshot 同口径）
         private static FormationCoordKind MapKind(Formation f)
         {
@@ -973,7 +1070,7 @@ namespace CombatBrain.Ai
                 case NarrativeEventKind.E3EnemyRout: color = InGameFeedback.AdvantageColor; break;
                 default: color = InGameFeedback.SpecialColor; break; // E4PredictCharge
             }
-            Narrator.Notify(NarrateInfo(own, Mission.PlayerTeam), "事件",
+            Narrator.Notify(NarrateInfo(own, Mission.PlayerTeam), NarrateCategory(own, "事件"),
                 FeedbackText.BattlefieldEvent((int)evt), color, InGameFeedback.NotifyTactical,
                 NarrateInfo(enemy, Mission.PlayerTeam)); // {O}=敌队（T 的敌队）
 
@@ -1029,7 +1126,7 @@ namespace CombatBrain.Ai
             string phaseText = FeedbackText.BattlePhaseText((int)r.Phase);
             if (!string.IsNullOrEmpty(phaseText))
             {
-                Narrator.Notify(NarrateInfo(own, Mission.PlayerTeam), "战局",
+                Narrator.Notify(NarrateInfo(own, Mission.PlayerTeam), NarrateCategory(own, "战局"),
                     string.Format("{S}进入{0}", phaseText),
                     InGameFeedback.TacticalColor, InGameFeedback.NotifyTactical);
             }
@@ -1499,6 +1596,7 @@ namespace CombatBrain.Ai
             _experience.OnMissionEnd();
             LogProvenanceAggregate(); // ATC-0 战斗结束按 CommandSource 聚合（幂等：只在收尾钩子输出一次）
             SaveTelemetry();
+            ClearMissionStaticState(); // atc4-state-lifecycle P1-4：跨 Mission 静态状态幂等清理（先聚合后清理）
         }
 
         public override void OnClearScene()
@@ -1507,6 +1605,18 @@ namespace CombatBrain.Ai
             _experience.OnMissionEnd();
             LogProvenanceAggregate(); // ATC-0 战斗结束聚合（OnClearScene 兜底，幂等）
             SaveTelemetry();
+            ClearMissionStaticState(); // atc4-state-lifecycle P1-4（双钩子幂等，OnClearScene 兜底）
+        }
+
+        // atc4-state-lifecycle P1-4：跨 Mission 静态状态幂等清理入口（OnMissionStateFinalized/OnClearScene
+        //   双钩子共用，先聚合后清理；CommandProvenance 静态单例/InGameFeedback 静态去重/
+        //   _suppressedAttack 静态抑制集合/对手模型与攻击抑制实例级一并清，防索引复用继承旧状态）
+        private void ClearMissionStaticState()
+        {
+            CommandProvenance.Instance.Clear();
+            InGameFeedback.ClearAll();
+            _opponent.ClearAll();
+            _attackSuppression.ClearAll();
         }
 
         // T38-01 遥测事件分发：仅映射已有事件 → 计数（各计数点的详细调用留给后续 feature 各自补，
