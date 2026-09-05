@@ -146,6 +146,9 @@ namespace OfflineTests
             Console.WriteLine("== X5-6 ExecutionPolicy ==");
             TestX5ExecutionPolicy();
 
+            Console.WriteLine("== X6 KnowledgeView/PerceptionFilter ==");
+            TestPerception();
+
             Console.WriteLine();
             if (_failures == 0)
             {
@@ -1781,6 +1784,51 @@ namespace OfflineTests
             cd.Remove(5);
             Check(cd.CanRelease(5, 13f), "x56 cooldown allows after Remove (agent removed)");
             Check(cd.CanRelease(6, 20f), "x56 cooldown per-agent: unmarked other agent allows");
+        }
+
+        // X6 感知接线（KnowledgeView 纯逻辑 + PerceptionFilter 折叠）：可见/超期/未见三态/衰减/噪声/开关折叠
+        private static void TestPerception()
+        {
+            // 1) KnowledgeView 可见三态：Observe 后可见；未见 → false；超期（>25s）→ false
+            var view = new KnowledgeView();
+            view.Observe(7, 10f, 20f, 0f);
+            KnowledgeView.SightedInfo info;
+            Check(view.TryGet(7, 1f, out info), "x6 observed agent visible");
+            Check(!view.TryGet(99, 1f, out info), "x6 unseen agent -> not visible (未见态)");
+            Check(!view.TryGet(7, 30f, out info), "x6 stale after 25s -> not visible (超期态)");
+
+            // 2) 衰减与置信度：5s 后 confidence ≈ 1 - 0.08*5 = 0.6；0s 时 = 1
+            view.Observe(8, 0f, 0f, 0f);
+            view.TryGet(8, 5f, out info);
+            CheckApprox(info.Confidence, 0.6f, "x6 confidence decays 1 - 0.08*5 = 0.6", 0.01f);
+            view.Observe(8, 0f, 0f, 10f);
+            view.TryGet(8, 10f, out info);
+            CheckApprox(info.Confidence, 1f, "x6 fresh observe confidence 1.0", 0.01f);
+
+            // 3) 噪声边界：旧值加噪声（越旧越飘），但噪声幅度受 noiseScale*age 约束
+            // 单轴偏移 ∈[-n,n]（n=noiseScale*age），两轴合成欧氏距离上界 = n*√2
+            view.Observe(9, 50f, 50f, 0f);
+            view.TryGet(9, 10f, out info);
+            float drift = (float)System.Math.Sqrt((info.X - 50f) * (info.X - 50f) + (info.Y - 50f) * (info.Y - 50f));
+            Check(drift <= 0.15f * 10f * 1.42f + 0.01f, "x6 stale noise bounded by noiseScale*age (欧氏上界 n√2)");
+
+            // 4) Tick 清理超期：超期条目被移除
+            var view2 = new KnowledgeView();
+            view2.Observe(11, 0f, 0f, 0f);
+            view2.Tick(30f);
+            Check(!view2.TryGet(11, 30f, out info), "x6 Tick purges stale entries");
+
+            // 5) PerceptionFilter 折叠：开关关闭 = 恒可见（现状一致）；开启 = 依赖 KnowledgeView 查询结果
+            Check(PerceptionFilter.IsKnown(false, false), "x6 filter off -> known regardless (现状一致)");
+            Check(PerceptionFilter.IsKnown(false, true), "x6 filter off -> known (现状一致)");
+            Check(PerceptionFilter.IsKnown(true, true), "x6 filter on + visible -> known");
+            Check(!PerceptionFilter.IsKnown(true, false), "x6 filter on + unseen -> unknown (保守降级)");
+
+            // 6) 连续观察刷新 SeenTime：不超期
+            var view3 = new KnowledgeView();
+            view3.Observe(12, 1f, 1f, 0f);
+            view3.Observe(12, 2f, 2f, 24f); // 24s 再刷 → 仍可见（未到 25s）
+            Check(view3.TryGet(12, 24.5f, out info), "x6 re-observe refreshes SeenTime");
         }
 
         private static int idxDefend()

@@ -44,5 +44,16 @@ namespace CombatBrain.Perception
                 }
             }
         }
+
+        // X6：编队级观察（信息迷雾接线）——把「观察者可见的敌编队中心」写入 KnowledgeView，
+        //   供下游 Glue 经查询过滤（未见/超期 → 视为不存在，保守降级）。与 agent 观察同节拍、同可见性判定。
+        public void ObserveFormation(float now, Vec2 observer, int formationId, float x, float y)
+        {
+            if (now - _lastRefresh < _refreshInterval) return;
+            if (_oracle.IsVisible(observer.x, observer.y, x, y))
+            {
+                _view.Observe(formationId, x, y, now);
+            }
+        }
     }
 }

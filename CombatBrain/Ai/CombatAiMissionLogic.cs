@@ -105,12 +105,13 @@ namespace CombatBrain.Ai
         private float _frameReleaseTimer; // X4 解阵框节拍
         private readonly FrameReleaseCooldown _frameReleaseCooldown = new FrameReleaseCooldown();
 
-        // P0-③ 感知管线停用开关（用户裁决「先停用止损」）：KnowledgeView.TryGet 无消费者（全仓库仅定义处），
-        // TickPerception 每 1s 对每队全图遍历 mission.Agents 白烧性能（违反「禁全图」）。
-        // 仅停用调用，Perception\KnowledgeView/VisibilityOracle/PerceptionPipeline 类保留供后续信息迷雾接线；
-        // 恢复 = 改回 true（接线消费 KnowledgeView 后）。
+        // X6 感知管线开关（信息迷雾接线后置回 true）：KnowledgeView 已接 4 个编队级 Glue 消费者
+        // （Protect/Brace/Skirmish/Cavalry 敌编队位置/分类经 KnowledgeView 过滤；PerceptionFilter
+        //   折叠：开关关=现状全可见，开=未见/超期目标视为不存在→保守降级）。
+        // TickPerception 每 1s 对每队以 observer 为中心的 VisibilityOracle 距离门+LoS 采样（非全图逐兵
+        //   白烧——观察结果被 Glue 消费）；500 人 [Bench] perception 段不劣化为验收闸。
         // 用 static readonly 而非 const：const false 会让编译器报 CS0162 不可达代码警告，质量门要求 0 警。
-        private static readonly bool PerceptionEnabled = false;
+        private static readonly bool PerceptionEnabled = true;
 
         // F6 走位/绕侧胶水：0.2s 低频周期 + LOD 剧场效应 + 跳帧聚合（见 MovementGlue.cs）
         private readonly MovementGlue _movement = new MovementGlue();
@@ -347,9 +348,42 @@ namespace CombatBrain.Ai
             float now = _elapsed;
             foreach (TeamState state in _states.Values)
             {
-                state.Perception.Update(now, GetTeamCenter(state.Team), mission.Agents);
+                Team own = state.Team;
+                if (own == null) continue;
+                Vec2 observer = GetTeamCenter(own);
+                state.Perception.Update(now, observer, mission.Agents);
+                // X6：观察敌编队中心（编队级聚合，非逐兵）——每个可见敌编队中心写进 KnowledgeView，
+                // 下游 Glue 查询时过滤（未见/超期 → 视为不存在，保守降级）。id = 敌队索引*100 + 编队索引。
+                foreach (Team et in mission.Teams)
+                {
+                    if (et == null || !et.MBTeam.IsValid || !et.IsEnemyOf(own)) continue; // P1-③ 真敌队判定
+                    foreach (Formation ef in et.FormationsIncludingEmpty)
+                    {
+                        if (ef == null || ef.CountOfUnits == 0 || ef.QuerySystem == null) continue;
+                        Vec2 c = TeamGeometry.GetFormationPosition(ef, TeamPosKind.CachedMedian); // P1-④ 统一口径
+                        state.Perception.ObserveFormation(now, observer, FormationKey(et, ef), c.x, c.y);
+                    }
+                }
                 state.View.Tick(now);
             }
+        }
+
+        // X6：敌编队 KnowledgeView 查询（供 4 个编队级 Glue 过滤）——开关关=现状全可见（PerceptionFilter 折叠）；
+        // 开关开=查询 own 队 KnowledgeView，未见/超期 → false（视为不存在，Glue 保守降级）。
+        private bool IsEnemyFormationKnown(Team own, Formation enemyFormation)
+        {
+            if (enemyFormation == null) return false;
+            TeamState state;
+            if (!_states.TryGetValue(own.TeamIndex, out state)) return false;
+            KnowledgeView.SightedInfo info;
+            bool visible = state.View.TryGet(FormationKey(enemyFormation.Team, enemyFormation), _elapsed, out info);
+            return PerceptionFilter.IsKnown(PerceptionEnabled, visible);
+        }
+
+        // 编队 Key：敌队索引*100 + 编队索引（跨队不冲突；编队索引 <100 上限防御）
+        private static int FormationKey(Team team, Formation formation)
+        {
+            return team.TeamIndex * 100 + (formation.Index >= 0 ? formation.Index : 0);
         }
 
         // ---------- F3 行为 LOD ----------
@@ -686,7 +720,7 @@ namespace CombatBrain.Ai
         {
             Team playerTeam = mission.PlayerTeam;
             Vec2 playerCenter = playerTeam != null ? GetTeamCenter(playerTeam) : Vec2.Zero;
-            _cavalry.Tick(mission, dt, playerCenter, GetTeamIntent);
+            _cavalry.Tick(mission, dt, playerCenter, GetTeamIntent, IsEnemyFormationKnown); // X6：敌编队 KnowledgeView 过滤
         }
 
         // ---------- T5 骑射游击（编队级） ----------
@@ -695,7 +729,7 @@ namespace CombatBrain.Ai
         {
             Team playerTeam = mission.PlayerTeam;
             Vec2 playerCenter = playerTeam != null ? GetTeamCenter(playerTeam) : Vec2.Zero;
-            _skirmish.Tick(mission, dt, playerCenter, i => _protect.IsProtecting(i)); // F3 激活时让位
+            _skirmish.Tick(mission, dt, playerCenter, i => _protect.IsProtecting(i), IsEnemyFormationKnown); // X6：敌编队 KnowledgeView 过滤
         }
 
         // ---------- F11 士气传导 + 分阶段撤退（编队级） ----------
@@ -713,7 +747,7 @@ namespace CombatBrain.Ai
         {
             Team playerTeam = mission.PlayerTeam;
             Vec2 playerCenter = playerTeam != null ? GetTeamCenter(playerTeam) : Vec2.Zero;
-            _protect.Tick(mission, dt, _elapsed, playerCenter, GetTeamIntent);
+            _protect.Tick(mission, dt, _elapsed, playerCenter, GetTeamIntent, IsEnemyFormationKnown); // X6：敌编队 KnowledgeView 过滤
         }
 
         // ---------- F4 架枪反骑阵地（BraceFormation 执行层，编队级） ----------
@@ -722,7 +756,7 @@ namespace CombatBrain.Ai
         {
             Team playerTeam = mission.PlayerTeam;
             Vec2 playerCenter = playerTeam != null ? GetTeamCenter(playerTeam) : Vec2.Zero;
-            _brace.Tick(mission, dt, _elapsed, playerCenter, GetTeamIntent);
+            _brace.Tick(mission, dt, _elapsed, playerCenter, GetTeamIntent, IsEnemyFormationKnown); // X6：敌编队 KnowledgeView 过滤
         }
 
         private IntentType GetTeamIntent(Team team)

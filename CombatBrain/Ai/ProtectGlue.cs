@@ -43,7 +43,9 @@ namespace CombatBrain.Ai
         private readonly List<Formation> _cavalry = new List<Formation>();
 
         /// <summary>低频驱动：CombatAiMissionLogic.OnMissionTick 调用，内部按 TickInterval 节流。</summary>
-        public void Tick(Mission mission, float dt, float now, Vec2 playerCenter, Func<Team, IntentType> getIntent)
+        /// <param name="isEnemyFormationKnown">X6 感知接线：敌编队是否已知（观察者队+敌编队，KnowledgeView 过滤，可 null=不过滤=现状）。</param>
+        public void Tick(Mission mission, float dt, float now, Vec2 playerCenter, Func<Team, IntentType> getIntent,
+            Func<Team, Formation, bool> isEnemyFormationKnown = null)
         {
             _sinceTick += dt;
             if (_sinceTick < TickInterval) return;
@@ -53,7 +55,7 @@ namespace CombatBrain.Ai
             {
                 if (team == null || (CombatBrainSettings.PlayerTeamExemptionEnabled && team.IsPlayerTeam)) continue; // P0-④ 玩家队豁免（MCM 可开关 t66）：不对玩家编队下令（与玩家指挥打架）
                 IntentType intent = getIntent != null ? getIntent(team) : IntentType.Attack;
-                bool active = intent == IntentType.ProtectArcher || HasPressedRanged(team); // F2 目标识别 or 受压自保
+                bool active = intent == IntentType.ProtectArcher || HasPressedRanged(team, isEnemyFormationKnown); // F2 目标识别 or 受压自保
                 if (!active)
                 {
                     bool wasOff; // 游戏内反馈：保护释放边沿（上拍保护中→本拍解除一次性输出）
@@ -167,7 +169,9 @@ namespace CombatBrain.Ai
         }
 
         // 弓手受压（队级预检）：任意己方远程编队的最近敌编队距其 ≤45m（引擎缓存，只读位置）。
-        private static bool HasPressedRanged(Team team)
+        // X6 感知接线：isEnemyFormationKnown 非空时，未知敌编队（KnowledgeView 未见/超期）不视为受压——
+        // 保守降级=不激活保护（交原版），避免对看不见的威胁过度响应；null=不过滤=现状等价。
+        private static bool HasPressedRanged(Team team, Func<Team, Formation, bool> isEnemyFormationKnown)
         {
             foreach (Formation f in team.FormationsIncludingEmpty)
             {
@@ -175,6 +179,7 @@ namespace CombatBrain.Ai
                 if (!f.QuerySystem.IsRangedFormation && !f.QuerySystem.IsRangedCavalryFormation) continue;
                 FormationQuerySystem enemy = f.QuerySystem.ClosestSignificantlyLargeEnemyFormation;
                 if (enemy == null || enemy.Formation == null) continue;
+                if (isEnemyFormationKnown != null && !isEnemyFormationKnown(team, enemy.Formation)) continue; // X6：未知敌编队不算受压
                 // P1-④ 统一入口：跨子系统敌我对比，双方显式同口径（CachedMedian）
                 Vec2 a = TeamGeometry.GetFormationPosition(f, TeamPosKind.CachedMedian);
                 Vec2 b = TeamGeometry.GetFormationPosition(enemy.Formation, TeamPosKind.CachedMedian);

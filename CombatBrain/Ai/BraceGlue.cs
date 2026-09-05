@@ -53,7 +53,9 @@ namespace CombatBrain.Ai
         }
 
         /// <summary>低频驱动：CombatAiMissionLogic.OnMissionTick 调用，内部按 TickInterval 节流。</summary>
-        public void Tick(Mission mission, float dt, float now, Vec2 playerCenter, Func<Team, IntentType> getIntent)
+        /// <param name="isEnemyFormationKnown">X6 感知接线：敌编队是否已知（观察者队+敌编队，KnowledgeView 过滤，可 null=不过滤=现状）。</param>
+        public void Tick(Mission mission, float dt, float now, Vec2 playerCenter, Func<Team, IntentType> getIntent,
+            Func<Team, Formation, bool> isEnemyFormationKnown = null)
         {
             _sinceTick += dt;
             if (_sinceTick < TickInterval) return;
@@ -71,7 +73,7 @@ namespace CombatBrain.Ai
                 }
 
                 float d;
-                bool hasCav = TryNearestEnemyCavDist(team, tc, mission, out d);
+                bool hasCav = TryNearestEnemyCavDist(team, tc, mission, isEnemyFormationKnown, out d);
                 float prev = -1f;
                 _prevCavDist.TryGetValue(team.TeamIndex, out prev);
                 _prevCavDist[team.TeamIndex] = hasCav ? d : -1f;
@@ -158,7 +160,10 @@ namespace CombatBrain.Ai
         }
 
         // 最近敌骑距离：遍历敌编队（O(敌编队数)，只读 CachedMedianPosition），仅骑兵/骑射编队。
-        private static bool TryNearestEnemyCavDist(Team own, Vec2 ownCenter, Mission mission, out float d)
+        // X6 感知接线：isEnemyFormationKnown 非空时，未知敌骑编队（KnowledgeView 未见/超期）不计入——
+        // 保守降级=无敌骑威胁（不架枪站定，交原版），避免对看不见的骑兵过度反应；null=不过滤=现状等价。
+        private static bool TryNearestEnemyCavDist(Team own, Vec2 ownCenter, Mission mission,
+            Func<Team, Formation, bool> isEnemyFormationKnown, out float d)
         {
             d = -1f;
             bool found = false;
@@ -169,6 +174,7 @@ namespace CombatBrain.Ai
                 {
                     if (f == null || f.CountOfUnits == 0 || f.QuerySystem == null) continue;
                     if (!f.QuerySystem.IsCavalryFormation && !f.QuerySystem.IsRangedCavalryFormation) continue;
+                    if (isEnemyFormationKnown != null && !isEnemyFormationKnown(own, f)) continue; // X6：未知敌骑不算威胁
                     Vec2 p = TeamGeometry.GetFormationPosition(f, TeamPosKind.CachedMedian); // P1-④ 统一入口
                     float dist = VecMath.Dist(p.x, p.y, ownCenter.x, ownCenter.y);
                     if (!found || dist < d)

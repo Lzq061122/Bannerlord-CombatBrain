@@ -50,7 +50,9 @@ namespace CombatBrain.Ai
         }
 
         /// <summary>编队级低频驱动：CombatAiMissionLogic.OnMissionTick 调用，内部按 TickInterval 节流。</summary>
-        public void Tick(Mission mission, float dt, Vec2 playerCenter, Func<int, bool> isTeamProtected)
+        /// <param name="isEnemyFormationKnown">X6 感知接线：敌编队是否已知（观察者队+敌编队，KnowledgeView 过滤，可 null=不过滤=现状）。</param>
+        public void Tick(Mission mission, float dt, Vec2 playerCenter, Func<int, bool> isTeamProtected,
+            Func<Team, Formation, bool> isEnemyFormationKnown = null)
         {
             _sinceTick += dt;
             if (_sinceTick < TickInterval) return;
@@ -73,14 +75,15 @@ namespace CombatBrain.Ai
                         continue;
                     }
 
-                    TickFormation(mission, team, formation, med);
+                    TickFormation(mission, team, formation, med, isEnemyFormationKnown);
                 }
             }
         }
 
-        private void TickFormation(Mission mission, Team team, Formation formation, Vec2 own)
+        private void TickFormation(Mission mission, Team team, Formation formation, Vec2 own,
+            Func<Team, Formation, bool> isEnemyFormationKnown)
         {
-            Formation target = SelectTarget(mission, team, own);
+            Formation target = SelectTarget(mission, team, own, isEnemyFormationKnown);
             if (target == null)
             {
                 // 无合适目标：不冲不站桩，向己方方向拉开待机
@@ -120,7 +123,10 @@ namespace CombatBrain.Ai
 
         // 目标选择：敌队（IsEnemyOf，P1-③ 同源判定）编队——敌射手 +2（优先消耗输出源）、敌骑兵 +1
         // （威胁我方骑射）；同分取最近（CachedMedian 距离）。无敌编队 → null（调用方拉开待机）。
-        private static Formation SelectTarget(Mission mission, Team own, Vec2 ownPos)
+        // X6 感知接线：isEnemyFormationKnown 非空时，未知敌编队（KnowledgeView 未见/超期）不计入候选——
+        // 保守降级=无目标→拉开待机（已有 null 分支，不硬冲看不见的敌人）；null=不过滤=现状等价。
+        private static Formation SelectTarget(Mission mission, Team own, Vec2 ownPos,
+            Func<Team, Formation, bool> isEnemyFormationKnown)
         {
             Formation best = null;
             int bestScore = -1;
@@ -131,6 +137,7 @@ namespace CombatBrain.Ai
                 foreach (Formation f in t.FormationsIncludingEmpty)
                 {
                     if (f == null || f.CountOfUnits == 0 || f.QuerySystem == null) continue;
+                    if (isEnemyFormationKnown != null && !isEnemyFormationKnown(own, f)) continue; // X6：未知敌编队不算候选
                     int score = 0;
                     if (f.QuerySystem.IsRangedFormation) score += 2; // 优先消耗敌输出源
                     if (f.QuerySystem.IsCavalryFormation) score += 1; // 敌骑威胁我方骑射

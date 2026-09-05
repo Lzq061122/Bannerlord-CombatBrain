@@ -27,6 +27,8 @@
     <Compile Include="..\CombatBrain\Intent\ProtectPlan.cs" Link="Intent\ProtectPlan.cs" />
     <Compile Include="..\CombatBrain\Intent\BracePlan.cs" Link="Intent\BracePlan.cs" />
     <Compile Include="..\CombatBrain\Perception\TerrainSampler.cs" Link="Perception\TerrainSampler.cs" />
+    <Compile Include="..\CombatBrain\Perception\KnowledgeView.cs" Link="Perception\KnowledgeView.cs" />
+    <Compile Include="..\CombatBrain\Perception\PerceptionFilter.cs" Link="Perception\PerceptionFilter.cs" />
     <Compile Include="..\CombatBrain\Formation\FormationIntegrity.cs" Link="Formation\FormationIntegrity.cs" />
     <Compile Include="..\CombatBrain\Ai\DecisionBranchTally.cs" Link="Ai\DecisionBranchTally.cs" />
     <Compile Include="..\CombatBrain\Ai\AttackSuppressionState.cs" Link="Ai\AttackSuppressionState.cs" />

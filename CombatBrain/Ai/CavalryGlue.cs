@@ -51,6 +51,7 @@ namespace CombatBrain.Ai
         private const float SetupTimeout = 8f;
 
         private float _sinceTick;
+        private Func<Team, Formation, bool> _isEnemyFormationKnown; // X6 感知过滤委托（本拍生效，GetKnownEnemy/SelectRallyPoint 消费）
         private readonly Dictionary<Formation, CavalryState> _states = new Dictionary<Formation, CavalryState>();
         private readonly Dictionary<Formation, float> _stateElapsed = new Dictionary<Formation, float>();
 
@@ -73,8 +74,10 @@ namespace CombatBrain.Ai
         /// <param name="dt">帧时间</param>
         /// <param name="playerCenter">玩家焦点中心（剧场上限基准）</param>
         /// <param name="getIntent">各队当前意图（F2 意图引擎输出，机会窗触发源）</param>
-        public void Tick(Mission mission, float dt, Vec2 playerCenter, Func<Team, IntentType> getIntent)
+        public void Tick(Mission mission, float dt, Vec2 playerCenter, Func<Team, IntentType> getIntent,
+            Func<Team, Formation, bool> isEnemyFormationKnown = null)
         {
+            _isEnemyFormationKnown = isEnemyFormationKnown; // X6：本拍过滤委托（GetKnownEnemy/SelectRallyPoint 消费）
             _sinceTick += dt;
             if (_sinceTick < TickInterval) return;
             _sinceTick = 0f;
@@ -159,7 +162,7 @@ namespace CombatBrain.Ai
                 return; // 绕行推进中：本拍结束
             }
 
-            FormationQuerySystem enemy = formation.QuerySystem.ClosestSignificantlyLargeEnemyFormation;
+            FormationQuerySystem enemy = GetKnownEnemy(formation);
 
             var inp = new CavalryInput();
             switch (state)
@@ -287,7 +290,8 @@ namespace CombatBrain.Ai
 
         // 选址：候选=侧翼(50m)/主阵线后方(60m)/安全距离(100m)/目标附近安全区(60m)，
         // RallyPointSelector.SelectBest 按优先级链（侧翼>后方>安全>目标附近）+ 距离档位选择。
-        private static Vec2 SelectRallyPoint(Formation formation)
+        // X6 感知接线：敌中心经 GetKnownEnemy 过滤（未知敌编队 → 无敌中心 → 背敌方向退化为默认朝向）。
+        private Vec2 SelectRallyPoint(Formation formation)
         {
             Vec2 cav = TeamGeometry.GetFormationPosition(formation, TeamPosKind.CachedMedian);
             // 己方步兵线中心（主战线）
@@ -308,7 +312,7 @@ namespace CombatBrain.Ai
 
             // 敌中心 → 背敌方向（安全方向）与侧翼方向
             Vec2 ec = Vec2.Zero;
-            FormationQuerySystem enemy = formation.QuerySystem.ClosestSignificantlyLargeEnemyFormation;
+            FormationQuerySystem enemy = GetKnownEnemy(formation); // X6：未知敌编队 → null（敌中心=0，背敌退化为默认朝向）
             if (enemy != null && enemy.Formation != null)
                 ec = TeamGeometry.GetFormationPosition(enemy.Formation, TeamPosKind.CachedMedian);
             float dx = ic.x - ec.x, dy = ic.y - ec.y;
@@ -361,6 +365,16 @@ namespace CombatBrain.Ai
                 case IntentType.Pursue: return OpportunityType.EnemyChargeEnded;
                 default: return OpportunityType.None;
             }
+        }
+
+        // X6 感知接线：最近敌编队经 KnowledgeView 过滤——未知敌编队（未见/超期）视为无目标（null），
+        //   保守降级=FSM 走超时兜底分支（Scout 超时推进 / 不盲目冲锋看不见的敌人）；null=不过滤=现状等价。
+        private FormationQuerySystem GetKnownEnemy(Formation formation)
+        {
+            FormationQuerySystem enemy = formation.QuerySystem.ClosestSignificantlyLargeEnemyFormation;
+            if (enemy == null || enemy.Formation == null) return null;
+            if (_isEnemyFormationKnown != null && !_isEnemyFormationKnown(formation.Team, enemy.Formation)) return null; // X6：未知敌编队不算目标
+            return enemy;
         }
 
         private static float DistToEnemy(Formation formation, FormationQuerySystem enemy)
