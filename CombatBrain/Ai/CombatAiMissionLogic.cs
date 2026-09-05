@@ -400,9 +400,14 @@ namespace CombatBrain.Ai
                 Team own = state.Team;
                 if (own == null) continue;
                 Vec2 observer = GetTeamCenter(own);
-                state.Perception.Update(now, observer, mission.Agents);
+                // 每拍超时清理（独立于刷新门控：周期未到也清超时，幂等）
+                state.View.Tick(now);
+                // atc4-perception-fix P0-1：一次性批量刷新门控——周期未到 → 跳过本拍全部观察（不刷新不写）；
+                // 到达 → 下方批量 ObserveFormation 无内部节流（同一批次可写多个可见敌编队）。
+                if (!state.Perception.TryBeginRefresh(now)) continue;
                 // X6：观察敌编队中心（编队级聚合，非逐兵）——每个可见敌编队中心写进 KnowledgeView，
-                // 下游 Glue 查询时过滤（未见/超期 → 视为不存在，保守降级）。id = 敌队索引*100 + 编队索引。
+                // 下游 Glue 查询时过滤（未见/超期 → 视为不存在，保守降级）。id = 敌队索引*100 + 编队索引
+                // （Agent 观察已删，ID 域无碰撞，见 PerceptionPipeline.cs 头注）。
                 foreach (Team et in mission.Teams)
                 {
                     if (et == null || !et.MBTeam.IsValid || !et.IsEnemyOf(own)) continue; // P1-③ 真敌队判定
@@ -410,10 +415,9 @@ namespace CombatBrain.Ai
                     {
                         if (ef == null || ef.CountOfUnits == 0 || ef.QuerySystem == null) continue;
                         Vec2 c = TeamGeometry.GetFormationPosition(ef, TeamPosKind.CachedMedian); // P1-④ 统一口径
-                        state.Perception.ObserveFormation(now, observer, FormationKey(et, ef), c.x, c.y);
+                        state.Perception.ObserveFormation(now, observer.x, observer.y, FormationKey(et, ef), c.x, c.y);
                     }
                 }
-                state.View.Tick(now);
             }
         }
 
@@ -818,9 +822,7 @@ namespace CombatBrain.Ai
                 if (!state.CommitmentPrevDist.TryGetValue(f.Index, out prevDist)) prevDist = 0f;
                 bool distIncreasing = FormationDistanceTrend.IsIncreasing(prevDist, dist);
 
-                // atc4 nits 收口：InContact 接线到既有公开聚合——己方编队中心距最近已知敌编队中心 ≤20m
-                //   视为贴身接战（编队级近似；TeamGeometry CachedMedian 口径；enemySnaps 已按迷雾过滤，
-                //   未知敌不参与）。纪律2 由此真实生效：接战中返回 Limited 而非突然 Denied 原地不动。
+                // [临时还原 P0-2 前] inContact 判定（P0-2 提交恢复为 CommitmentContact.IsInContact）
                 bool inContact = false;
                 for (int i = 0; i < enemySnaps.Count; i++)
                 {

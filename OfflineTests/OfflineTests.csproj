@@ -9,6 +9,7 @@
 
   <ItemGroup>
     <Compile Include="..\CombatBrain\Enums.cs" Link="Enums.cs" />
+    <Compile Include="..\CombatBrain\VecMath.cs" Link="VecMath.cs" />
     <Compile Include="..\CombatBrain\CombatBrainSettings.cs" Link="CombatBrainSettings.cs" />
     <Compile Include="..\CombatBrain\Combat\FighterProfile.cs" Link="Combat\FighterProfile.cs" />
     <Compile Include="..\CombatBrain\Movement\MovementController.cs" Link="Movement\MovementController.cs" />
@@ -30,6 +31,8 @@
     <Compile Include="..\CombatBrain\Perception\TerrainSampler.cs" Link="Perception\TerrainSampler.cs" />
     <Compile Include="..\CombatBrain\Perception\KnowledgeView.cs" Link="Perception\KnowledgeView.cs" />
     <Compile Include="..\CombatBrain\Perception\PerceptionFilter.cs" Link="Perception\PerceptionFilter.cs" />
+    <Compile Include="..\CombatBrain\Perception\VisibilityOracle.cs" Link="Perception\VisibilityOracle.cs" />
+    <Compile Include="..\CombatBrain\Perception\PerceptionPipeline.cs" Link="Perception\PerceptionPipeline.cs" />
     <Compile Include="..\CombatBrain\Formation\FormationIntegrity.cs" Link="Formation\FormationIntegrity.cs" />
     <Compile Include="..\CombatBrain\Ai\DecisionBranchTally.cs" Link="Ai\DecisionBranchTally.cs" />
     <Compile Include="..\CombatBrain\Ai\AttackSuppressionState.cs" Link="Ai\AttackSuppressionState.cs" />

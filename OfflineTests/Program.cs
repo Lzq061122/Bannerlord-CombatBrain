@@ -152,6 +152,9 @@ namespace OfflineTests
             Console.WriteLine("== X6 KnowledgeView/PerceptionFilter ==");
             TestPerception();
 
+            Console.WriteLine("== atc4-perc PerceptionPipeline 完整流程 ==");
+            TestPerceptionPipeline();
+
             Console.WriteLine("== N1 NarratorPure ==");
             TestNarratorPure();
 
@@ -2833,6 +2836,48 @@ namespace OfflineTests
             Check(!FormationDistanceTrend.IsIncreasing(100f, 100f), "atc4-fix same distance -> not increasing");
             Check(!FormationDistanceTrend.IsIncreasing(120f, 100f), "atc4-fix closing distance -> not increasing");
         }
+
+        // atc4-perception-fix P0-1：完整 PerceptionPipeline 刷新流程（生产接线级，非只测 KnowledgeView/PerceptionFilter）。
+        // 覆盖：周期到达批量多编队写入 / 周期未到不刷新 / 不可见不写 / 超时变未知 / FogOff 直通语义。
+        private static void TestPerceptionPipeline()
+        {
+            // 完整管线：KnowledgeView + VisibilityOracle + PerceptionPipeline（零 TaleWorlds，真装配）
+            var view = new KnowledgeView(25f, 0.08f, 0.15f);
+            var pipe = new PerceptionPipeline(view, 60f, 1.0f); // 60m 视野、1s 刷新周期
+
+            // 1) 周期到达：TryBeginRefresh 成功 → 同一批次批量观察两个可见敌编队（@10m/20m，60m 内）
+            Check(pipe.TryBeginRefresh(0f), "atc4-perc begin refresh t0 (interval reached)");
+            pipe.ObserveFormation(0f, 0f, 0f, 101, 10f, 0f); // 敌编队 101 @10m
+            pipe.ObserveFormation(0f, 0f, 0f, 102, 20f, 0f); // 敌编队 102 @20m
+            KnowledgeView.SightedInfo i1, i2;
+            Check(view.TryGet(101, 0.5f, out i1) && view.TryGet(102, 0.5f, out i2),
+                "atc4-perc batch multi formation written in one refresh");
+
+            // 2) 周期未到：TryBeginRefresh 返回 false（调用方跳过整段观察，不写新条目）
+            Check(!pipe.TryBeginRefresh(0.9f), "atc4-perc interval not elapsed -> no refresh");
+            KnowledgeView.SightedInfo ignored;
+            Check(!view.TryGet(103, 0.9f, out ignored), "atc4-perc no refresh -> unobserved formation stays unknown");
+
+            // 3) 不可见不写：超出视野（100m > 60m range）→ ObserveFormation 内部可见性拒绝
+            pipe.ObserveFormation(1.1f, 0f, 0f, 104, 100f, 0f); // 即使无节流，可见性闸拒绝
+            Check(!view.TryGet(104, 1.1f, out ignored), "atc4-perc out-of-range formation not written");
+
+            // 4) 下一周期到达：可再次刷新并写入新编队（观察方法无内部节流，门控只在 TryBeginRefresh）
+            Check(pipe.TryBeginRefresh(1.1f), "atc4-perc second refresh at t=1.1");
+            pipe.ObserveFormation(1.1f, 0f, 0f, 103, 30f, 0f);
+            Check(view.TryGet(103, 1.2f, out ignored), "atc4-perc formation written on second refresh");
+
+            // 5) 超时变未知：写入后推进 > maxAge(25s) → TryGet 返回 false（编队变未知，保守降级）
+            Check(!view.TryGet(101, 30f, out ignored), "atc4-perc formation expires after maxAge -> unknown");
+
+            // 6) FogOff 直通语义：PerceptionFilter 开关关=恒 true（胶水层 FogOfWarEnabled=false 时
+            //    IsEnemyFormationKnown 直通、TickPerception 跳过感知段——本层不写新条目但查询全知，
+            //    与现状一致：关闭不新增信息、不改变过滤后的可见性结果）
+            Check(PerceptionFilter.IsKnown(false, false), "atc4-perc fog-off passthrough (感知关=恒 true, 现状一致)");
+            Check(!PerceptionFilter.IsKnown(true, false), "atc4-perc fog-on unseen -> unknown (保守降级)");
+        }
+
+        // [临时移除 P0-2 测试方法：TestCommitmentContact 将在 atc4-fog-contact-fix 提交恢复]
 
         private static int idxDefend()
         {
