@@ -39,6 +39,15 @@ namespace CombatBrain.Ai
         private readonly List<Vec2> _enemyFcs = new List<Vec2>(); // 复用列表（零分配）
         private readonly List<Vec2> _ownFcs = new List<Vec2>();
 
+        // N2 透出：最近一拍敌方存活衰减代理（供叙事层 E3 溃败边沿消费；值域 0..1，首拍 0）。
+        // 反作弊闸：读 ActiveAgents 计数（队级公开聚合，非逐兵），零新增禁读信息。
+        public float LastRoutRatio { get; private set; }
+
+        // N2 透出：最近一拍主导敌方意图与置信（供叙事层 E4 预测冲锋边沿消费；读不懂 → 默认 None/0）。
+        // 反作弊闸：读 OpponentModel 既有信念（t16 已核实只读已有决策状态），零新增禁读信息。
+        public EnemyIntent LastDominantIntent { get; private set; }
+        public float LastDominantConf { get; private set; }
+
         private sealed class FormationTrack
         {
             public float DistToUs; // 上一拍到己方中心距离（0 = 首拍未记录）
@@ -144,6 +153,7 @@ namespace CombatBrain.Ai
 
             // ---- 逃跑数（存活率代理 ✅）：≥15% → 撤退视为真退，不判佯退 ----
             float routRatio = EnemyRoutRatio(enemy);
+            LastRoutRatio = routRatio; // N2 透出给叙事层（E3 溃败边沿）
 
             // ---- 射击事件（MakingRangedAttackRatio 队级代理 ✅）：回落 → CeaseFire（t11 L164 0.4 封顶）----
             float firing = TeamFiringRatio(enemy);
@@ -172,9 +182,13 @@ namespace CombatBrain.Ai
             float conf;
             if (model.TryReadDominant(out intent, out conf))
             {
+                LastDominantIntent = intent;
+                LastDominantConf = conf;
                 belief = model.SnapshotBelief();
                 return true;
             }
+            LastDominantIntent = EnemyIntent.FrontalAttack; // 读不懂 → 非冲锋（不触发 E4）
+            LastDominantConf = 0f;
             return false;
         }
 

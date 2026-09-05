@@ -93,6 +93,39 @@ namespace CombatBrain.Ai
             return team != null && team.IsPlayerTeam ? "我军" : "敌军";
         }
 
+        // N2 L0 战场事件文案模板（§3 文案表；{S}/{O} 占位由 Narrator 代填；单句 ≤16 字，
+        // 叠加后整条 ≤20 字对齐现有约束）。纯静态映射只读，零游戏写入。
+        public static string BattlefieldEvent(int kind)
+        {
+            switch (kind)
+            {
+                case 1: return "{O}骑兵集结，威胁{S}侧翼";        // E1 骑兵威胁（危机红）
+                case 2: return "敌阵出现缺口，{S}可发动侧击";      // E2a 缺口机会（优势绿）
+                case 3: return "{S}侧翼暴露，{O}骑兵可能绕后";     // E2b 侧翼暴露（危机红）
+                case 4: return "{O}损失惨重，阵线开始崩溃";        // E3 敌溃败（优势绿）
+                case 5: return "预判{O}即将正面冲锋，{S}提前布防";  // E4 预测冲锋（特殊紫）
+                default: return string.Empty;
+            }
+        }
+
+        // N2 E5 战略大类映射（§3 文案表）：攻/守/撤/机动——仅跨大类跳变时播战术转折。
+        public static string StrategicClass(IntentType intent)
+        {
+            switch (intent)
+            {
+                case IntentType.Attack:
+                case IntentType.Flank:
+                case IntentType.Harass:
+                case IntentType.Pursue: return "进攻";
+                case IntentType.Defend:
+                case IntentType.BraceFormation:
+                case IntentType.ProtectArcher: return "防守";
+                case IntentType.Retreat: return "撤退";
+                case IntentType.Reform: return "机动";
+                default: return intent.ToString();
+            }
+        }
+
         // t54 阵营判定（士兵文化多数决）：GeneralAgent 文化在自定义战斗不可靠——可为 null 或
         // 与士兵不同阵营（实测选帝国显示瓦兰迪亚、日志读空 阵营=-）。改为遍历各编队士兵统计
         // 文化票数取多数；无兵 → GeneralAgent 兜底 → null（调用方自行再兜底）。

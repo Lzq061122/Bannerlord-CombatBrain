@@ -37,6 +37,11 @@ namespace CombatBrain.Ai
         public const uint FormationColor = 0xFFFFD54F; // 琥珀：编队级（骑兵/士气/架枪/保护）
         public const uint AggregateColor = 0xFFB0BEC5; // 灰蓝：个体级聚合统计
 
+        // N2 L0 战场事件颜色（只增不改，§3 文案表）：危机红（威胁/暴露）/ 优势绿（机会/溃败）/ 特殊紫（预判/转折）
+        public const uint CrisisColor    = 0xFFE53935; // 危机红：E1 骑兵威胁 / E2b 侧翼暴露
+        public const uint AdvantageColor = 0xFF66BB6A; // 优势绿：E2a 缺口机会 / E3 敌溃败
+        public const uint SpecialColor   = 0xFFAB47BC; // 特殊紫：E4 预测冲锋 / E5 战术转折
+
         private static readonly object _sync = new object();
         private static readonly Dictionary<string, float> _lastNotify = new Dictionary<string, float>(); // per 类别上次输出时间
         private static readonly Dictionary<string, int> _counts = new Dictionary<string, int>();         // 个体级类别累计计数

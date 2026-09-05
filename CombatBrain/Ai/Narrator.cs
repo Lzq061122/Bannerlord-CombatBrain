@@ -54,26 +54,33 @@ namespace CombatBrain.Ai
             return opponentIsPlayerTeam ? "我军" : "敌军";                    // 指挥：按 O 是否玩家阵营
         }
 
-        /// <summary>代填 {S}/{O}：按模式把模板占位符替换为主语/宾语标签（纯逻辑，可离线测）。</summary>
-        public static string ComposeText(NarrationInfo info, string textTemplate, bool spectatorMode)
+        /// <summary>
+        /// 代填 {S}/{O}：按模式把模板占位符替换为主语/宾语标签（纯逻辑，可离线测）。
+        /// opponent 提供 {O} 的宾语关系/阵营（T 的敌队）；null=模板含 {O} 时保留占位（宁缺毋假）。
+        /// </summary>
+        public static string ComposeText(NarrationInfo info, string textTemplate, bool spectatorMode,
+            NarrationInfo? opponent = null)
         {
-            return textTemplate
-                .Replace("{S}", Subject(info, spectatorMode))
-                .Replace("{O}", Opponent(info.IsPlayerTeam, info.HasPlayerTeam, spectatorMode, info.FactionName));
+            string text = textTemplate.Replace("{S}", Subject(info, spectatorMode));
+            if (opponent.HasValue)
+                text = text.Replace("{O}", Opponent(opponent.Value.IsPlayerTeam, opponent.Value.HasPlayerTeam,
+                    spectatorMode, opponent.Value.FactionName));
+            return text;
         }
 
         /// <summary>
         /// 统一出口：对象集过滤 → {S}/{O} 代填 → 经 send 委托转发（胶水层传 InGameFeedback.NotifyTactical；
         /// 过滤未通过则不发）。模板写 {S}（主语）/ {O}（宾语）占位；不含占位符的模板原样转发。
+        /// opponent 提供 {O} 宾语（T 的敌队）；null=含 {O} 模板保留占位（宁缺毋假）。
         /// 不改 InGameFeedback 限频/去重/DebugMode（NotifyTactical 内部 3s 去重 + 4 条/s 上限）。
         /// </summary>
         public static void Notify(NarrationInfo info, string category, string textTemplate, uint color,
-            Action<string, string, uint> send)
+            Action<string, string, uint> send, NarrationInfo? opponent = null)
         {
             bool spectatorMode = CombatBrainSettings.NarrationSpectatorMode;
             if (!ShouldNarrate(info, spectatorMode)) return; // 对象集过滤（谁有权说话）
             if (send == null) return;
-            send(category, ComposeText(info, textTemplate, spectatorMode), color);
+            send(category, ComposeText(info, textTemplate, spectatorMode, opponent), color);
         }
     }
 }

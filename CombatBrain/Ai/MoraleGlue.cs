@@ -190,6 +190,24 @@ namespace CombatBrain.Ai
                     "士气", // N1 叙事统一出口（编队级全量，撤退 FSM 跃迁一次性事件，正常模式显示）
                     string.Format("{S}编队 {1}→{2}（士气{3:F2}）", FeedbackText.Morale(state), FeedbackText.Morale(next), m.Moral),
                     InGameFeedback.FormationColor, InGameFeedback.NotifyTactical);
+
+                // N2 E3 自身崩溃（§3 E3 备注）：被指挥队自身士气崩溃 → 撤退 FSM 跃迁到 Disengage 时补一条。
+                // 颜色=事件对被叙事队的利害：指挥模式观看方自动获得敌我语义（敌侧绿=我军优势，友侧红=我军崩溃）。
+                if (next == RetreatState.Disengage && state != RetreatState.Disengage)
+                {
+                    bool enemyOfPlayer = formation.Team.IsPlayerTeam ? false
+                        : Mission.Current != null && Mission.Current.PlayerTeam != null
+                            && Mission.Current.PlayerTeam.IsEnemyOf(formation.Team);
+                    Narrator.Notify(CombatAiMissionLogic.NarrateInfo(formation.Team,
+                        Mission.Current != null ? Mission.Current.PlayerTeam : null),
+                        "事件",
+                        enemyOfPlayer ? "{O}损失惨重，阵线开始崩溃" : "{S}损失惨重，阵线开始崩溃",
+                        enemyOfPlayer ? InGameFeedback.AdvantageColor : InGameFeedback.CrisisColor,
+                        InGameFeedback.NotifyTactical,
+                        CombatAiMissionLogic.NarrateInfo(
+                            Mission.Current != null ? Mission.Current.PlayerTeam : null,
+                            Mission.Current != null ? Mission.Current.PlayerTeam : null)); // {O}=玩家侧兜底
+                }
             }
         }
 

@@ -56,6 +56,7 @@
     <Compile Include="..\CombatBrain\Formation\FormationDisciplineController.cs" Link="Formation\FormationDisciplineController.cs" />
     <Compile Include="..\CombatBrain\Formation\X5ExecutionPolicy.cs" Link="Formation\X5ExecutionPolicy.cs" />
     <Compile Include="..\CombatBrain\Ai\Narrator.cs" Link="Ai\Narrator.cs" />
+    <Compile Include="..\CombatBrain\Ai\NarrativeEvents.cs" Link="Ai\NarrativeEvents.cs" />
   </ItemGroup>
 
 </Project>

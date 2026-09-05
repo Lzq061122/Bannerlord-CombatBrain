@@ -48,6 +48,11 @@ namespace CombatBrain.Ai
             public readonly Queue<float> EnemyCountHistory = new Queue<float>();
             public Vec2 Center = Vec2.Zero;   // 上次非空编队中心(无一兵时保持)
             public float Spread = 0f;         // 上次编队离散度(无一兵时保持)
+
+            // N2 L0 战场事件边沿锁存（E1-E4；进/出双阈值+上次状态，NarrativeEvents 纯逻辑消费）
+            public NarrativeLatch LatchE1, LatchE2a, LatchE2b, LatchE3;
+            public bool LatchE4;              // E4 预测冲锋边沿锁存
+            public string LastStrategicClass = null; // E5 战术转折：上拍战略大类（进攻/防守/撤退/机动）
         }
 
         private bool _initialized;
@@ -473,6 +478,11 @@ namespace CombatBrain.Ai
                 _opponent.Update(own, enemy, _elapsed, ref v, out belief);
                 state.LastVector = v;
 
+                // N2 L0 战场事件 E1-E4（边沿检测，消费既有态势/信念/存活代理，不加新 tick）：
+                //   E1 骑兵威胁 / E2a 缺口机会 / E2b 侧翼暴露 / E3 敌溃败 / E4 预测冲锋。
+                //   全部输入=既有公开态势（反作弊闸不变）；只播无→有跨越（NarrativeEvents 迟滞带）。
+                TickNarrativeEvents(state, own, enemy, v, belief);
+
                 // P0-④ 玩家队豁免意图决策：意图是玩家指挥的领域——玩家队不 Evaluate/不发布
                 // IntentSwitched（否则 F10 把自家引擎输出当玩家套路，循环自证；玩家队也不消费本层
                 // 意图，4 个编队层 Glue 已同步豁免）。态势向量/士气照算（LastVector 仍供 GetMorale
@@ -510,8 +520,47 @@ namespace CombatBrain.Ai
                         string.Format("{S}战术：{1}——{2}",
                             FeedbackText.Intent(newIntent), FeedbackText.TacticBrief(newIntent)),
                         InGameFeedback.TacticalColor, InGameFeedback.NotifyTactical);
+
+                    // N2 E5 战术转折（特殊紫）：仅跨战略大类跳变时播（攻/守/撤/机动，§3 映射表）。
+                    string newClass = FeedbackText.StrategicClass(newIntent);
+                    if (state.LastStrategicClass != null && state.LastStrategicClass != newClass)
+                    {
+                        Narrator.Notify(NarrateInfo(own, Mission.PlayerTeam), "事件",
+                            string.Format("战局变化：{S}由{0}转入{1}",
+                                state.LastStrategicClass, newClass),
+                            InGameFeedback.SpecialColor, InGameFeedback.NotifyTactical);
+                    }
+                    state.LastStrategicClass = newClass;
                 }
             }
+        }
+
+        // N2 L0 战场事件 E1-E4（§3）：边沿检测 + Narrator.Notify 播报。消费既有态势/信念/存活代理，
+        // 不加新 tick（挂在 TickIntent 0.5s 拍内）。反作弊闸：全部输入=既有公开态势与既有信念。
+        private void TickNarrativeEvents(TeamState state, Team own, Team enemy, SituationVector v, float[] belief)
+        {
+            bool dominantFrontal = _opponent.LastDominantIntent == EnemyIntent.FrontalAttack;
+            float dominantConf = _opponent.LastDominantConf;
+            float routRatio = _opponent.LastRoutRatio;
+
+            NarrativeEventKind evt = NarrativeEvents.Tick(
+                v.EnemCav, v.FlankEx, v.Gap, routRatio,
+                dominantFrontal, dominantConf,
+                ref state.LatchE1, ref state.LatchE2a, ref state.LatchE2b, ref state.LatchE3, ref state.LatchE4);
+            if (evt == NarrativeEventKind.None) return;
+
+            uint color;
+            switch (evt)
+            {
+                case NarrativeEventKind.E1CavalryThreat: color = InGameFeedback.CrisisColor; break;
+                case NarrativeEventKind.E2aGapOpportunity: color = InGameFeedback.AdvantageColor; break;
+                case NarrativeEventKind.E2bFlankExposed: color = InGameFeedback.CrisisColor; break;
+                case NarrativeEventKind.E3EnemyRout: color = InGameFeedback.AdvantageColor; break;
+                default: color = InGameFeedback.SpecialColor; break; // E4PredictCharge
+            }
+            Narrator.Notify(NarrateInfo(own, Mission.PlayerTeam), "事件",
+                FeedbackText.BattlefieldEvent((int)evt), color, InGameFeedback.NotifyTactical,
+                NarrateInfo(enemy, Mission.PlayerTeam)); // {O}=敌队（T 的敌队）
         }
 
         private void ComposeVector(
