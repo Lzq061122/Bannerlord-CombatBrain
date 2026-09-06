@@ -173,6 +173,9 @@ namespace OfflineTests
             Console.WriteLine("== narrate-fix P0 崩溃回归 ==");
             TestNarrateFix();
 
+            Console.WriteLine("== atc5r-lease FormationControlLease ==");
+            TestFormationControlLease();
+
             Console.WriteLine("== N2 NarrativeEvents ==");
             TestNarrativeEvents();
 
@@ -3264,6 +3267,205 @@ namespace OfflineTests
             });
             Check(noObj.Permission == CommitmentPermission.Hold && (noObj.Reasons & CommitmentReason.NoArmyObjective) != 0,
                 "atc4-int sample4 objective gone -> Hold/NoArmyObjective (P1-5 无残留)");
+        }
+
+        // ATC-5R 编队控制权租约状态机（纯逻辑）：§8 四组 ≥30 断言。
+        // 注意：离线测试只验证状态机/所有权/降级/日志节流决策，不得声称证明原生命令被阻断（那是运行期 R1-R8）。
+        private static void TestFormationControlLease()
+        {
+            // ---- 状态机（10 条）----
+            var m = new FormationControlLeaseManager();
+
+            // 1) 完整路径：Native→Acquire→Owned→Release→Native（两拍 Denied Acquire / 两拍 Granted Release）
+            var in1 = LeaseIn(1, 2, (int)CommitmentPermission.Denied, (int)CommitmentReason.InsufficientSupport,
+                SafeFallbackKind.Rejoin, now: 0f);
+            LeaseDecision r0 = m.Update(in1);
+            Check(!r0.AcquireNow && m.ActiveCount == 0, "atc5r 1st denied tick no acquire (毛刺过滤)");
+            var in2 = in1; in2.Now = 0.5f;
+            LeaseDecision r1 = m.Update(in2);
+            Check(r1.AcquireNow && m.ActiveCount == 1, "atc5r 2nd denied tick acquire");
+            FormationControlLease lease = m.GetLease(1, 2);
+            Check(lease != null && lease.WasAIControlledBeforeAcquire && lease.SafeCommandKind == SafeFallbackKind.Rejoin,
+                "atc5r lease fields (prevAI/fallback snapshot)");
+            // 3) Emergency/Retreat/Defensive 不 Acquire（拍1 加 retr）
+            var mE = new FormationControlLeaseManager();
+            LeaseDecision e0 = mE.Update(LeaseIn(1, 3, (int)CommitmentPermission.Denied,
+                (int)CommitmentReason.InsufficientSupport, SafeFallbackKind.Rejoin, retr: true, now: 0f));
+            LeaseDecision e1 = mE.Update(LeaseIn(1, 3, (int)CommitmentPermission.Denied,
+                (int)CommitmentReason.InsufficientSupport, SafeFallbackKind.Rejoin, retr: true, now: 0.5f));
+            Check(!e0.AcquireNow && !e1.AcquireNow && mE.ActiveCount == 0,
+                "atc5r emergency/retreat never acquire (不锁死)");
+            // 6) MinimumHold 未到不释放（Granted 拍 1 @t=1.0 < MinHoldUntil=1.5）
+            var inG = new LeaseInput { TeamId = 1, FormationId = 2, GenerationGuard = 1, PocEnabled = true,
+                FieldBattle = true, FormationValid = true, IsAIControlled = true, HasCommitment = true,
+                Permission = (int)CommitmentPermission.Granted, Reasons = 0, Fallback = SafeFallbackKind.Hold, Now = 1.0f };
+            LeaseDecision g0 = m.Update(inG);
+            Check(!g0.ReleaseNow && m.ActiveCount == 1, "atc5r minhold blocks release");
+            // 5) 两拍 Granted Release（拍1 @1.5 评估第 1 次 granted、拍2 @2.0 确认）
+            var inG2 = inG; inG2.Now = 1.5f;
+            LeaseDecision g1 = m.Update(inG2);
+            Check(!g1.ReleaseNow, "atc5r granted tick1 no release (迟滞)");
+            var inG3 = inG; inG3.Now = 2.0f;
+            LeaseDecision g2 = m.Update(inG3);
+            Check(g2.ReleaseNow && g2.ReleaseReason == LeaseReleaseReason.Granted && m.ActiveCount == 0,
+                "atc5r granted tick2 release (完整路径回 Native)");
+
+            // 7) TTL 到期（producer 停止续租 → watchdog 释放）
+            var mT = new FormationControlLeaseManager();
+            mT.Update(LeaseIn(1, 4, (int)CommitmentPermission.Denied, 0, SafeFallbackKind.Rejoin, now: 0f));
+            mT.Update(LeaseIn(1, 4, (int)CommitmentPermission.Denied, 0, SafeFallbackKind.Rejoin, now: 0.5f));
+            Check(mT.ActiveCount == 1, "atc5r ttl lease acquired");
+            var expired = mT.UpdateWatchdog(3.0f); // 3.0-0.5=2.5 > TTL 1.5
+            Check(expired.Count == 1 && mT.ActiveCount == 0, "atc5r watchdog expires lease (fail-open)");
+
+            // 8) Renew 延长 TTL（1.5s 续租后 2.5s 不逾期）
+            var mR = new FormationControlLeaseManager();
+            mR.Update(LeaseIn(1, 5, (int)CommitmentPermission.Denied, 0, SafeFallbackKind.Rejoin, now: 0f));
+            mR.Update(LeaseIn(1, 5, (int)CommitmentPermission.Denied, 0, SafeFallbackKind.Rejoin, now: 0.5f));
+            var renewIn = LeaseIn(1, 5, (int)CommitmentPermission.Denied, 0, SafeFallbackKind.Rejoin, now: 1.5f);
+            LeaseDecision rd = mR.Update(renewIn); // 1.5-0.5=1.0 ≥ RenewMinGap → Renew
+            Check(rd.Renew, "atc5r renew extends ttl");
+            Check(mR.UpdateWatchdog(2.6f).Count == 0, "atc5r renewed lease not expired at 2.6 (2.6-1.5=1.1<TTL)");
+
+            // 9) 幂等：同 key 再 Acquire 需重新两拍（Release 后同 key 不残留）
+            Check(mR.UpdateWatchdog(4.0f).Count == 1, "atc5r renewal stops -> ttl expiry after gap");
+
+            // 10) 跨 Team/Formation 隔离
+            var mI = new FormationControlLeaseManager();
+            mI.Update(LeaseIn(1, 1, (int)CommitmentPermission.Denied, 0, SafeFallbackKind.Rejoin, now: 0f));
+            mI.Update(LeaseIn(1, 1, (int)CommitmentPermission.Denied, 0, SafeFallbackKind.Rejoin, now: 0.5f));
+            mI.Update(LeaseIn(2, 1, (int)CommitmentPermission.Denied, 0, SafeFallbackKind.Rejoin, now: 0f));
+            LeaseDecision iso = mI.Update(LeaseIn(2, 1, (int)CommitmentPermission.Denied, 0, SafeFallbackKind.Rejoin, now: 0.5f));
+            Check(iso.AcquireNow && mI.ActiveCount == 2, "atc5r team/formation leases isolated");
+
+            // ---- 所有权安全（7 条）----
+
+            // 11) 原本 IsAIControlled=false 不 Acquire
+            var mN = new FormationControlLeaseManager();
+            LeaseDecision n0 = mN.Update(LeaseIn(1, 6, (int)CommitmentPermission.Denied, 0,
+                SafeFallbackKind.Rejoin, ai: false, now: 0f));
+            LeaseDecision n1 = mN.Update(LeaseIn(1, 6, (int)CommitmentPermission.Denied, 0,
+                SafeFallbackKind.Rejoin, ai: false, now: 0.5f));
+            Check(!n0.AcquireNow && !n1.AcquireNow && mN.ActiveCount == 0,
+                "atc5r non-AI formation never acquired (所有权安全)");
+            // 12) 未 Acquire 不恢复（无租约 → 无 ReleaseNow）
+            Check(!n1.ReleaseNow, "atc5r no lease -> no restore");
+            // 13) 玩家编队跳过
+            var mP = new FormationControlLeaseManager();
+            mP.Update(LeaseIn(1, 7, (int)CommitmentPermission.Denied, 0, SafeFallbackKind.Rejoin, player: true, now: 0f));
+            mP.Update(LeaseIn(1, 7, (int)CommitmentPermission.Denied, 0, SafeFallbackKind.Rejoin, player: true, now: 0.5f));
+            Check(mP.ActiveCount == 0, "atc5r player formation skipped");
+            // 14) identity 变化失效（guard 变化 → FormationRemoved）
+            var mG = new FormationControlLeaseManager();
+            mG.Update(LeaseIn(1, 8, (int)CommitmentPermission.Denied, 0, SafeFallbackKind.Rejoin, now: 0f));
+            mG.Update(LeaseIn(1, 8, (int)CommitmentPermission.Denied, 0, SafeFallbackKind.Rejoin, now: 0.5f));
+            LeaseDecision gd = mG.Update(LeaseIn(1, 8, (int)CommitmentPermission.Denied, 0,
+                SafeFallbackKind.Rejoin, guard: 2, now: 1.0f));
+            Check(gd.ReleaseNow && gd.ReleaseReason == LeaseReleaseReason.FormationRemoved && mG.ActiveCount == 0,
+                "atc5r identity change invalidates lease (Id 复用不继承)");
+            // 15) FormationId 复用不继承（RemoveFormation 后同 key 重评估需两拍）
+            var mF = new FormationControlLeaseManager();
+            mF.Update(LeaseIn(1, 9, (int)CommitmentPermission.Denied, 0, SafeFallbackKind.Rejoin, now: 0f));
+            mF.Update(LeaseIn(1, 9, (int)CommitmentPermission.Denied, 0, SafeFallbackKind.Rejoin, now: 0.5f));
+            mF.RemoveFormation(1, 9);
+            Check(mF.ActiveCount == 0, "atc5r remove formation clears lease");
+            LeaseDecision rp = mF.Update(LeaseIn(1, 9, (int)CommitmentPermission.Denied, 0, SafeFallbackKind.Rejoin, now: 1.0f));
+            Check(!rp.AcquireNow, "atc5r reused formation id needs fresh two ticks");
+            // 16) Mission Clear 清空
+            var mC = new FormationControlLeaseManager();
+            mC.Update(LeaseIn(1, 10, (int)CommitmentPermission.Denied, 0, SafeFallbackKind.Rejoin, now: 0f));
+            mC.Update(LeaseIn(1, 10, (int)CommitmentPermission.Denied, 0, SafeFallbackKind.Rejoin, now: 0.5f));
+            mC.ReleaseAll(LeaseReleaseReason.MissionEnding);
+            Check(mC.ActiveCount == 0, "atc5r mission ending clears all leases");
+            // 17) PoC 关闭释放（开关关 → Disabled）
+            var mD = new FormationControlLeaseManager();
+            mD.Update(LeaseIn(1, 11, (int)CommitmentPermission.Denied, 0, SafeFallbackKind.Rejoin, now: 0f));
+            mD.Update(LeaseIn(1, 11, (int)CommitmentPermission.Denied, 0, SafeFallbackKind.Rejoin, now: 0.5f));
+            LeaseDecision dd = mD.Update(LeaseIn(1, 11, (int)CommitmentPermission.Granted, 0,
+                SafeFallbackKind.Hold, poc: false, now: 1.0f));
+            Check(dd.ReleaseNow && dd.ReleaseReason == LeaseReleaseReason.Disabled && mD.ActiveCount == 0,
+                "atc5r poc disabled releases lease");
+
+            // ---- Commitment 降级（7 条：ResolveFallback 纯函数）----
+
+            // 18) Denied+远离+有 MainBody → Rejoin
+            var army1 = new ArmyContextSnapshot { MainBodyX = 100f, MainBodyY = 0f, MainBodyStrength = 120 };
+            Check(FormationControlLeaseManager.ResolveFallback(CommitmentPermission.Denied, army1, 50f) == SafeFallbackKind.Rejoin,
+                "atc5r denied far -> rejoin");
+            // 19) Hold+安全带内 → Hold
+            Check(FormationControlLeaseManager.ResolveFallback(CommitmentPermission.Hold, army1, 10f) == SafeFallbackKind.Hold,
+                "atc5r hold near -> hold");
+            // 20) Denied 无 MainBody 点 → NoSafeFallback（不 Acquire）
+            var army0 = new ArmyContextSnapshot { MainBodyX = 0f, MainBodyY = 0f, MainBodyStrength = 0 };
+            Check(FormationControlLeaseManager.ResolveFallback(CommitmentPermission.Denied, army0, 80f) == SafeFallbackKind.NoSafeFallback,
+                "atc5r denied no mainbody -> no safe fallback");
+            // 21) Limited 不夺权（状态机 deniedOrHold 排除）
+            var mL = new FormationControlLeaseManager();
+            mL.Update(LeaseIn(1, 12, (int)CommitmentPermission.Limited, 0, SafeFallbackKind.NoSafeFallback, now: 0f));
+            mL.Update(LeaseIn(1, 12, (int)CommitmentPermission.Limited, 0, SafeFallbackKind.NoSafeFallback, now: 0.5f));
+            Check(mL.ActiveCount == 0, "atc5r limited never acquired (贴身脱困不夺权)");
+            // 22) Retreat/Emergency/Defensive 不锁死（已断言 3；补 DefensiveOverride reason 输入）
+            var mD2 = new FormationControlLeaseManager();
+            mD2.Update(LeaseIn(1, 13, (int)CommitmentPermission.Denied, (int)CommitmentReason.DefensiveOverride,
+                SafeFallbackKind.Hold, retr: true, now: 0f));
+            mD2.Update(LeaseIn(1, 13, (int)CommitmentPermission.Denied, (int)CommitmentReason.DefensiveOverride,
+                SafeFallbackKind.Hold, retr: true, now: 0.5f));
+            Check(mD2.ActiveCount == 0, "atc5r defensive override never locked (Immediate Defensive 优先)");
+            // 23) Fog 不用未知敌 fallback（Rejoin 只用 MainBody 点；ArmyContextSnapshot 无任何敌编队字段）
+            Check(!army1.HasOperationalObjective, "atc5r rejoin target is mainbody only (fog 契约)");
+            // 24) ScreenOnly 不自动夺权
+            Check(FormationControlLeaseManager.ResolveFallback(CommitmentPermission.ScreenOnly, army1, 50f) == SafeFallbackKind.NoSafeFallback,
+                "atc5r screenonly not auto-acquired (无屏护执行器)");
+
+            // ---- 日志节流（4 条：状态机决策频率）----
+
+            // 25) Acquire 只在确认拍出现一次（第 1 拍 false / 第 2 拍 true）
+            var mQ = new FormationControlLeaseManager();
+            Check(!mQ.Update(LeaseIn(1, 20, (int)CommitmentPermission.Denied, 0, SafeFallbackKind.Rejoin, now: 0f)).AcquireNow,
+                "atc5r log acquire edge only once (tick1 silent)");
+            Check(mQ.Update(LeaseIn(1, 20, (int)CommitmentPermission.Denied, 0, SafeFallbackKind.Rejoin, now: 0.5f)).AcquireNow,
+                "atc5r log acquire edge tick2 fires once");
+            // 26) Renew 不每拍（RenewMinGap 0.8s 内不续租）
+            var mN2 = new FormationControlLeaseManager();
+            mN2.Update(LeaseIn(1, 21, (int)CommitmentPermission.Denied, 0, SafeFallbackKind.Rejoin, now: 0f));
+            mN2.Update(LeaseIn(1, 21, (int)CommitmentPermission.Denied, 0, SafeFallbackKind.Rejoin, now: 0.5f));
+            LeaseDecision nr1 = mN2.Update(LeaseIn(1, 21, (int)CommitmentPermission.Denied, 0, SafeFallbackKind.Rejoin, now: 1.0f));
+            Check(!nr1.Renew, "atc5r renew throttled (0.5s gap < 0.8s)");
+            // 27) Release 只在确认拍（Granted 第 1 拍不释放）
+            Check(!g1.ReleaseNow, "atc5r log release edge only at confirm tick");
+            // 28) 原因可审计（枚举值区分）
+            Check((int)LeaseReleaseReason.Granted == 1 && (int)LeaseReleaseReason.Expired == 2
+                && (int)LeaseReleaseReason.Disabled == 3 && (int)LeaseReleaseReason.FormationRemoved == 5
+                && (int)LeaseReleaseReason.MissionEnding == 6 && (int)LeaseReleaseReason.PlayerOrExternalControl == 7
+                && (int)LeaseReleaseReason.UnsupportedMission == 8 && (int)LeaseReleaseReason.EmergencyFailOpen == 9,
+                "atc5r release reasons auditable (1..9)");
+
+            // ---- 常量/枚举契约（2 条）----
+            Check(FormationControlLeaseManager.DecisionCadenceSeconds == 0.5f
+                && FormationControlLeaseManager.LeaseTtlSeconds == 1.5f
+                && FormationControlLeaseManager.MinimumHoldSeconds == 1.0f
+                && FormationControlLeaseManager.ReleaseHysteresisTicks == 2
+                && FormationControlLeaseManager.AcquireHysteresisTicks == 2
+                && FormationControlLeaseManager.RenewMinGapSeconds == 0.8f,
+                "atc5r lease params centralized");
+            Check((int)FormationControlOwner.Native == 0 && (int)FormationControlOwner.CombatBrainLease == 1
+                && (int)LeaseState.NativeOwned == 0 && (int)LeaseState.AcquireRequested == 1
+                && (int)LeaseState.CombatBrainOwned == 2 && (int)LeaseState.ReleaseRequested == 3,
+                "atc5r owner/state enum contract");
+        }
+
+        // LeaseInput 便捷构造（测试用）
+        private static LeaseInput LeaseIn(int team, int form, int perm, int reasons, SafeFallbackKind fb,
+            bool poc = true, bool field = true, bool valid = true, bool ai = true, bool player = false,
+            bool hasCommit = true, bool contact = false, bool retr = false, int guard = 1, float now = 0f)
+        {
+            return new LeaseInput
+            {
+                TeamId = team, FormationId = form, GenerationGuard = guard,
+                PocEnabled = poc, FieldBattle = field, FormationValid = valid, IsAIControlled = ai,
+                IsPlayerFormation = player, HasCommitment = hasCommit, Permission = perm, Reasons = reasons,
+                InContact = contact, RetreatOrEmergencyOrDefensive = retr, Fallback = fb, Now = now
+            };
         }
 
         private static int idxDefend()

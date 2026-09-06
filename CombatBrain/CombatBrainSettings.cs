@@ -37,5 +37,16 @@ namespace CombatBrain
         // 玩家本队永不播（含豁免关闭时——旁白说给玩家听，不说玩家自己）；playerTeam==null 回退观战规则。
         // 默认 false=指挥模式；MCM 装载后可在「通用」组里热切（RequireRestart=false）。
         public static bool NarrationSpectatorMode = false;
+
+        // ATC-5R 编队控制权租约 PoC 开关（2026-09-06）：默认 false=零 SetControlledByAI 调用、零战斗行为变化、
+        //   Shadow 输出保持、性能差异接近零（producer 拍直接返回）。
+        // true=仅对 FormationControlLeasePocFormationKind 域的单个 AI 编队试验租约（普通单机野战内）；
+        //   本 PoC 不等同 ATC-5 全量门控；运行期 R1-R8 未验证前不得写 GO（PoC Ready / Runtime Pending）。
+        // 现有集中配置文件落点（规格 §4.3/§11「CombatBrain/Settings 或现有集中配置文件」；禁 magic bool 散落）。
+        public static bool FormationControlLeasePocEnabled = false;
+
+        // PoC 试验编队域（0=Infantry；与 FormationCoordKind 语义对齐）：仅此域编队可 Acquire
+        //   （远程/骑射/骑兵编队不试验；§4.3 单域原则）。
+        public static int FormationControlLeasePocFormationKind = 0;
     }
 }

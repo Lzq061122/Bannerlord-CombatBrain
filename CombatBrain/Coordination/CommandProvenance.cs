@@ -18,7 +18,8 @@ namespace CombatBrain.Coordination
         Morale = 5,            // F11 士气撤退
         Protect = 6,           // F3 保护核心
         Brace = 7,             // F4 架枪反骑
-        ArmyCoordination = 8   // ATC 系列（预留）
+        ArmyCoordination = 8,  // ATC 系列（预留）
+        FormationControlLease = 9 // ATC-5R 编队控制权租约（追加不重排既有值，§7.1）
     }
 
     public enum CommandKind

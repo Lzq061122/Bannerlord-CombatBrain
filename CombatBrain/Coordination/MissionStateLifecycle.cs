@@ -7,13 +7,16 @@ namespace CombatBrain.Coordination
     //   以及对手模型/攻击抑制实例级一并清空——Agent/Formation 索引复用不得继承旧状态。
     public static class MissionStateLifecycle
     {
-        /// <summary>跨 Mission 静态状态幂等清理（先聚合后清理；传实例级清理对象，静态单例内部处理）。</summary>
-        public static void ClearStatic(CombatBrain.Ai.OpponentModelGlue opponent, CombatBrain.Ai.AttackSuppression attackSuppression)
+        /// <summary>跨 Mission 静态状态幂等清理（先聚合后清理；传实例级清理对象，静态单例内部处理）。
+        /// ATC-5R：租约管理器纳入清理（leaseGlue.ReleaseAll 幂等释放全部 CB 租约并交还原生 AI）。</summary>
+        public static void ClearStatic(CombatBrain.Ai.OpponentModelGlue opponent, CombatBrain.Ai.AttackSuppression attackSuppression,
+            CombatBrain.Ai.FormationControlLeaseGlue leaseGlue = null, TaleWorlds.MountAndBlade.Mission mission = null)
         {
             CommandProvenance.Instance.Clear();
             CombatBrain.Ai.InGameFeedback.ClearAll();
             if (opponent != null) opponent.ClearAll();
             if (attackSuppression != null) attackSuppression.ClearAll(); // 联动清 _suppressedAttack（静态集合）
+            if (leaseGlue != null) leaseGlue.ReleaseAll(mission, LeaseReleaseReason.MissionEnding); // ATC-5R 租约幂等释放
         }
     }
 }

@@ -183,6 +183,10 @@ namespace CombatBrain.Ai
         // T5 骑射游击胶水：0.5s 编队级周期，骑射消耗/游击/夹击（绝不冲锋；见 SkirmishGlue.cs）
         private readonly SkirmishGlue _skirmish = new SkirmishGlue();
 
+        // ATC-5R 编队控制权租约胶水（默认关闭：CombatBrainSettings.FormationControlLeasePocEnabled=false 时零
+        //   SetControlledByAI 调用零行为变化；PoC 验证未完成不得 GO——运行期 R1-R8 留集成轮）
+        private readonly FormationControlLeaseGlue _leaseGlue = new FormationControlLeaseGlue();
+
         // F11 士气传导/分阶段撤退胶水：0.5s 编队级周期，邻队崩盘传染 + 请求→批准→脱离（见 MoraleGlue.cs）
         private readonly MoraleGlue _morale = new MoraleGlue();
 
@@ -240,8 +244,8 @@ namespace CombatBrain.Ai
 
             // atc4-state-lifecycle P1-4 / OPT-4：Mission 初始化幂等清理入口——CommandProvenance 为静态单例，
             //   跨战斗残留会串场；InGameFeedback 静态去重/计数同理；_opponent/_attackSuppression 实例级也一并清
-            //   （统一走 MissionStateLifecycle 单一入口，双保险）。
-            MissionStateLifecycle.ClearStatic(_opponent, _attackSuppression);
+            //   （统一走 MissionStateLifecycle 单一入口，双保险；ATC-5R 租约 ReleaseAll 一并纳入）。
+            MissionStateLifecycle.ClearStatic(_opponent, _attackSuppression, _leaseGlue, Mission);
 
             // T1 观测管线：挂载决策分支计数器 + 补丁/管线活性自检（单一 CombatLog 渠道）
             DecisionObservatory.Attach();
@@ -353,6 +357,24 @@ namespace CombatBrain.Ai
             _bench.BeginSection("slotlayout");
             TickFormationSlots(mission, dt);
             _bench.EndSection("slotlayout");
+
+            // ATC-5R 租约胶水（默认关闭零动作；watchdog 每帧轻量，无租约 O(1)；producer 0.5s 评估）
+            _bench.BeginSection("lease");
+            _leaseGlue.Tick(mission, dt, _elapsed,
+                (team, formation) =>
+                {
+                    TeamState st;
+                    CommitmentDecision cd;
+                    if (_states.TryGetValue(team.TeamIndex, out st)
+                        && st.Commitments.TryGetValue(formation.Index, out cd)) return cd;
+                    return (CommitmentDecision?)null;
+                },
+                (team) =>
+                {
+                    TeamState st;
+                    return _states.TryGetValue(team.TeamIndex, out st) ? st.Army : ArmyContextSnapshot.None;
+                });
+            _bench.EndSection("lease");
 
             _bench.BeginSection("rangedpos");
             TickRangedPosition(mission, dt);
@@ -1595,10 +1617,11 @@ namespace CombatBrain.Ai
         }
 
         // atc4-state-lifecycle P1-4 / atc4-snapshot-optimization OPT-4：跨 Mission 静态状态幂等清理入口
-        //   （OnMissionStateFinalized/OnClearScene 双钩子共用，先聚合后清理；逻辑已拆至 MissionStateLifecycle）
+        //   （OnMissionStateFinalized/OnClearScene 双钩子共用，先聚合后清理；逻辑已拆至 MissionStateLifecycle；
+        //   ATC-5R 租约 ReleaseAll 一并纳入——Mission 结束幂等交还原生 AI）
         private void ClearMissionStaticState()
         {
-            MissionStateLifecycle.ClearStatic(_opponent, _attackSuppression);
+            MissionStateLifecycle.ClearStatic(_opponent, _attackSuppression, _leaseGlue, Mission);
         }
 
         // T38-01 遥测事件分发：仅映射已有事件 → 计数（各计数点的详细调用留给后续 feature 各自补，
