@@ -75,6 +75,8 @@
     <Compile Include="..\CombatBrain\Coordination\FormationCommandProposal.cs" Link="Coordination\FormationCommandProposal.cs" />
     <Compile Include="..\CombatBrain\Coordination\FormationCommandPolicy.cs" Link="Coordination\FormationCommandPolicy.cs" />
     <Compile Include="..\CombatBrain\Coordination\FormationCommandArbiter.cs" Link="Coordination\FormationCommandArbiter.cs" />
+    <!-- CPS-1 执行器（决策核心纯逻辑可离线测；胶水部分编译需 TaleWorlds 引用，运行时惰性不触碰） -->
+    <Compile Include="..\CombatBrain\Ai\FormationCommandExecutor.cs" Link="Ai\FormationCommandExecutor.cs" />
     <!-- CPS-0：CommandProvenance.cs 的 Enable() fail-open 日志用 CombatLog（纯 System 依赖，可安全 link） -->
     <Compile Include="..\CombatBrain\CombatLog.cs" Link="CombatLog.cs" />
   </ItemGroup>
@@ -101,6 +103,10 @@
     </Reference>
     <Reference Include="TaleWorlds.Engine">
       <HintPath>E:\SteamLibrary\steamapps\common\Mount &amp; Blade II Bannerlord\bin\Win64_Shipping_Client\TaleWorlds.Engine.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="TaleWorlds.DotNet">
+      <HintPath>E:\SteamLibrary\steamapps\common\Mount &amp; Blade II Bannerlord\bin\Win64_Shipping_Client\TaleWorlds.DotNet.dll</HintPath>
       <Private>false</Private>
     </Reference>
   </ItemGroup>

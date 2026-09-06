@@ -194,6 +194,9 @@ namespace OfflineTests
             Console.WriteLine("== CPS1 CommandProposal ==");
             TestCps1CommandProposal();
 
+            Console.WriteLine("== CPS1 CommandExecutor ==");
+            TestCps1CommandExecutor();
+
             Console.WriteLine("== ATC1 BattlePhaseFSM ==");
             TestBattlePhaseFSM();
 
@@ -2632,6 +2635,162 @@ namespace OfflineTests
                 if (rr.RejectedProposals[i].Reason == reason) return true;
             }
             return false;
+        }
+
+        // CPS-1 唯一执行器（FormationCommandExecutor）——规格 §10.3 Executor 8 项：
+        // 相同命令不重复写/目标小幅变化迟滞/目标显著变化才重写/执行前 Formation 失效 fail-open/
+        // 玩家接管停止执行/单拍每域最多一次写入/执行失败不关 AI/每次实际调用有真实 provenance
+        private static void TestCps1CommandExecutor()
+        {
+            // A) §10.3 相同命令不重复写（同语义同目标 → 不写）
+            var lastA = new FormationCommandExecutor.LastDomainWrite
+            { Written = true, Kind = CommandKind.Move, TargetId = 5, X = 10f, Y = 10f };
+            var wA = P(1, CommandDomain.Movement, CommandKind.Move, CommandSource.Cavalry,
+                CommandPriority.Specialist, 1, 0f, 100f);
+            wA.TargetId = 5; wA.TargetX = 10f; wA.TargetY = 10f;
+            FormationCommandExecutor.WriteSkipReason reasonA;
+            Check(!FormationCommandExecutor.ShouldWrite(lastA, wA,
+                FormationCommandExecutor.PositionHysteresisMeters, FormationCommandExecutor.FacingHysteresisRadians, out reasonA),
+                "cps1-exec same command not re-written (identical semantics)");
+            Check(reasonA == FormationCommandExecutor.WriteSkipReason.TargetHysteresis,
+                "cps1-exec duplicate skip reason hysteresis");
+
+            // B) §10.3 目标小幅变化命中迟滞（<5m 不重写）
+            var wB = P(1, CommandDomain.Movement, CommandKind.Move, CommandSource.Cavalry,
+                CommandPriority.Specialist, 2, 0f, 100f);
+            wB.TargetId = 5; wB.TargetX = 12f; wB.TargetY = 10f; // 差 2m < 5m
+            FormationCommandExecutor.WriteSkipReason reasonB;
+            Check(!FormationCommandExecutor.ShouldWrite(lastA, wB,
+                FormationCommandExecutor.PositionHysteresisMeters, FormationCommandExecutor.FacingHysteresisRadians, out reasonB),
+                "cps1-exec small target change hits hysteresis (not written)");
+
+            // C) §10.3 目标显著变化才重写（>5m 重写）
+            var wC = P(1, CommandDomain.Movement, CommandKind.Move, CommandSource.Cavalry,
+                CommandPriority.Specialist, 3, 0f, 100f);
+            wC.TargetId = 5; wC.TargetX = 20f; wC.TargetY = 10f; // 差 10m > 5m
+            FormationCommandExecutor.WriteSkipReason reasonC;
+            Check(FormationCommandExecutor.ShouldWrite(lastA, wC,
+                FormationCommandExecutor.PositionHysteresisMeters, FormationCommandExecutor.FacingHysteresisRadians, out reasonC),
+                "cps1-exec significant target change re-writes");
+
+            // D) Facing 方向迟滞（单位方向向量弦长近似）
+            var lastF = new FormationCommandExecutor.LastDomainWrite
+            { Written = true, Kind = CommandKind.Facing, TargetId = -1, X = 1f, Y = 0f };
+            var wF1 = P(1, CommandDomain.Facing, CommandKind.Facing, CommandSource.FacingCorrection,
+                CommandPriority.Presentation, 4, 0f, 100f);
+            wF1.TargetX = 0.99f; wF1.TargetY = 0.1f; // 端点差 ≈0.10 < 0.2
+            FormationCommandExecutor.WriteSkipReason reasonF;
+            Check(!FormationCommandExecutor.ShouldWrite(lastF, wF1,
+                FormationCommandExecutor.PositionHysteresisMeters, FormationCommandExecutor.FacingHysteresisRadians, out reasonF),
+                "cps1-exec facing small change hysteresis");
+            var wF2 = P(1, CommandDomain.Facing, CommandKind.Facing, CommandSource.FacingCorrection,
+                CommandPriority.Presentation, 5, 0f, 100f);
+            wF2.TargetX = 1f; wF2.TargetY = 1f; // 端点差 ≈1.41 > 0.2
+            Check(FormationCommandExecutor.ShouldWrite(lastF, wF2,
+                FormationCommandExecutor.PositionHysteresisMeters, FormationCommandExecutor.FacingHysteresisRadians, out reasonF),
+                "cps1-exec facing significant change re-writes");
+
+            // E) §10.3 执行前 Formation 失效 fail-open（Valid=false → 不写，sink 未调）
+            var okStatus = new FormationCommandExecutor.FormationStatus
+            { Valid = true, PlayerOwned = false, FieldBattle = true, LeaseOk = true };
+            var badStatus = new FormationCommandExecutor.FormationStatus
+            { Valid = false, PlayerOwned = false, FieldBattle = true, LeaseOk = true };
+            int sinkCalls = 0;
+            var skipLog = new List<FormationCommandExecutor.WriteSkipReason>();
+            var wE = P(2, CommandDomain.Movement, CommandKind.Advance, CommandSource.Cavalry,
+                CommandPriority.Specialist, 6, 0f, 100f);
+            bool wroteE = FormationCommandExecutor.ExecuteWinner(wE, badStatus, default(FormationCommandExecutor.LastDomainWrite),
+                FormationCommandExecutor.PositionHysteresisMeters, FormationCommandExecutor.FacingHysteresisRadians,
+                p => { sinkCalls++; }, skipLog);
+            Check(!wroteE && sinkCalls == 0, "cps1-exec invalid formation fail-open (no write)");
+            Check(skipLog.Contains(FormationCommandExecutor.WriteSkipReason.FormationInvalid),
+                "cps1-exec invalid formation skip reason");
+
+            // F) §10.3 玩家接管停止执行（PlayerOwned=true → 不写）
+            var playerStatus = new FormationCommandExecutor.FormationStatus
+            { Valid = true, PlayerOwned = true, FieldBattle = true, LeaseOk = true };
+            skipLog.Clear();
+            bool wroteF = FormationCommandExecutor.ExecuteWinner(wE, playerStatus, default(FormationCommandExecutor.LastDomainWrite),
+                FormationCommandExecutor.PositionHysteresisMeters, FormationCommandExecutor.FacingHysteresisRadians,
+                p => { sinkCalls++; }, skipLog);
+            Check(!wroteF && sinkCalls == 0, "cps1-exec player takeover stops execution");
+            Check(skipLog.Contains(FormationCommandExecutor.WriteSkipReason.PlayerOwned),
+                "cps1-exec player owned skip reason");
+
+            // G) §10.3 单拍每域最多一次写入（同域多提案 → 仲裁唯一胜者 → 恰一次写入）
+            var psG = new List<FormationCommandProposal>();
+            psG.Add(P(3, CommandDomain.Movement, CommandKind.Advance, CommandSource.Cavalry, CommandPriority.Specialist, 7, 0f, 100f));
+            psG.Add(P(3, CommandDomain.Movement, CommandKind.Move, CommandSource.Skirmish, CommandPriority.Specialist, 8, 0f, 100f));
+            psG.Add(P(3, CommandDomain.Movement, CommandKind.Hold, CommandSource.Protect, CommandPriority.Defense, 9, 0f, 100f));
+            var rG = Arb(3, 3, psG, ExternalOwnerKind.None, 10f);
+            Check(R(rG, CommandDomain.Movement).HasWinner, "cps1-exec arbiter unique winner before execute");
+            sinkCalls = 0;
+            skipLog.Clear();
+            bool wroteG = FormationCommandExecutor.ExecuteWinner(R(rG, CommandDomain.Movement).Winner, okStatus,
+                default(FormationCommandExecutor.LastDomainWrite),
+                FormationCommandExecutor.PositionHysteresisMeters, FormationCommandExecutor.FacingHysteresisRadians,
+                p => { sinkCalls++; }, skipLog);
+            Check(wroteG && sinkCalls == 1, "cps1-exec at most one write per domain per tick (sink called once)");
+
+            // H) §10.3 执行失败不关 AI（sink 抛异常 → fail-open：不泄漏、scope 清理、执行器无 SetControlledByAI）
+            sinkCalls = 0;
+            skipLog.Clear();
+            var wH = P(4, CommandDomain.Movement, CommandKind.Advance, CommandSource.Cavalry,
+                CommandPriority.Specialist, 10, 0f, 100f);
+            bool threw = false;
+            try
+            {
+                bool wroteH = FormationCommandExecutor.ExecuteWinner(wH, okStatus, default(FormationCommandExecutor.LastDomainWrite),
+                    FormationCommandExecutor.PositionHysteresisMeters, FormationCommandExecutor.FacingHysteresisRadians,
+                    p => { sinkCalls++; throw new System.InvalidOperationException("cps1-exec boom"); }, skipLog);
+                Check(!wroteH, "cps1-exec apply failure returns false (fail-open)");
+            }
+            catch (System.InvalidOperationException) { threw = true; }
+            Check(!threw, "cps1-exec apply failure swallowed (no leak)");
+            Check(skipLog.Contains(FormationCommandExecutor.WriteSkipReason.ApplyFailed), "cps1-exec apply failed skip reason");
+            Check(CommandSourceScope.Current == CommandSource.ExternalUnknown, "cps1-exec scope cleaned after failure (try/finally)");
+
+            // I) §10.3 每次实际调用有真实 provenance（scope=胜者来源 + CommandProvenance.Record 一条）
+            long before = CommandProvenance.Instance.Count;
+            CommandSource scopeSeen = CommandSource.OriginalUnknown;
+            sinkCalls = 0;
+            var wI = P(5, CommandDomain.Facing, CommandKind.Facing, CommandSource.FacingCorrection,
+                CommandPriority.Presentation, 11, 0f, 100f);
+            bool wroteI = FormationCommandExecutor.ExecuteWinner(wI, okStatus, default(FormationCommandExecutor.LastDomainWrite),
+                FormationCommandExecutor.PositionHysteresisMeters, FormationCommandExecutor.FacingHysteresisRadians,
+                p => { scopeSeen = CommandSourceScope.Current; sinkCalls++; }, null);
+            Check(wroteI && sinkCalls == 1, "cps1-exec write applied once");
+            Check(scopeSeen == CommandSource.FacingCorrection, "cps1-exec real provenance scope = winner source");
+            Check(CommandProvenance.Instance.Count == before + 1, "cps1-exec unified provenance recorded once");
+            Check(CommandProvenance.Instance.At((int)(CommandProvenance.Instance.Count - 1)).Source == CommandSource.FacingCorrection,
+                "cps1-exec provenance source recorded");
+
+            // J) 非野战 fail-open（FieldBattle=false → 不写）
+            var siegeStatus = new FormationCommandExecutor.FormationStatus
+            { Valid = true, PlayerOwned = false, FieldBattle = false, LeaseOk = true };
+            skipLog.Clear();
+            bool wroteJ = FormationCommandExecutor.ExecuteWinner(wI, siegeStatus, default(FormationCommandExecutor.LastDomainWrite),
+                FormationCommandExecutor.PositionHysteresisMeters, FormationCommandExecutor.FacingHysteresisRadians,
+                p => { sinkCalls++; }, skipLog);
+            Check(!wroteJ && skipLog.Contains(FormationCommandExecutor.WriteSkipReason.NotFieldBattle),
+                "cps1-exec non-field-battle fail-open");
+
+            // K) 租约复核未过 fail-open（LeaseOk=false → 不写）
+            var leaseBad = new FormationCommandExecutor.FormationStatus
+            { Valid = true, PlayerOwned = false, FieldBattle = true, LeaseOk = false };
+            skipLog.Clear();
+            bool wroteK = FormationCommandExecutor.ExecuteWinner(wI, leaseBad, default(FormationCommandExecutor.LastDomainWrite),
+                FormationCommandExecutor.PositionHysteresisMeters, FormationCommandExecutor.FacingHysteresisRadians,
+                p => { sinkCalls++; }, skipLog);
+            Check(!wroteK && skipLog.Contains(FormationCommandExecutor.WriteSkipReason.LeaseNotOk),
+                "cps1-exec lease check fail-open");
+
+            // L) 首次写入（上拍未写 → 直接写，不受迟滞影响）
+            var lastEmpty = default(FormationCommandExecutor.LastDomainWrite); // Written=false
+            FormationCommandExecutor.WriteSkipReason reasonL;
+            Check(FormationCommandExecutor.ShouldWrite(lastEmpty, wC,
+                FormationCommandExecutor.PositionHysteresisMeters, FormationCommandExecutor.FacingHysteresisRadians, out reasonL),
+                "cps1-exec first write always written (no hysteresis on first)");
         }
 
         // ATC-1 战局阶段机（BattlePhaseFSM 纯逻辑）：五态全边界/最短驻留/同态不重播/Retreat 终态/早期伤亡不误进 Exploit

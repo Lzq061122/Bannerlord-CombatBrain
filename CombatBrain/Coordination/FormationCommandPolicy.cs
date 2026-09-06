@@ -63,7 +63,8 @@ namespace CombatBrain.Coordination
             bool aRetreat = a.Source == CommandSource.Morale && a.Kind == CommandKind.Retreat;
             bool bRetreat = b.Source == CommandSource.Morale && b.Kind == CommandKind.Retreat;
             if (aRetreat != bRetreat) return aRetreat; // Retreat 一方胜出
-            if (aRetreat && bRetreat) return a.ProposalId < b.ProposalId; // 双 Retreat：ProposalId 确定性
+            // cps1-low2：删除双 Retreat 死分支——Beats 仅在 (Source,Kind) 不同时调用本方法，
+            //   双 Retreat（同 Source 同 Kind）不会进入此处，由 Beats 的 Source/Kind/ProposalId 链兜底。
             // 非 Retreat 的 P70 冲突：Brace vs Protect / Protect vs Brace / 同源
             bool aBrace = a.Source == CommandSource.Brace;
             bool bBrace = b.Source == CommandSource.Brace;

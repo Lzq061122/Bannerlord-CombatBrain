@@ -200,11 +200,12 @@ namespace CombatBrain.Coordination
             return a.ProposalId < b.ProposalId; // 最终键：ProposalId（固有属性，与输入顺序无关）
         }
 
-        // 跨域兼容：Movement=Retreat 时表现层（P40）Facing/Arrangement 胜者被阻止（§3.2 跨域约束）
+        // 跨域兼容：Movement=Retreat 时表现层（P40）Facing/Arrangement 胜者被阻止（§3.2 跨域约束）。
+        // cps1-low1：跨域阻断判定收敛到 FormationCommandPolicy.IsCrossDomainAllowed 单一入口（不再内联重复）。
         private static void ApplyCrossDomain(bool retreat, ref FormationArbitrationResult result)
         {
             if (!retreat || !result.HasWinner) return;
-            if (result.Winner.Priority <= CommandPriority.Presentation)
+            if (!FormationCommandPolicy.IsCrossDomainAllowed(CommandKind.Retreat, result.Domain, result.Winner))
             {
                 result.RejectedProposals.Add(new RejectedProposal
                 {

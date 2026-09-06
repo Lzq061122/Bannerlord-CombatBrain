@@ -221,6 +221,12 @@ namespace CombatBrain.Ai
         // T4 性能工具箱：0.5s 窗口缓存（带锁）——缓存编队实射比等编队层统计聚合（WindowCache.cs）
         private readonly WindowCache<float> _firingRatioCache = new WindowCache<float>();
 
+        // CPS-1 唯一命令执行器（§5.3）：每协调拍在全部 producer 之后调用（本拍提案由迁移卡接入，
+        //   当前为空列表 → 近 O(1) 空转；不迁移任何现有 Glue 写入点，cps1-migrate-* 后续卡）。
+        private readonly FormationCommandExecutor _commandExecutor = new FormationCommandExecutor();
+        // 本拍提案收集（迁移卡填充；当前恒空——静态空列表零分配）
+        private readonly List<FormationCommandProposal> _commandProposals = new List<FormationCommandProposal>();
+
         // P1-① 真实地形预缓存：开战一次性采样为只读查表，战中 O(1) 查询（禁实时射线/逐兵采样）。
         // TerrainStub 合成正弦假地形已删除（review-findings-2026-09-01 #7「假数据比没数据更糟」）。
         // null = 尚未构建或构建失败（不可用）→ Height 维降级中性 0.5（宁缺毋假）。
@@ -436,6 +442,12 @@ namespace CombatBrain.Ai
             _bench.BeginSection("block");
             TickBlock(mission, dt);
             _bench.EndSection("block");
+
+            // CPS-1 唯一执行器挂点（§5.3.2 执行器位于本拍所有 proposal producer 之后）：
+            // 先收集（_commandProposals，迁移卡填充）→ 统一 Resolve → 再执行；当前为空列表近 O(1) 空转。
+            _bench.BeginSection("executor");
+            _commandExecutor.Tick(mission, _elapsed, _commandProposals);
+            _bench.EndSection("executor");
 
             _bench.EndFrame(dt, agentCount);
         }
