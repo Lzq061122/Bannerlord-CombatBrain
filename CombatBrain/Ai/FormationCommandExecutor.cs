@@ -306,7 +306,7 @@ namespace CombatBrain.Ai
                     f.SetFacingOrder(FacingOrder.FacingOrderLookAtDirection(new Vec2(winner.TargetX, winner.TargetY)));
                     break;
                 case CommandDomain.Arrangement:
-                    f.SetArrangementOrder(MapArrangementOrder(winner.Kind));
+                    f.SetArrangementOrder(MapArrangementOrder(winner.ReasonCode));
                     break;
             }
         }
@@ -332,10 +332,21 @@ namespace CombatBrain.Ai
             }
         }
 
-        private static ArrangementOrder MapArrangementOrder(CommandKind kind)
+        // Arrangement 域阵型映射（cps1-migrate-specialists）：提案 ReasonCode=ArrangementKind 枚举值
+        // （Line/Skein/Column/ShieldWall；默认 Line——与 t9 防御 Reform 提案 ReasonCode=0 兼容）。
+        private static ArrangementOrder MapArrangementOrder(int reasonCode)
         {
-            // 第一版：Arrangement 域仅 Line（迁移卡按模块扩展具体阵型）
-            return ArrangementOrder.ArrangementOrderLine;
+            switch ((ArrangementKind)reasonCode)
+            {
+                case ArrangementKind.Skein:
+                    return ArrangementOrder.ArrangementOrderSkein;     // 骑兵楔形冲击阵
+                case ArrangementKind.Column:
+                    return ArrangementOrder.ArrangementOrderColumn;    // 骑兵纵队重整
+                case ArrangementKind.ShieldWall:
+                    return ArrangementOrder.ArrangementOrderShieldWall; // FormationTactics 盾墙
+                default:
+                    return ArrangementOrder.ArrangementOrderLine;      // 线列（默认/防御 Reform）
+            }
         }
     }
 }

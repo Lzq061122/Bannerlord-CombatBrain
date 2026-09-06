@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Runtime.CompilerServices;
 using TaleWorlds.Engine;
 using TaleWorlds.Library;
 using TaleWorlds.MountAndBlade;
@@ -73,9 +74,12 @@ namespace CombatBrain.Ai
         /// </summary>
         /// <param name="mission">当前 Mission</param>
         /// <param name="dt">帧时间</param>
+        /// <param name="now">战斗累计时间（提案时间戳）</param>
         /// <param name="playerCenter">玩家焦点中心（剧场上限基准）</param>
         /// <param name="getIntent">各队当前意图（F2 意图引擎输出，机会窗触发源）</param>
-        public void Tick(Mission mission, float dt, Vec2 playerCenter, Func<Team, IntentType> getIntent,
+        /// <param name="proposals">CPS-1 提案收集（本拍专业战术提案提交处；执行器拍末统一 Resolve+落地）。</param>
+        public void Tick(Mission mission, float dt, float now, Vec2 playerCenter, Func<Team, IntentType> getIntent,
+            List<FormationCommandProposal> proposals,
             Func<Team, Formation, bool> isEnemyFormationKnown = null)
         {
             _isEnemyFormationKnown = isEnemyFormationKnown; // X6：本拍过滤委托（GetKnownEnemy/SelectRallyPoint 消费）
@@ -97,7 +101,7 @@ namespace CombatBrain.Ai
                     float dist = VecMath.Dist(med.x, med.y, playerCenter.x, playerCenter.y);
                     if (dist > ReleaseRadius)
                     {
-                        ReleaseOutsideRadius(formation); // 300m 外视为离开战场：完整释放（幂等，P0-⑤ 防命令残留保留）
+                        ReleaseOutsideRadius(formation, now, proposals); // 300m 外视为离开战场：完整释放（幂等，P0-⑤ 防命令残留保留）
                         continue;
                     }
                     if (dist > CavalryDriveRadius)
@@ -108,14 +112,14 @@ namespace CombatBrain.Ai
                         continue;
                     }
 
-                    TickFormation(formation, intent, dt);
+                    TickFormation(formation, intent, dt, now, proposals);
                 }
             }
         }
 
-        // 300m 外兜底释放（t48 收窄职责：150m 外仅暂停，不再删状态）：丢弃 FSM 状态 + 下发 Advance
+        // 300m 外兜底释放（t48 收窄职责：150m 外仅暂停，不再删状态）：丢弃 FSM 状态 + 提交 Advance 提案
         // 交回原版，防命令永久残留（P0-⑤ 语义保留）。幂等：无状态直接返回，重复调用无害。
-        private void ReleaseOutsideRadius(Formation formation)
+        private void ReleaseOutsideRadius(Formation formation, float now, List<FormationCommandProposal> proposals)
         {
             if (!_states.ContainsKey(formation)) return;
             _states.Remove(formation);
@@ -123,10 +127,14 @@ namespace CombatBrain.Ai
             _pendingChargeTarget.Remove(formation); // t58 绕行子步骤随释放清理
             _pendingChargePt.Remove(formation);
             _pendingChargeElapsed.Remove(formation);
-            formation.SetMovementOrder(MovementOrder.MovementOrderAdvance); // 交回原版默认推进（MovementOrder.cs L59，v1.4.8 核实）
+            // CPS-1 迁移：直接 SetOrder → P50 Specialist 层提案（Advance 交回原版默认推进）
+            proposals.Add(FormationCommandProposal.SpecialistProposal(formation.Team.TeamIndex, formation.Index,
+                RuntimeHelpers.GetHashCode(formation), now,
+                CommandSource.Cavalry, CommandKind.Advance, CommandDomain.Movement, 0, -1, 0f, 0f));
         }
 
-        private void TickFormation(Formation formation, IntentType teamIntent, float dt)
+        private void TickFormation(Formation formation, IntentType teamIntent, float dt, float now,
+            List<FormationCommandProposal> proposals)
         {
             CavalryState state;
             if (!_states.TryGetValue(formation, out state))
@@ -134,7 +142,7 @@ namespace CombatBrain.Ai
                 state = CavalryState.Scout;
                 _states[formation] = state;
                 _stateElapsed[formation] = 0f;
-                IssueOrder(formation, state, null);
+                IssueOrder(formation, state, null, now, proposals);
                 return; // 首拍只下发初始命令，下一拍开始推进
             }
 
@@ -158,7 +166,7 @@ namespace CombatBrain.Ai
                     _pendingChargeTarget.Remove(formation);
                     _pendingChargeElapsed.Remove(formation);
                     _pendingChargePt.Remove(formation);
-                    IssueChargeOrder(formation, targetAlive ? pendingTarget : null);
+                    IssueChargeOrder(formation, targetAlive ? pendingTarget : null, now, proposals);
                 }
                 return; // 绕行推进中：本拍结束
             }
@@ -196,15 +204,15 @@ namespace CombatBrain.Ai
                 _stateElapsed[formation] = 0f;
                 if (next == CavalryState.Charge)
                 {
-                    BeginCharge(formation, enemy != null ? enemy.Formation : null); // t58：先判定盾墙挡路→绕行或直冲
+                    BeginCharge(formation, enemy != null ? enemy.Formation : null, now, proposals); // t58：先判定盾墙挡路→绕行或直冲
                 }
                 else if (next == CavalryState.Recall)
                 {
-                    BeginRecall(formation); // t83：Recall 回撤目标=重整点（优先级链+距离档位选址）
+                    BeginRecall(formation, now, proposals); // t83：Recall 回撤目标=重整点（优先级链+距离档位选址）
                 }
                 else
                 {
-                    IssueOrder(formation, next, enemy != null ? enemy.Formation : null);
+                    IssueOrder(formation, next, enemy != null ? enemy.Formation : null, now, proposals);
                 }
                 DecisionObservatory.Observe(DecisionObservatory.BCavChange); // T1 决策分支计数：编队 FSM 转移
                 CombatLog.Log(string.Format(
@@ -221,18 +229,18 @@ namespace CombatBrain.Ai
 
         // t58 冲锋发起：先查己方步兵盾墙是否挡在冲锋线上——挡路则先侧移绕行（pending 登记，
         // 到位/超时后正式冲锋）；不挡路则直接楔形+ChargeToTarget。
-        private void BeginCharge(Formation formation, Formation target)
+        private void BeginCharge(Formation formation, Formation target, float now, List<FormationCommandProposal> proposals)
         {
             Vec2 bypass;
             if (target != null && TryGetBypassPoint(formation, target, out bypass))
             {
-                IssueMoveBypass(formation, bypass);
+                IssueMoveBypass(formation, bypass, now, proposals);
                 _pendingChargeTarget[formation] = target;
                 _pendingChargePt[formation] = bypass;
                 _pendingChargeElapsed[formation] = 0f;
                 return;
             }
-            IssueChargeOrder(formation, target);
+            IssueChargeOrder(formation, target, now, proposals);
         }
 
         // 绕行判定：己方步兵编队中心投影落在冲锋线中段（t∈[0.2,0.85]）且垂距 < ShieldwayDist → 挡路。
@@ -274,33 +282,36 @@ namespace CombatBrain.Ai
         }
 
         // 绕行移动（ProtectGlue.IssueMove 同款已核实模式）；无导航点时静默失败 → BypassTimeout 兜底转冲锋
-        private static void IssueMoveBypass(Formation formation, Vec2 target)
+        private static void IssueMoveBypass(Formation formation, Vec2 target, float now,
+            List<FormationCommandProposal> proposals)
         {
             WorldPosition wp = formation.CachedMedianPosition;
             wp.SetVec2(target);
             if (wp.GetNavMesh() == UIntPtr.Zero) return;
-            CommandProvenance.Instance.Record(formation.Index, CommandSource.Cavalry,
-                CommandKind.Move, 0, -1, target.x, target.y); // ATC-0 记录（不改命令）
-            formation.SetMovementOrder(MovementOrder.MovementOrderMove(wp));
+            // CPS-1 迁移：直接 SetOrder → P50 Specialist 层提案（Move 到绕行点）
+            proposals.Add(FormationCommandProposal.SpecialistProposal(formation.Team.TeamIndex, formation.Index,
+                RuntimeHelpers.GetHashCode(formation), now,
+                CommandSource.Cavalry, CommandKind.Move, CommandDomain.Movement, 0, -1, target.x, target.y));
         }
 
         // t83 骑兵重整点选址：Recall 回撤目标=重整点（原 FallBack 无目标，会跑到地图边缘）。
         // 输入全可观察（TeamGeometry 编队中心/阵线/敌我距离），禁全图禁个体；无导航点保持原 FallBack 语义。
-        private void BeginRecall(Formation formation)
+        private void BeginRecall(Formation formation, float now, List<FormationCommandProposal> proposals)
         {
             Vec2 rally = SelectRallyPoint(formation);
             WorldPosition wp = formation.CachedMedianPosition;
             wp.SetVec2(rally);
+            int identity = RuntimeHelpers.GetHashCode(formation);
             if (wp.GetNavMesh() == UIntPtr.Zero)
             {
-                CommandProvenance.Instance.Record(formation.Index, CommandSource.Cavalry,
-                    CommandKind.FallBack); // ATC-0 记录（不改命令）
-                formation.SetMovementOrder(MovementOrder.MovementOrderFallBack);
+                // CPS-1 迁移：直接 SetOrder → P50 Specialist 层提案（FallBack 无导航点保持原语义）
+                proposals.Add(FormationCommandProposal.SpecialistProposal(formation.Team.TeamIndex, formation.Index,
+                    identity, now, CommandSource.Cavalry, CommandKind.FallBack, CommandDomain.Movement, 0, -1, 0f, 0f));
                 return;
             }
-            CommandProvenance.Instance.Record(formation.Index, CommandSource.Cavalry,
-                CommandKind.Move, 0, -1, rally.x, rally.y); // ATC-0 记录（不改命令）
-            formation.SetMovementOrder(MovementOrder.MovementOrderMove(wp)); // 回撤到重整点
+            // CPS-1 迁移：直接 SetOrder → P50 Specialist 层提案（Move 到重整点）
+            proposals.Add(FormationCommandProposal.SpecialistProposal(formation.Team.TeamIndex, formation.Index,
+                identity, now, CommandSource.Cavalry, CommandKind.Move, CommandDomain.Movement, 0, -1, rally.x, rally.y));
         }
 
         // 选址：候选=侧翼(50m)/主阵线后方(60m)/安全距离(100m)/目标附近安全区(60m)，
@@ -357,16 +368,18 @@ namespace CombatBrain.Ai
         // 正式冲锋命令（楔形冲击阵型 + 指定目标）。
         // t58：v1.4.8 ArrangementOrder 8 成员核实（ArrangementOrder.cs L32-46）——楔形=Skein（无 Wedge 命名），
         // Charge 换 Skein 冲击阵（Recall/Reform 由 IssueOrder 恢复 FallBack/Column，Setup 恢复 Line）。
-        private static void IssueChargeOrder(Formation formation, Formation target)
+        private static void IssueChargeOrder(Formation formation, Formation target, float now,
+            List<FormationCommandProposal> proposals)
         {
-            CommandProvenance.Instance.Record(formation.Index, CommandSource.Cavalry,
-                CommandKind.Arrangement); // ATC-0 记录（ArrangementOrder 为引用类型不转 int）
-            formation.SetArrangementOrder(ArrangementOrder.ArrangementOrderSkein); // 楔形冲击阵
-            CommandProvenance.Instance.Record(formation.Index, CommandSource.Cavalry,
-                CommandKind.Charge, 0, target != null ? target.Index : -1); // ATC-0 记录（不改命令）
-            formation.SetMovementOrder(target != null
-                ? MovementOrder.MovementOrderChargeToTarget(target)
-                : MovementOrder.MovementOrderCharge);
+            int identity = RuntimeHelpers.GetHashCode(formation);
+            // CPS-1 迁移：直接 SetOrder → P50 Specialist 层提案（Arrangement=Skein 楔形冲击阵）
+            proposals.Add(FormationCommandProposal.SpecialistProposal(formation.Team.TeamIndex, formation.Index,
+                identity, now, CommandSource.Cavalry, CommandKind.Arrangement, CommandDomain.Arrangement,
+                (int)ArrangementKind.Skein, -1, 0f, 0f));
+            // CPS-1 迁移：直接 SetOrder → P50 Specialist 层提案（Charge/ChargeToTarget）
+            proposals.Add(FormationCommandProposal.SpecialistProposal(formation.Team.TeamIndex, formation.Index,
+                identity, now, CommandSource.Cavalry, CommandKind.Charge, CommandDomain.Movement,
+                0, target != null ? target.Index : -1, 0f, 0f));
         }
 
         // F2 意图 → 机会窗映射（t48 拓宽）：进攻性意图均可触发冲锋——
@@ -406,35 +419,38 @@ namespace CombatBrain.Ai
             return VecMath.Dist(a.x, a.y, b.x, b.y);
         }
 
-        // 命令只在状态跃迁时下发一次
-        private static void IssueOrder(Formation formation, CavalryState state, Formation targetFormation)
+        // 命令只在状态跃迁时提交提案一次（CPS-1 迁移：直接 SetOrder → P50 Specialist 层提案）
+        private static void IssueOrder(Formation formation, CavalryState state, Formation targetFormation,
+            float now, List<FormationCommandProposal> proposals)
         {
+            int teamId = formation.Team.TeamIndex;
+            int identity = RuntimeHelpers.GetHashCode(formation);
             switch (state)
             {
                 case CavalryState.Scout:
-                    CommandProvenance.Instance.Record(formation.Index, CommandSource.Cavalry, CommandKind.Hold); // ATC-0 记录
-                    formation.SetMovementOrder(MovementOrder.MovementOrderStop); // 侦察待命
+                    proposals.Add(FormationCommandProposal.SpecialistProposal(teamId, formation.Index,
+                        identity, now, CommandSource.Cavalry, CommandKind.Hold, CommandDomain.Movement, 0, -1, 0f, 0f)); // 侦察待命
                     break;
                 case CavalryState.Setup:
-                    CommandProvenance.Instance.Record(formation.Index, CommandSource.Cavalry, CommandKind.Hold); // ATC-0 记录
-                    formation.SetMovementOrder(MovementOrder.MovementOrderStop);
-                    CommandProvenance.Instance.Record(formation.Index, CommandSource.Cavalry,
-                        CommandKind.Arrangement); // ATC-0 记录（ArrangementOrder 为引用类型不转 int）
-                    formation.SetArrangementOrder(ArrangementOrder.ArrangementOrderLine); // 列阵
+                    proposals.Add(FormationCommandProposal.SpecialistProposal(teamId, formation.Index,
+                        identity, now, CommandSource.Cavalry, CommandKind.Hold, CommandDomain.Movement, 0, -1, 0f, 0f)); // 待命
+                    proposals.Add(FormationCommandProposal.SpecialistProposal(teamId, formation.Index,
+                        identity, now, CommandSource.Cavalry, CommandKind.Arrangement, CommandDomain.Arrangement,
+                        (int)ArrangementKind.Line, -1, 0f, 0f)); // 列阵
                     break;
                 case CavalryState.Charge:
-                    IssueChargeOrder(formation, targetFormation); // t58：楔形冲击阵+冲锋命令（含绕行后的正式冲锋）
+                    IssueChargeOrder(formation, targetFormation, now, proposals); // t58：楔形冲击阵+冲锋命令（含绕行后的正式冲锋）
                     break;
                 case CavalryState.Recall:
-                    CommandProvenance.Instance.Record(formation.Index, CommandSource.Cavalry, CommandKind.FallBack); // ATC-0 记录
-                    formation.SetMovementOrder(MovementOrder.MovementOrderFallBack); // 后撤脱离
+                    proposals.Add(FormationCommandProposal.SpecialistProposal(teamId, formation.Index,
+                        identity, now, CommandSource.Cavalry, CommandKind.FallBack, CommandDomain.Movement, 0, -1, 0f, 0f)); // 后撤脱离
                     break;
                 case CavalryState.Reform:
-                    CommandProvenance.Instance.Record(formation.Index, CommandSource.Cavalry, CommandKind.Hold); // ATC-0 记录
-                    formation.SetMovementOrder(MovementOrder.MovementOrderStop);
-                    CommandProvenance.Instance.Record(formation.Index, CommandSource.Cavalry,
-                        CommandKind.Arrangement); // ATC-0 记录（ArrangementOrder 为引用类型不转 int）
-                    formation.SetArrangementOrder(ArrangementOrder.ArrangementOrderColumn); // 骑兵纵队待命再冲
+                    proposals.Add(FormationCommandProposal.SpecialistProposal(teamId, formation.Index,
+                        identity, now, CommandSource.Cavalry, CommandKind.Hold, CommandDomain.Movement, 0, -1, 0f, 0f)); // 重整待命
+                    proposals.Add(FormationCommandProposal.SpecialistProposal(teamId, formation.Index,
+                        identity, now, CommandSource.Cavalry, CommandKind.Arrangement, CommandDomain.Arrangement,
+                        (int)ArrangementKind.Column, -1, 0f, 0f)); // 骑兵纵队待命再冲
                     break;
             }
         }

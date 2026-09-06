@@ -200,6 +200,9 @@ namespace OfflineTests
             Console.WriteLine("== CPS1 MigrateDefense ==");
             TestCps1MigrateDefense();
 
+            Console.WriteLine("== CPS1 MigrateSpecialists ==");
+            TestCps1MigrateSpecialists();
+
             Console.WriteLine("== ATC1 BattlePhaseFSM ==");
             TestBattlePhaseFSM();
 
@@ -2925,6 +2928,120 @@ namespace OfflineTests
             Check(!R(rIdBad, CommandDomain.Movement).HasWinner
                 && HasRejected(rIdBad, CommandDomain.Movement, RejectionReason.IdentityStale),
                 "cps1-repair identity mismatch -> IdentityStale (executor 路径锁定)");
+        }
+
+        // CPS-1 迁移卡（cps1-migrate-specialists）：Cavalry/Skirmish/FormationTactics/FacingCorrection/
+        // RangedPosition/UnitPreservation 迁移为提案——工厂契约（P50/P40）+ 单来源行为等价 + 优先级显式化
+        // + §10.5 合法 Flank/Intercept 不召回（域独立、表现修正不干扰）
+        private static void TestCps1MigrateSpecialists()
+        {
+            // A) 工厂契约：SpecialistProposal=P50 / PresentationProposal=P40
+            var sp = FormationCommandProposal.SpecialistProposal(1, 2, 777, 10f, CommandSource.Cavalry,
+                CommandKind.Move, CommandDomain.Movement, 0, -1, 30f, 40f);
+            Check(sp.Source == CommandSource.Cavalry && sp.Kind == CommandKind.Move
+                && sp.Domain == CommandDomain.Movement && sp.Priority == CommandPriority.Specialist
+                && sp.FormationIdentity == 777 && sp.TargetX == 30f && sp.TargetY == 40f,
+                "cps1-spec specialist proposal factory (P50/Cavalry/Move/目标/identity)");
+            var pp = FormationCommandProposal.PresentationProposal(1, 2, 777, 10f, CommandSource.FacingCorrection,
+                CommandKind.Facing, CommandDomain.Facing, 0, -1, 0.8f, 0.6f);
+            Check(pp.Priority == CommandPriority.Presentation && pp.Domain == CommandDomain.Facing
+                && pp.TargetX == 0.8f && pp.TargetY == 0.6f,
+                "cps1-spec presentation proposal factory (P40/Facing/方向向量)");
+
+            // B) Cavalry 单来源等价：Move 目标传递 / Charge targetId（Flank/Intercept 语义保持）
+            var psC = new List<FormationCommandProposal>();
+            psC.Add(FormationCommandProposal.SpecialistProposal(1, 3, 3, 10f, CommandSource.Cavalry,
+                CommandKind.Move, CommandDomain.Movement, 0, -1, 55f, 66f));
+            var rC = Arb(1, 3, psC, ExternalOwnerKind.None, 10f);
+            var mC = R(rC, CommandDomain.Movement);
+            Check(mC.HasWinner && mC.Winner.Source == CommandSource.Cavalry && mC.Winner.Kind == CommandKind.Move
+                && mC.Winner.TargetX == 55f && mC.Winner.TargetY == 66f,
+                "cps1-spec cavalry move single-source winner + target (等价)");
+            var psCh = new List<FormationCommandProposal>();
+            psCh.Add(FormationCommandProposal.SpecialistProposal(1, 4, 4, 10f, CommandSource.Cavalry,
+                CommandKind.Charge, CommandDomain.Movement, 0, 9, 0f, 0f)); // targetId=9=ChargeToTarget 目标
+            var rCh = Arb(1, 4, psCh, ExternalOwnerKind.None, 10f);
+            var mCh = R(rCh, CommandDomain.Movement);
+            Check(mCh.HasWinner && mCh.Winner.Kind == CommandKind.Charge && mCh.Winner.TargetId == 9,
+                "cps1-spec cavalry charge single-source winner + targetId");
+            var psSk = new List<FormationCommandProposal>();
+            psSk.Add(FormationCommandProposal.SpecialistProposal(1, 5, 5, 10f, CommandSource.Cavalry,
+                CommandKind.Arrangement, CommandDomain.Arrangement, (int)ArrangementKind.Skein, -1, 0f, 0f));
+            var rSk = Arb(1, 5, psSk, ExternalOwnerKind.None, 10f);
+            Check(R(rSk, CommandDomain.Arrangement).HasWinner
+                && R(rSk, CommandDomain.Arrangement).Winner.ReasonCode == (int)ArrangementKind.Skein,
+                "cps1-spec cavalry arrangement reasonCode=Skein (楔形冲击阵)");
+
+            // C) Skirmish 单来源等价：Move / FlankHold Stop
+            var psS = new List<FormationCommandProposal>();
+            psS.Add(FormationCommandProposal.SpecialistProposal(1, 6, 6, 10f, CommandSource.Skirmish,
+                CommandKind.Move, CommandDomain.Movement, 0, -1, 20f, 20f));
+            var rS = Arb(1, 6, psS, ExternalOwnerKind.None, 10f);
+            Check(R(rS, CommandDomain.Movement).Winner.Source == CommandSource.Skirmish
+                && R(rS, CommandDomain.Movement).Winner.Kind == CommandKind.Move,
+                "cps1-spec skirmish move single-source winner (等价)");
+            var psSH = new List<FormationCommandProposal>();
+            psSH.Add(FormationCommandProposal.SpecialistProposal(1, 6, 6, 10f, CommandSource.Skirmish,
+                CommandKind.Hold, CommandDomain.Movement, 0, -1, 0f, 0f));
+            var rSH = Arb(1, 6, psSH, ExternalOwnerKind.None, 10f);
+            Check(R(rSH, CommandDomain.Movement).Winner.Kind == CommandKind.Hold,
+                "cps1-spec skirmish flankhold stop single-source winner (夹击位)");
+
+            // D) P40 表现修正：FormationTactics Arrangement(ShieldWall) / FacingCorrection Facing(方向向量)
+            var psFT = new List<FormationCommandProposal>();
+            psFT.Add(FormationCommandProposal.PresentationProposal(1, 7, 7, 10f, CommandSource.FormationTactics,
+                CommandKind.Arrangement, CommandDomain.Arrangement, (int)ArrangementKind.ShieldWall, -1, 0f, 0f));
+            var rFT = Arb(1, 7, psFT, ExternalOwnerKind.None, 10f);
+            Check(R(rFT, CommandDomain.Arrangement).HasWinner
+                && R(rFT, CommandDomain.Arrangement).Winner.Priority == CommandPriority.Presentation
+                && R(rFT, CommandDomain.Arrangement).Winner.ReasonCode == (int)ArrangementKind.ShieldWall,
+                "cps1-spec formation tactics arrangement (P40/ShieldWall)");
+            var psFC = new List<FormationCommandProposal>();
+            psFC.Add(FormationCommandProposal.PresentationProposal(1, 8, 8, 10f, CommandSource.FacingCorrection,
+                CommandKind.Facing, CommandDomain.Facing, 0, -1, 0.8f, 0.6f));
+            var rFC = Arb(1, 8, psFC, ExternalOwnerKind.None, 10f);
+            Check(R(rFC, CommandDomain.Facing).HasWinner
+                && R(rFC, CommandDomain.Facing).Winner.Source == CommandSource.FacingCorrection
+                && R(rFC, CommandDomain.Facing).Winner.TargetX == 0.8f,
+                "cps1-spec facing correction (P40/方向向量)");
+
+            // E) RangedPosition Move / UnitPreservation FallBack（P50）
+            var psRP = new List<FormationCommandProposal>();
+            psRP.Add(FormationCommandProposal.SpecialistProposal(1, 9, 9, 10f, CommandSource.RangedPosition,
+                CommandKind.Move, CommandDomain.Movement, 0, -1, 12f, 34f));
+            var rRP = Arb(1, 9, psRP, ExternalOwnerKind.None, 10f);
+            Check(R(rRP, CommandDomain.Movement).Winner.Source == CommandSource.RangedPosition
+                && R(rRP, CommandDomain.Movement).Winner.TargetX == 12f,
+                "cps1-spec ranged position move (P50)");
+            var psUP = new List<FormationCommandProposal>();
+            psUP.Add(FormationCommandProposal.SpecialistProposal(1, 10, 10, 10f, CommandSource.UnitPreservation,
+                CommandKind.FallBack, CommandDomain.Movement, (int)PreservationBand.Withdraw, -1, 0f, 0f));
+            var rUP = Arb(1, 10, psUP, ExternalOwnerKind.None, 10f);
+            Check(R(rUP, CommandDomain.Movement).Winner.Source == CommandSource.UnitPreservation
+                && R(rUP, CommandDomain.Movement).Winner.Kind == CommandKind.FallBack,
+                "cps1-spec unit preservation fallback (P50/撤离档)");
+
+            // F) §10.5 合法 Flank/Intercept 不召回：同拍 Cavalry Charge(P50) + FacingCorrection(P40)
+            //    → 各域独立胜者（侧击/截击不被表现修正干扰；无召回提案覆盖 Charge）
+            var psMix = new List<FormationCommandProposal>();
+            psMix.Add(FormationCommandProposal.SpecialistProposal(1, 11, 11, 10f, CommandSource.Cavalry,
+                CommandKind.Charge, CommandDomain.Movement, 0, 9, 0f, 0f));
+            psMix.Add(FormationCommandProposal.PresentationProposal(1, 11, 11, 10f, CommandSource.FacingCorrection,
+                CommandKind.Facing, CommandDomain.Facing, 0, -1, 0f, 1f));
+            var rMix = Arb(1, 11, psMix, ExternalOwnerKind.None, 10f);
+            Check(R(rMix, CommandDomain.Movement).Winner.Kind == CommandKind.Charge
+                && R(rMix, CommandDomain.Facing).Winner.Source == CommandSource.FacingCorrection,
+                "cps1-spec flank/intercept charge not recalled (域独立、表现修正不干扰)");
+
+            // G) 优先级显式化：同域 Movement P50 专业战术胜 P40 表现修正（不依赖 producer 顺序）
+            var psPrio = new List<FormationCommandProposal>();
+            psPrio.Add(FormationCommandProposal.PresentationProposal(1, 12, 12, 10f, CommandSource.FormationTactics,
+                CommandKind.Move, CommandDomain.Movement, 0, -1, 5f, 5f));
+            psPrio.Add(FormationCommandProposal.SpecialistProposal(1, 12, 12, 10f, CommandSource.Skirmish,
+                CommandKind.Move, CommandDomain.Movement, 0, -1, 50f, 50f));
+            var rPrio = Arb(1, 12, psPrio, ExternalOwnerKind.None, 10f);
+            Check(R(rPrio, CommandDomain.Movement).Winner.Source == CommandSource.Skirmish,
+                "cps1-spec specialist beats presentation (P50 > P40, 不依赖 producer 顺序)");
         }
 
         // ATC-1 战局阶段机（BattlePhaseFSM 纯逻辑）：五态全边界/最短驻留/同态不重播/Retreat 终态/早期伤亡不误进 Exploit

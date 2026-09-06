@@ -2,6 +2,7 @@ namespace CombatBrain.Ai
 {
     using System;
     using System.Collections.Generic;
+    using System.Runtime.CompilerServices;
     using TaleWorlds.Engine;
     using TaleWorlds.Library;
     using TaleWorlds.MountAndBlade;
@@ -52,7 +53,9 @@ namespace CombatBrain.Ai
 
         /// <summary>编队级低频驱动：CombatAiMissionLogic.OnMissionTick 调用，内部按 TickInterval 节流。</summary>
         /// <param name="isEnemyFormationKnown">X6 感知接线：敌编队是否已知（观察者队+敌编队，KnowledgeView 过滤，可 null=不过滤=现状）。</param>
-        public void Tick(Mission mission, float dt, Vec2 playerCenter, Func<int, bool> isTeamProtected,
+        /// <param name="proposals">CPS-1 提案收集（本拍专业战术提案提交处；执行器拍末统一 Resolve+落地）。</param>
+        public void Tick(Mission mission, float dt, float now, Vec2 playerCenter, Func<int, bool> isTeamProtected,
+            List<FormationCommandProposal> proposals,
             Func<Team, Formation, bool> isEnemyFormationKnown = null)
         {
             _sinceTick += dt;
@@ -72,23 +75,23 @@ namespace CombatBrain.Ai
                     Vec2 med = TeamGeometry.GetFormationPosition(formation, TeamPosKind.CachedMedian); // P1-④ 统一入口
                     if (VecMath.Dist(med.x, med.y, playerCenter.x, playerCenter.y) > DriveRadius)
                     {
-                        ReleaseOutsideRadius(formation); // P0-⑤ 剧场外释放（幂等，删状态+Advance 交回原版）
+                        ReleaseOutsideRadius(formation, now, proposals); // P0-⑤ 剧场外释放（幂等，删状态+Advance 交回原版）
                         continue;
                     }
 
-                    TickFormation(mission, team, formation, med, isEnemyFormationKnown);
+                    TickFormation(mission, team, formation, med, isEnemyFormationKnown, now, proposals);
                 }
             }
         }
 
         private void TickFormation(Mission mission, Team team, Formation formation, Vec2 own,
-            Func<Team, Formation, bool> isEnemyFormationKnown)
+            Func<Team, Formation, bool> isEnemyFormationKnown, float now, List<FormationCommandProposal> proposals)
         {
             Formation target = SelectTarget(mission, team, own, isEnemyFormationKnown);
             if (target == null)
             {
                 // 无合适目标：不冲不站桩，向己方方向拉开待机
-                ApplyMode(formation, Mode.Withdraw, WithdrawPoint(team, own, own));
+                ApplyMode(formation, Mode.Withdraw, WithdrawPoint(team, own, own), now, proposals);
                 return;
             }
 
@@ -119,7 +122,7 @@ namespace CombatBrain.Ai
                 dest = RingPoint(own, tPos, OrbitDir(formation));
             }
 
-            ApplyMode(formation, mode, dest);
+            ApplyMode(formation, mode, dest, now, proposals);
         }
 
         // 目标选择：敌队（IsEnemyOf，P1-③ 同源判定）编队——敌射手 +2（优先消耗输出源）、敌骑兵 +1
@@ -155,7 +158,8 @@ namespace CombatBrain.Ai
             return best;
         }
 
-        private void ApplyMode(Formation formation, Mode mode, Vec2 dest)
+        private void ApplyMode(Formation formation, Mode mode, Vec2 dest, float now,
+            List<FormationCommandProposal> proposals)
         {
             Mode prev;
             bool had = _modes.TryGetValue(formation, out prev);
@@ -168,22 +172,26 @@ namespace CombatBrain.Ai
             _lastOrder[formation] = dest;
             if (mode == Mode.FlankHold)
             {
-                CommandProvenance.Instance.Record(formation.Index, CommandSource.Skirmish, CommandKind.Hold); // ATC-0 记录
-                formation.SetMovementOrder(MovementOrder.MovementOrderStop); // 夹击位：停位射击
+                // CPS-1 迁移：直接 SetOrder → P50 Specialist 层提案（夹击位停位射击）
+                proposals.Add(FormationCommandProposal.SpecialistProposal(formation.Team.TeamIndex, formation.Index,
+                    RuntimeHelpers.GetHashCode(formation), now,
+                    CommandSource.Skirmish, CommandKind.Hold, CommandDomain.Movement, 0, -1, 0f, 0f));
             }
             else
-                IssueMove(formation, dest);
+                IssueMove(formation, dest, now, proposals);
         }
 
         // 下发移动（ProtectGlue.IssueMove 同款已核实模式：CachedMedianPosition 复制+SetVec2 重定向+导航校验）
-        private static void IssueMove(Formation formation, Vec2 target)
+        private static void IssueMove(Formation formation, Vec2 target, float now,
+            List<FormationCommandProposal> proposals)
         {
             WorldPosition wp = formation.CachedMedianPosition;
             wp.SetVec2(target);
             if (wp.GetNavMesh() == UIntPtr.Zero) return; // 无导航点不下发
-            CommandProvenance.Instance.Record(formation.Index, CommandSource.Skirmish,
-                CommandKind.Move, 0, -1, target.x, target.y); // ATC-0 记录
-            formation.SetMovementOrder(MovementOrder.MovementOrderMove(wp));
+            // CPS-1 迁移：直接 SetOrder → P50 Specialist 层提案（Move 到游击/后撤点）
+            proposals.Add(FormationCommandProposal.SpecialistProposal(formation.Team.TeamIndex, formation.Index,
+                RuntimeHelpers.GetHashCode(formation), now,
+                CommandSource.Skirmish, CommandKind.Move, CommandDomain.Movement, 0, -1, target.x, target.y));
         }
 
         // 环绕点：敌中心 + (我→敌反向单位向量旋转 radians) * RingRadius
@@ -243,13 +251,15 @@ namespace CombatBrain.Ai
 
         // P0-⑤ 剧场外命令泄漏修复（300m 内由暂停语义不适用本模块，骑射应随战场走）：
         // 出 150m 剧场 → 丢弃游击状态 + Advance 交回原版。幂等：无状态直接返回。
-        private void ReleaseOutsideRadius(Formation formation)
+        private void ReleaseOutsideRadius(Formation formation, float now, List<FormationCommandProposal> proposals)
         {
             if (!_modes.ContainsKey(formation)) return;
             _modes.Remove(formation);
             _lastOrder.Remove(formation);
-            CommandProvenance.Instance.Record(formation.Index, CommandSource.Skirmish, CommandKind.Advance); // ATC-0 记录
-            formation.SetMovementOrder(MovementOrder.MovementOrderAdvance); // 交回原版默认推进（MovementOrder.cs L59）
+            // CPS-1 迁移：直接 SetOrder → P50 Specialist 层提案（Advance 交回原版默认推进）
+            proposals.Add(FormationCommandProposal.SpecialistProposal(formation.Team.TeamIndex, formation.Index,
+                RuntimeHelpers.GetHashCode(formation), now,
+                CommandSource.Skirmish, CommandKind.Advance, CommandDomain.Movement, 0, -1, 0f, 0f));
         }
     }
 }

@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Runtime.CompilerServices;
 using TaleWorlds.Core;
 using TaleWorlds.Engine;
 using TaleWorlds.Library;
@@ -1408,7 +1409,7 @@ namespace CombatBrain.Ai
         {
             Team playerTeam = mission.PlayerTeam;
             Vec2 playerCenter = playerTeam != null ? GetTeamCenter(playerTeam) : Vec2.Zero;
-            _cavalry.Tick(mission, dt, playerCenter, GetTeamIntent, IsEnemyFormationKnown); // X6：敌编队 KnowledgeView 过滤
+            _cavalry.Tick(mission, dt, _elapsed, playerCenter, GetTeamIntent, _commandProposals, IsEnemyFormationKnown); // X6：敌编队 KnowledgeView 过滤
         }
 
         // ---------- T5 骑射游击（编队级） ----------
@@ -1417,7 +1418,7 @@ namespace CombatBrain.Ai
         {
             Team playerTeam = mission.PlayerTeam;
             Vec2 playerCenter = playerTeam != null ? GetTeamCenter(playerTeam) : Vec2.Zero;
-            _skirmish.Tick(mission, dt, playerCenter, i => _protect.IsProtecting(i), IsEnemyFormationKnown); // X6：敌编队 KnowledgeView 过滤
+            _skirmish.Tick(mission, dt, _elapsed, playerCenter, i => _protect.IsProtecting(i), _commandProposals, IsEnemyFormationKnown); // X6：敌编队 KnowledgeView 过滤
         }
 
         // ---------- F11 士气传导 + 分阶段撤退（编队级） ----------
@@ -1694,18 +1695,18 @@ namespace CombatBrain.Ai
                     float integrity = FormationIntegrity.Compute(ig.DeviationOfPositionsExcludeFarAgents, ig.MaxDeviationOfPositionExcludeFarAgents, avgSpeed, ig.AverageMaxUnlimitedSpeedExcludeFarAgents, f.CountOfUnits);
 
                     TacticsArrangement want = FormationTactics.SelectArrangement(st, state.CultureId, integrity);
-                    ArrangementOrder target = want == TacticsArrangement.ShieldWall
-                        ? ArrangementOrder.ArrangementOrderShieldWall
-                        : ArrangementOrder.ArrangementOrderLine;
 
                     // 只切阵型，不动移动命令（避免与 Protect/Brace/Cavalry/Morale 命令互刷）
                     // t89 全面接管：检测原版 Circle 防御环（BehaviorDefensiveRing 下发）→ 强制改写（ShouldOverride 幂等）
                     if (FormationTactics.ShouldOverride(MapArrangementKind(f.ArrangementOrder), want))
                     {
-                        // CPS-0 §4.3.1：FormationTactics 自行 SetArrangementOrder → 真实来源（不再记 OriginalUnknown 含混来源）
-                        CommandProvenance.Instance.Record(f.Index, CommandSource.FormationTactics,
-                            CommandKind.Arrangement, (int)want); // ATC-0 记录（不改命令）
-                        f.SetArrangementOrder(target);
+                        // CPS-1 迁移（cps1-migrate-specialists）：直接 SetArrangementOrder → P40 Presentation 层提案
+                        //（Source=FormationTactics 真实来源 t3；ReasonCode=ArrangementKind 阵型种类；执行器映射落地）
+                        _commandProposals.Add(FormationCommandProposal.PresentationProposal(own.TeamIndex, f.Index,
+                            RuntimeHelpers.GetHashCode(f), _elapsed,
+                            CommandSource.FormationTactics, CommandKind.Arrangement, CommandDomain.Arrangement,
+                            (int)(want == TacticsArrangement.ShieldWall ? ArrangementKind.ShieldWall : ArrangementKind.Line),
+                            -1, 0f, 0f));
                     }
                 }
             }
@@ -1823,17 +1824,18 @@ namespace CombatBrain.Ai
             }
         }
 
-        // T3-01 下发阵地 Move（ProtectGlue.IssueMove 同款已核实模式：界内校验→导航点校验→MoveOrder）。
-        private static void IssueMoveToPosition(Formation f, float tx, float ty, Mission mission)
+        // T3-01 下发阵地 Move（ProtectGlue.IssueMove 同款已核实模式：界内校验→导航点校验→提案）。
+        // CPS-1 迁移：static→实例（访问 _commandProposals），直接 SetMovementOrder → P50 Specialist 层提案。
+        private void IssueMoveToPosition(Formation f, float tx, float ty, Mission mission)
         {
             Vec2 target = new Vec2(tx, ty);
             if (!mission.IsPositionInsideBoundaries(target)) return;
             WorldPosition wp = f.CachedMedianPosition;
             wp.SetVec2(target);
             if (wp.GetNavMesh() == UIntPtr.Zero) return;
-            CommandProvenance.Instance.Record(f.Index, CommandSource.RangedPosition,
-                CommandKind.Move, 0, -1, tx, ty); // ATC-0 记录（不改命令）
-            f.SetMovementOrder(MovementOrder.MovementOrderMove(wp));
+            _commandProposals.Add(FormationCommandProposal.SpecialistProposal(f.Team.TeamIndex, f.Index,
+                RuntimeHelpers.GetHashCode(f), _elapsed,
+                CommandSource.RangedPosition, CommandKind.Move, CommandDomain.Movement, 0, -1, tx, ty));
         }
 
         // T8-01 骑射编队兵力保存（0.5s 编队级）：按当前/初始兵力比例五档分档，撤离档(<20%)下发 FallBack。
@@ -1871,9 +1873,11 @@ namespace CombatBrain.Ai
                         _unitPreservationBand[f] = band; // 分档边沿才动作（防每拍刷命令）
                         if (band == PreservationBand.Withdraw)
                         {
-                            CommandProvenance.Instance.Record(f.Index, CommandSource.UnitPreservation,
-                                CommandKind.FallBack, (int)band); // ATC-0 记录（不改命令）
-                            f.SetMovementOrder(MovementOrder.MovementOrderFallBack); // 撤离档：脱离战场（交原版由后续 feature 决定）
+                            // CPS-1 迁移：直接 SetMovementOrder → P50 Specialist 层提案（撤离档：脱离战场）
+                            _commandProposals.Add(FormationCommandProposal.SpecialistProposal(own.TeamIndex, f.Index,
+                                RuntimeHelpers.GetHashCode(f), _elapsed,
+                                CommandSource.UnitPreservation, CommandKind.FallBack, CommandDomain.Movement,
+                                (int)band, -1, 0f, 0f));
                         }
                         // 中间档（谨慎/减接战/优先保存）行为建议由 UnitPreservation.ActionFor 提供，SkirmishGlue 后续接线消费
                     }
@@ -2052,10 +2056,12 @@ namespace CombatBrain.Ai
                     if (FacingCorrection.DecideFacing(fc.x, fc.y, target.x, target.y,
                         lastDir.x, lastDir.y, _elapsed, lastTime, out dx, out dy, out dist))
                     {
-                        // CPS-0 §4.3.1：FacingCorrection 自行 SetFacingOrder → 真实来源（不再记 OriginalUnknown 含混来源）
-                        CommandProvenance.Instance.Record(f.Index, CommandSource.FacingCorrection,
-                            CommandKind.Facing, 0, -1, target.x, target.y); // ATC-0 记录（不改命令）
-                        f.SetFacingOrder(FacingOrder.FacingOrderLookAtDirection(new Vec2(dx, dy)));
+                        // CPS-1 迁移（cps1-migrate-specialists）：直接 SetFacingOrder → P40 Presentation 层提案
+                        //（Source=FacingCorrection 真实来源 t3；Facing 目标=方向向量）
+                        _commandProposals.Add(FormationCommandProposal.PresentationProposal(own.TeamIndex, f.Index,
+                            RuntimeHelpers.GetHashCode(f), _elapsed,
+                            CommandSource.FacingCorrection, CommandKind.Facing, CommandDomain.Facing,
+                            0, -1, dx, dy));
                         _facingLastDir[f] = new Vec2(dx, dy);
                         _facingLastTime[f] = _elapsed;
                     }

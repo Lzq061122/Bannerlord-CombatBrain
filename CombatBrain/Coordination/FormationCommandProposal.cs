@@ -66,29 +66,62 @@ namespace CombatBrain.Coordination
             return now > ExpiresAt;
         }
 
-        // CPS-1 迁移卡（cps1-migrate-defense / repair-round-2）：防御系统（Morale/Protect/Brace）统一提案工厂（P70 Defense 层）。
-        // 目的：三防御 Glue 的直接 SetOrder 迁移为提交本提案，经 Arbiter P70 矩阵 + Executor 唯一出口落地
+        // CPS-1 迁移卡（cps1-migrate-defense / repair-round-2 / cps1-migrate-specialists）：
+        //   统一提案工厂（Defense P70 / Specialist P50 / Presentation P40）。
+        // 目的：各 Glue 的直接 SetOrder 迁移为提交本提案，经 Arbiter 优先级矩阵 + Executor 唯一出口落地
         //   （§5.2 迁移要求）；单来源时胜者=原调用语义（行为等价），多来源冲突由矩阵显式裁决（不再靠 producer 顺序）。
-        // TTL=1s（DefenseTtlSeconds）：防御 Glue 0.5s 节拍提交，拍末执行器消费，不跨拍残留（列表每拍 Clear）。
-        // repair-round-2（QC finding）：
-        //   ① identity 统一为 Formation 对象引用哈希（RuntimeHelpers.GetHashCode(f)）——与执行器
-        //      ArbiterInput.FormationIdentity（对象引用哈希，防 Index 复用）一致；旧实现 identity=formationId
-        //      与执行器哈希不符 → 全部防御提案被 IdentityStale 拒绝（防御系统失效）。
-        //   ② ProposalId 改全局单调递增（Interlocked.Increment）——跨生成者唯一，恢复 tie-break 顺序无关性
-        //      （旧实现 ProposalId=formationId，同 formation 同域同 Source 同 Kind 提案会撞键）。
-        public const float DefenseTtlSeconds = 1f;
+        // TTL=1s（CommandTtlSeconds）：Glue 0.5s 节拍提交，拍末执行器消费，不跨拍残留（列表每拍 Clear）。
+        // identity=Formation 对象引用哈希（胶水层 RuntimeHelpers.GetHashCode(f) 传入，与执行器 ArbiterInput.FormationIdentity 一致）。
+        // ProposalId=Interlocked 全局单调递增（跨生成者唯一，tie-break 顺序无关性）。
+        // Arrangement 域提案的 ReasonCode=阵型种类（ArrangementKind 枚举值）。
+        public const float CommandTtlSeconds = 1f;
         private static int _nextProposalId;
 
         public static FormationCommandProposal DefenseProposal(int teamId, int formationId, int identity, float now,
             CommandSource source, CommandKind kind, CommandDomain domain, int targetId, float tx, float ty)
         {
+            return Build(teamId, formationId, identity, now, source, kind, domain,
+                CommandPriority.Defense, 0, targetId, tx, ty);
+        }
+
+        /// <summary>P50 专业战术层提案（Cavalry/Skirmish/RangedPosition/UnitPreservation，§3.2）。</summary>
+        public static FormationCommandProposal SpecialistProposal(int teamId, int formationId, int identity, float now,
+            CommandSource source, CommandKind kind, CommandDomain domain, int reasonCode, int targetId, float tx, float ty)
+        {
+            return Build(teamId, formationId, identity, now, source, kind, domain,
+                CommandPriority.Specialist, reasonCode, targetId, tx, ty);
+        }
+
+        /// <summary>P40 表现修正层提案（FormationTactics/FacingCorrection，§3.2）。</summary>
+        public static FormationCommandProposal PresentationProposal(int teamId, int formationId, int identity, float now,
+            CommandSource source, CommandKind kind, CommandDomain domain, int reasonCode, int targetId, float tx, float ty)
+        {
+            return Build(teamId, formationId, identity, now, source, kind, domain,
+                CommandPriority.Presentation, reasonCode, targetId, tx, ty);
+        }
+
+        private static FormationCommandProposal Build(int teamId, int formationId, int identity, float now,
+            CommandSource source, CommandKind kind, CommandDomain domain, int priority, int reasonCode,
+            int targetId, float tx, float ty)
+        {
             int proposalId = System.Threading.Interlocked.Increment(ref _nextProposalId); // 全局单调递增，跨生成者唯一
             FormationCommandProposal p = Create(teamId, formationId, identity, now,
-                domain, kind, source, CommandPriority.Defense, proposalId, now, DefenseTtlSeconds);
+                domain, kind, source, priority, proposalId, now, CommandTtlSeconds);
+            p.ReasonCode = reasonCode;
             p.TargetId = targetId;
             p.TargetX = tx;
             p.TargetY = ty;
             return p;
         }
+    }
+
+    // CPS-1 迁移（cps1-migrate-specialists）：Arrangement 域提案的 ReasonCode 阵型种类约定
+    // （执行器 MapArrangementOrder 按此映射 ArrangementOrder；0=Line 与 t9 防御 Reform 提案兼容）。
+    public enum ArrangementKind
+    {
+        Line = 0,
+        Skein = 1,    // 楔形冲击阵（骑兵冲锋）
+        Column = 2,   // 骑兵纵队（重整待命）
+        ShieldWall = 3 // 盾墙（FormationTactics 全面接管）
     }
 }
