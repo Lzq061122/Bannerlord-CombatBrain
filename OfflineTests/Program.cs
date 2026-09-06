@@ -2874,6 +2874,18 @@ namespace OfflineTests
             Check(R(rMix, CommandDomain.Movement).Winner.Source == CommandSource.Morale
                 && R(rMix, CommandDomain.Movement).Winner.Kind == CommandKind.Retreat,
                 "cps1-mig retreat not overridden by brace/protect (§10.5)");
+            // captain 指引 3：同拍同域三 Glue 冲突（Retreat/Brace/Protect）逆序输入 → 胜者仍 Retreat（不依赖 producer 顺序）
+            var psMixRev = new List<FormationCommandProposal>();
+            psMixRev.Add(FormationCommandProposal.DefenseProposal(1, 5, 5, 10f, CommandSource.Brace,
+                CommandKind.Hold, CommandDomain.Movement, -1, 0f, 0f));
+            psMixRev.Add(FormationCommandProposal.DefenseProposal(1, 5, 5, 10f, CommandSource.Protect,
+                CommandKind.Move, CommandDomain.Movement, -1, 30f, 30f));
+            psMixRev.Add(FormationCommandProposal.DefenseProposal(1, 5, 5, 10f, CommandSource.Morale,
+                CommandKind.Retreat, CommandDomain.Movement, -1, 0f, 0f));
+            var rMixRev = Arb(1, 5, psMixRev, ExternalOwnerKind.None, 10f);
+            Check(R(rMixRev, CommandDomain.Movement).Winner.Source == CommandSource.Morale
+                && R(rMixRev, CommandDomain.Movement).Winner.Kind == CommandKind.Retreat,
+                "cps1-mig three-glue conflict reversed order -> retreat still wins (顺序无关)");
 
             // F) Brace 架枪优先显式化：Brace vs Protect → Brace 胜（与 producer 顺序无关）
             var psBP = new List<FormationCommandProposal>();
