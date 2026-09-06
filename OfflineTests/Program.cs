@@ -197,6 +197,9 @@ namespace OfflineTests
             Console.WriteLine("== CPS1 CommandExecutor ==");
             TestCps1CommandExecutor();
 
+            Console.WriteLine("== CPS1 MigrateDefense ==");
+            TestCps1MigrateDefense();
+
             Console.WriteLine("== ATC1 BattlePhaseFSM ==");
             TestBattlePhaseFSM();
 
@@ -2791,6 +2794,91 @@ namespace OfflineTests
             Check(FormationCommandExecutor.ShouldWrite(lastEmpty, wC,
                 FormationCommandExecutor.PositionHysteresisMeters, FormationCommandExecutor.FacingHysteresisRadians, out reasonL),
                 "cps1-exec first write always written (no hysteresis on first)");
+        }
+
+        // CPS-1 迁移卡（cps1-migrate-defense）：Morale/Protect/Brace 迁移为 P70 Defense 提案模式——
+        // 行为等价（单域单来源时胜者=原调用语义）+ 矩阵显式化（Retreat 胜 Brace/Protect §10.5；
+        // Brace 胜 Protect 不再靠 producer 顺序 §3.2）+ DefenseProposal 工厂契约
+        private static void TestCps1MigrateDefense()
+        {
+            // A) DefenseProposal 工厂契约（P70 Defense 层、域/种类/来源/目标/TTL）
+            var pd = FormationCommandProposal.DefenseProposal(1, 2, 10f, CommandSource.Morale,
+                CommandKind.Retreat, CommandDomain.Movement, -1, 0f, 0f);
+            Check(pd.Source == CommandSource.Morale && pd.Kind == CommandKind.Retreat
+                && pd.Domain == CommandDomain.Movement && pd.Priority == CommandPriority.Defense,
+                "cps1-mig defense proposal factory fields (P70/Morale/Retreat/Movement)");
+            Check(pd.TeamId == 1 && pd.FormationId == 2 && pd.ExpiresAt > pd.CreatedAt
+                && pd.FormationIdentity == 2,
+                "cps1-mig defense proposal ids + ttl + identity");
+
+            var okStatus = new FormationCommandExecutor.FormationStatus
+            { Valid = true, PlayerOwned = false, FieldBattle = true, LeaseOk = true };
+
+            // B) Morale Retreat 单来源行为等价：提案→仲裁→执行（胜者=原调用 Retreat，落地成功）
+            var psR = new List<FormationCommandProposal>();
+            psR.Add(FormationCommandProposal.DefenseProposal(1, 2, 10f, CommandSource.Morale,
+                CommandKind.Retreat, CommandDomain.Movement, -1, 0f, 0f));
+            var rR = Arb(1, 2, psR, ExternalOwnerKind.None, 10f);
+            var mR = R(rR, CommandDomain.Movement);
+            Check(mR.HasWinner && mR.Winner.Source == CommandSource.Morale && mR.Winner.Kind == CommandKind.Retreat,
+                "cps1-mig morale retreat single-source winner = retreat (等价)");
+            int sink = 0;
+            var sk = new List<FormationCommandExecutor.WriteSkipReason>();
+            bool wroteR = FormationCommandExecutor.ExecuteWinner(mR.Winner, okStatus,
+                default(FormationCommandExecutor.LastDomainWrite),
+                FormationCommandExecutor.PositionHysteresisMeters, FormationCommandExecutor.FacingHysteresisRadians,
+                p => { sink++; }, sk);
+            Check(wroteR && sink == 1, "cps1-mig morale retreat executes once");
+
+            // C) Protect Move 单来源行为等价：目标点传递（55,66 → 原 MovementOrderMove(目标) 语义）
+            var psP = new List<FormationCommandProposal>();
+            psP.Add(FormationCommandProposal.DefenseProposal(1, 3, 10f, CommandSource.Protect,
+                CommandKind.Move, CommandDomain.Movement, -1, 55f, 66f));
+            var rP = Arb(1, 3, psP, ExternalOwnerKind.None, 10f);
+            var mP = R(rP, CommandDomain.Movement);
+            Check(mP.HasWinner && mP.Winner.Source == CommandSource.Protect && mP.Winner.Kind == CommandKind.Move
+                && mP.Winner.TargetX == 55f && mP.Winner.TargetY == 66f,
+                "cps1-mig protect move single-source winner + target (等价)");
+
+            // D) Brace Stop 单来源行为等价（原 SetMovementOrder(Stop) → 提案 Kind=Hold）
+            var psB = new List<FormationCommandProposal>();
+            psB.Add(FormationCommandProposal.DefenseProposal(1, 4, 10f, CommandSource.Brace,
+                CommandKind.Hold, CommandDomain.Movement, -1, 0f, 0f));
+            var rB = Arb(1, 4, psB, ExternalOwnerKind.None, 10f);
+            var mB = R(rB, CommandDomain.Movement);
+            Check(mB.HasWinner && mB.Winner.Source == CommandSource.Brace && mB.Winner.Kind == CommandKind.Hold,
+                "cps1-mig brace stop single-source winner = hold (等价)");
+
+            // E) §10.5：Morale Retreat 不被 Protect/Brace 普通动作覆盖（同拍同域 P70 矩阵）
+            var psMix = new List<FormationCommandProposal>();
+            psMix.Add(FormationCommandProposal.DefenseProposal(1, 5, 10f, CommandSource.Morale,
+                CommandKind.Retreat, CommandDomain.Movement, -1, 0f, 0f));
+            psMix.Add(FormationCommandProposal.DefenseProposal(1, 5, 10f, CommandSource.Protect,
+                CommandKind.Move, CommandDomain.Movement, -1, 30f, 30f));
+            psMix.Add(FormationCommandProposal.DefenseProposal(1, 5, 10f, CommandSource.Brace,
+                CommandKind.Hold, CommandDomain.Movement, -1, 0f, 0f));
+            var rMix = Arb(1, 5, psMix, ExternalOwnerKind.None, 10f);
+            Check(R(rMix, CommandDomain.Movement).Winner.Source == CommandSource.Morale
+                && R(rMix, CommandDomain.Movement).Winner.Kind == CommandKind.Retreat,
+                "cps1-mig retreat not overridden by brace/protect (§10.5)");
+
+            // F) Brace 架枪优先显式化：Brace vs Protect → Brace 胜（与 producer 顺序无关）
+            var psBP = new List<FormationCommandProposal>();
+            psBP.Add(FormationCommandProposal.DefenseProposal(1, 6, 10f, CommandSource.Protect,
+                CommandKind.Move, CommandDomain.Movement, -1, 20f, 20f));
+            psBP.Add(FormationCommandProposal.DefenseProposal(1, 6, 10f, CommandSource.Brace,
+                CommandKind.Hold, CommandDomain.Movement, -1, 0f, 0f));
+            var rBP = Arb(1, 6, psBP, ExternalOwnerKind.None, 10f);
+            Check(R(rBP, CommandDomain.Movement).Winner.Source == CommandSource.Brace,
+                "cps1-mig brace beats protect via matrix (order-independent)");
+            var psBP2 = new List<FormationCommandProposal>();
+            psBP2.Add(FormationCommandProposal.DefenseProposal(1, 6, 10f, CommandSource.Brace,
+                CommandKind.Hold, CommandDomain.Movement, -1, 0f, 0f));
+            psBP2.Add(FormationCommandProposal.DefenseProposal(1, 6, 10f, CommandSource.Protect,
+                CommandKind.Move, CommandDomain.Movement, -1, 20f, 20f));
+            var rBP2 = Arb(1, 6, psBP2, ExternalOwnerKind.None, 10f);
+            Check(R(rBP2, CommandDomain.Movement).Winner.Source == CommandSource.Brace,
+                "cps1-mig brace beats protect regardless of producer order");
         }
 
         // ATC-1 战局阶段机（BattlePhaseFSM 纯逻辑）：五态全边界/最短驻留/同态不重播/Retreat 终态/早期伤亡不误进 Exploit

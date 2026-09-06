@@ -77,8 +77,10 @@ namespace CombatBrain.Ai
         /// <param name="playerCenter">玩家焦点中心（剧场上限基准）</param>
         /// <param name="getIntent">各队当前意图（F2：RETREAT=批准、REFORM=撤销请求）</param>
         /// <param name="getMorale">各队士气（F2 意图引擎 0.5s 一刷，混入基线）</param>
+        /// <param name="proposals">CPS-1 提案收集（本拍防御提案提交处；执行器拍末统一 Resolve+落地）。</param>
         public void Tick(Mission mission, float dt, float now, Vec2 playerCenter,
-            Func<Team, IntentType> getIntent, Func<Team, float> getMorale)
+            Func<Team, IntentType> getIntent, Func<Team, float> getMorale,
+            List<FormationCommandProposal> proposals)
         {
             _sinceTick += dt;
             if (_sinceTick < TickInterval) return;
@@ -100,7 +102,7 @@ namespace CombatBrain.Ai
                     Vec2 med = TeamGeometry.GetFormationPosition(f, TeamPosKind.CachedMedian); // P1-④ 统一入口
                     if (VecMath.Dist(med.x, med.y, playerCenter.x, playerCenter.y) > DriveRadius)
                     {
-                        ReleaseOutsideRadius(f); // P0-⑤ 剧场外释放 FSM 状态与命令（幂等）
+                        ReleaseOutsideRadius(f, now, proposals); // P0-⑤ 剧场外释放 FSM 状态与命令（幂等）
                         continue;
                     }
                     EnsureState(f, teamMoral);
@@ -134,12 +136,13 @@ namespace CombatBrain.Ai
                     m.Moral = Clamp01(m.Moral * (1f - TeamMoralBlend) + teamMoral * TeamMoralBlend);
                     _morale[self] = m;
 
-                    TickRetreatFSM(self, m, intent, dt);
+                    TickRetreatFSM(self, m, intent, dt, now, proposals);
                 }
             }
         }
 
-        private void TickRetreatFSM(Formation formation, FormationMorale m, IntentType teamIntent, float dt)
+        private void TickRetreatFSM(Formation formation, FormationMorale m, IntentType teamIntent, float dt,
+            float now, List<FormationCommandProposal> proposals)
         {
             RetreatState state = _states[formation];
             float elapsed = _stateElapsed[formation] + dt;
@@ -174,7 +177,7 @@ namespace CombatBrain.Ai
             {
                 _states[formation] = next;
                 _stateElapsed[formation] = 0f;
-                IssueOrder(formation, next);
+                IssueOrder(formation, next, now, proposals);
 
                 if (next == RetreatState.Hold && state == RetreatState.Reform)
                 {
@@ -214,37 +217,40 @@ namespace CombatBrain.Ai
             }
         }
 
-        // 命令只在状态跃迁时下发一次
-        private static void IssueOrder(Formation formation, RetreatState state)
+        // 命令只在状态跃迁时提交提案一次（CPS-1 迁移：直接 SetOrder → P70 Defense 层提案，
+        // 落地走唯一执行器；Retreat 经 P70 矩阵路径——Retreat 胜 Brace/Protect，不再依赖调用顺序）
+        private void IssueOrder(Formation formation, RetreatState state, float now,
+            List<FormationCommandProposal> proposals)
         {
+            int teamId = formation.Team.TeamIndex;
             switch (state)
             {
                 case RetreatState.Disengage:
-                    CommandProvenance.Instance.Record(formation.Index, CommandSource.Morale, CommandKind.Retreat); // ATC-0 记录
-                    formation.SetMovementOrder(MovementOrder.MovementOrderRetreat); // 分阶段脱离
+                    proposals.Add(FormationCommandProposal.DefenseProposal(teamId, formation.Index, now,
+                        CommandSource.Morale, CommandKind.Retreat, CommandDomain.Movement, -1, 0f, 0f)); // 分阶段脱离
                     break;
                 case RetreatState.Reform:
-                    CommandProvenance.Instance.Record(formation.Index, CommandSource.Morale, CommandKind.Hold); // ATC-0 记录
-                    formation.SetMovementOrder(MovementOrder.MovementOrderStop);
-                    CommandProvenance.Instance.Record(formation.Index, CommandSource.Morale,
-                        CommandKind.Arrangement); // ATC-0 记录（ArrangementOrder 为引用类型不转 int）
-                    formation.SetArrangementOrder(ArrangementOrder.ArrangementOrderLine); // 重整列阵
+                    proposals.Add(FormationCommandProposal.DefenseProposal(teamId, formation.Index, now,
+                        CommandSource.Morale, CommandKind.Hold, CommandDomain.Movement, -1, 0f, 0f)); // 重整站定
+                    proposals.Add(FormationCommandProposal.DefenseProposal(teamId, formation.Index, now,
+                        CommandSource.Morale, CommandKind.Arrangement, CommandDomain.Arrangement, -1, 0f, 0f)); // 重整列阵
                     break;
                 // Hold / RequestRetreat：不下令（保持原状，等待批准）
             }
         }
 
         // P0-⑤ 剧场外命令泄漏修复：编队出 70m 后士气/撤退 FSM 停驱，已下发的 Retreat/Stop 与 FSM
-        // 状态会永久残留。出半径 → 丢弃 FSM 状态 + 下发 Advance 交回原版；回场后 EnsureState 重建。
+        // 状态会永久残留。出半径 → 丢弃 FSM 状态 + 提交 Advance 提案交回原版；回场后 EnsureState 重建。
         // 幂等：无状态直接返回，重复调用无害。_breakWindows 为事件驱动输入（RecordCasualty 写入），保留。
-        private void ReleaseOutsideRadius(Formation formation)
+        private void ReleaseOutsideRadius(Formation formation, float now, List<FormationCommandProposal> proposals)
         {
             if (!_states.ContainsKey(formation)) return;
             _states.Remove(formation);
             _stateElapsed.Remove(formation);
             _morale.Remove(formation);
-            CommandProvenance.Instance.Record(formation.Index, CommandSource.Morale, CommandKind.Advance); // ATC-0 记录
-            formation.SetMovementOrder(MovementOrder.MovementOrderAdvance); // 交回原版默认推进（MovementOrder.cs L59，v1.4.8 核实）
+            // CPS-1 迁移：直接 SetOrder → P70 Defense 层提案（Advance 交回原版默认推进）
+            proposals.Add(FormationCommandProposal.DefenseProposal(formation.Team.TeamIndex, formation.Index, now,
+                CommandSource.Morale, CommandKind.Advance, CommandDomain.Movement, -1, 0f, 0f));
         }
 
         private void EnsureState(Formation formation, float teamMoral)

@@ -309,6 +309,9 @@ namespace CombatBrain.Ai
             _elapsed += dt;
             int agentCount = mission.Agents.Count;
 
+            // CPS-1：本拍提案收集重置（producers 本拍提交 → 拍末执行器统一 Resolve+落地）
+            _commandProposals.Clear();
+
             // T1 观测管线：低频周期导出（3s 窗内聚合，随帧累计耗时可忽略；单一 CombatLog 渠道）
             if (DecisionObservatory.Instance != null) DecisionObservatory.Instance.ReportIfDue(_elapsed);
 
@@ -1423,7 +1426,7 @@ namespace CombatBrain.Ai
         {
             Team playerTeam = mission.PlayerTeam;
             Vec2 playerCenter = playerTeam != null ? GetTeamCenter(playerTeam) : Vec2.Zero;
-            _morale.Tick(mission, dt, _elapsed, playerCenter, GetTeamIntent, GetMorale);
+            _morale.Tick(mission, dt, _elapsed, playerCenter, GetTeamIntent, GetMorale, _commandProposals);
         }
 
         // ---------- F3 保护核心输出（ProtectArcher 执行层，编队级） ----------
@@ -1432,7 +1435,7 @@ namespace CombatBrain.Ai
         {
             Team playerTeam = mission.PlayerTeam;
             Vec2 playerCenter = playerTeam != null ? GetTeamCenter(playerTeam) : Vec2.Zero;
-            _protect.Tick(mission, dt, _elapsed, playerCenter, GetTeamIntent, IsEnemyFormationKnown); // X6：敌编队 KnowledgeView 过滤
+            _protect.Tick(mission, dt, _elapsed, playerCenter, GetTeamIntent, _commandProposals, IsEnemyFormationKnown); // X6：敌编队 KnowledgeView 过滤
         }
 
         // ---------- F4 架枪反骑阵地（BraceFormation 执行层，编队级） ----------
@@ -1441,7 +1444,7 @@ namespace CombatBrain.Ai
         {
             Team playerTeam = mission.PlayerTeam;
             Vec2 playerCenter = playerTeam != null ? GetTeamCenter(playerTeam) : Vec2.Zero;
-            _brace.Tick(mission, dt, _elapsed, playerCenter, GetTeamIntent, IsEnemyFormationKnown); // X6：敌编队 KnowledgeView 过滤
+            _brace.Tick(mission, dt, _elapsed, playerCenter, GetTeamIntent, _commandProposals, IsEnemyFormationKnown); // X6：敌编队 KnowledgeView 过滤
         }
 
         private IntentType GetTeamIntent(Team team)

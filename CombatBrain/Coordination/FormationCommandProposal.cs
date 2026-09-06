@@ -65,5 +65,23 @@ namespace CombatBrain.Coordination
         {
             return now > ExpiresAt;
         }
+
+        // CPS-1 迁移卡（cps1-migrate-defense）：防御系统（Morale/Protect/Brace）统一提案工厂（P70 Defense 层）。
+        // 目的：三防御 Glue 的直接 SetOrder 迁移为提交本提案，经 Arbiter P70 矩阵 + Executor 唯一出口落地
+        //   （§5.2 迁移要求）；单来源时胜者=原调用语义（行为等价），多来源冲突由矩阵显式裁决（不再靠 producer 顺序）。
+        // TTL=1s（DefenseTtlSeconds）：防御 Glue 0.5s 节拍提交，拍末执行器消费，不跨拍残留（列表每拍 Clear）。
+        // ProposalId=formationId：防御 Glue 每 formation 每域每拍至多一提案，tie-break 最终键无碰撞。
+        public const float DefenseTtlSeconds = 1f;
+
+        public static FormationCommandProposal DefenseProposal(int teamId, int formationId, float now,
+            CommandSource source, CommandKind kind, CommandDomain domain, int targetId, float tx, float ty)
+        {
+            FormationCommandProposal p = Create(teamId, formationId, formationId, now,
+                domain, kind, source, CommandPriority.Defense, formationId, now, DefenseTtlSeconds);
+            p.TargetId = targetId;
+            p.TargetX = tx;
+            p.TargetY = ty;
+            return p;
+        }
     }
 }

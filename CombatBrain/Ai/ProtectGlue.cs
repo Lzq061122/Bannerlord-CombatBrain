@@ -45,7 +45,9 @@ namespace CombatBrain.Ai
 
         /// <summary>低频驱动：CombatAiMissionLogic.OnMissionTick 调用，内部按 TickInterval 节流。</summary>
         /// <param name="isEnemyFormationKnown">X6 感知接线：敌编队是否已知（观察者队+敌编队，KnowledgeView 过滤，可 null=不过滤=现状）。</param>
+        /// <param name="proposals">CPS-1 提案收集（本拍防御提案提交处；执行器拍末统一 Resolve+落地）。</param>
         public void Tick(Mission mission, float dt, float now, Vec2 playerCenter, Func<Team, IntentType> getIntent,
+            List<FormationCommandProposal> proposals,
             Func<Team, Formation, bool> isEnemyFormationKnown = null)
         {
             _sinceTick += dt;
@@ -70,7 +72,7 @@ namespace CombatBrain.Ai
                 Vec2 tc = TeamCenter(team);
                 if (VecMath.Dist(playerCenter.x, playerCenter.y, tc.x, tc.y) > DriveRadius)
                 {
-                    ReleaseOutsideRadius(team); // P0-⑤ 剧场外撤销已下发 Move 命令（幂等，仅首拍生效）
+                    ReleaseOutsideRadius(team, now, proposals); // P0-⑤ 剧场外撤销已下发 Move 命令（幂等，仅首拍生效）
                     continue;
                 }
                 bool wasOn; // 游戏内反馈：保护激活边沿（上拍未保护→本拍激活一次性输出）
@@ -79,14 +81,14 @@ namespace CombatBrain.Ai
                         Mission.Current != null ? Mission.Current.PlayerTeam : null),
                         "保护", "{S}弓手受胁，全军护射", InGameFeedback.FormationColor, InGameFeedback.NotifyTactical); // N1 叙事统一出口
                 _protecting[team.TeamIndex] = true;
-                Execute(team, mission);
+                Execute(team, mission, now, proposals);
             }
         }
 
         // P0-⑤ 剧场外命令泄漏修复：出半径后 Move 停刷，但已下发的 Move/Stop 若不撤销会残留
-        // （原版 TeamAI 未必覆盖）。仅当上拍仍在保护中时下发一次 Advance 交回原版；_protecting
+        // （原版 TeamAI 未必覆盖）。仅当上拍仍在保护中时提交一次 Advance 提案交回原版；_protecting
         // 随即复位 → 幂等（重复调用无害、不刷命令）。
-        private void ReleaseOutsideRadius(Team team)
+        private void ReleaseOutsideRadius(Team team, float now, List<FormationCommandProposal> proposals)
         {
             bool wasProtecting;
             if (!_protecting.TryGetValue(team.TeamIndex, out wasProtecting) || !wasProtecting) return;
@@ -97,8 +99,9 @@ namespace CombatBrain.Ai
             foreach (Formation f in team.FormationsIncludingEmpty)
             {
                 if (f == null || f.CountOfUnits == 0) continue;
-                CommandProvenance.Instance.Record(f.Index, CommandSource.Protect, CommandKind.Advance); // ATC-0 记录
-                f.SetMovementOrder(MovementOrder.MovementOrderAdvance); // 交回原版默认推进（MovementOrder.cs L59，v1.4.8 核实）
+                // CPS-1 迁移：直接 SetOrder → P70 Defense 层提案（Advance 交回原版默认推进）
+                proposals.Add(FormationCommandProposal.DefenseProposal(team.TeamIndex, f.Index, now,
+                    CommandSource.Protect, CommandKind.Advance, CommandDomain.Movement, -1, 0f, 0f));
             }
         }
 
@@ -109,7 +112,7 @@ namespace CombatBrain.Ai
             return _protecting.TryGetValue(teamIndex, out v) && v;
         }
 
-        private void Execute(Team team, Mission mission)
+        private void Execute(Team team, Mission mission, float now, List<FormationCommandProposal> proposals)
         {
             Vec2 ec;
             if (!TryEnemyCenter(team, mission, out ec)) return; // 无敌人
@@ -139,7 +142,7 @@ namespace CombatBrain.Ai
                 if (!ProtectPlan.IsUnderPressure(enemyToR)) continue;
                 float tx, ty;
                 ProtectPlan.ChooseRetreatTarget(ec.x, ec.y, ic.x, ic.y, clearance, out tx, out ty);
-                IssueMove(r, tx, ty, mission);
+                IssueMove(r, tx, ty, mission, now, proposals);
             }
 
             // ② 步兵殿后档：站到敌→弓连线之间（挡在弓手前面）
@@ -147,7 +150,7 @@ namespace CombatBrain.Ai
             {
                 float tx, ty;
                 ProtectPlan.ChooseScreenTarget(ec.x, ec.y, rc.x, rc.y, out tx, out ty);
-                IssueMove(inf, tx, ty, mission);
+                IssueMove(inf, tx, ty, mission, now, proposals);
             }
 
             // ③ 骑兵回援：敌距弓 ≤40m 才干预（阈值未达交给 F8 波次指挥）
@@ -155,13 +158,16 @@ namespace CombatBrain.Ai
             {
                 float enemyToR = VecMath.Dist(ec.x, ec.y, rc.x, rc.y);
                 if (!ProtectPlan.ShouldReturnCavalry(enemyToR)) continue;
-                IssueMove(cav, rc.x, rc.y, mission);
+                IssueMove(cav, rc.x, rc.y, mission, now, proposals);
             }
         }
 
-        // 下令：3m 防抖 → 界内校验 → CachedMedianPosition 复制 + SetVec2 重定向 → 导航点校验 → MoveOrder
+        // 下令：3m 防抖 → 界内校验 → CachedMedianPosition 复制 + SetVec2 重定向 → 导航点校验 →
+        // 提交 Move 提案（CPS-1 迁移：原直接 SetMovementOrder 改为 P70 Defense 层提案，落地走唯一执行器；
+        // 防抖/界内/导航校验保留在 producer 侧——无效目标不提案）
         // （SetVec2/GetNavMesh 校验顺序同 RBM RBMBehaviorArcherFlank.cs:149-150 / OverrideBehaviorProtectFlank.cs:186）
-        private void IssueMove(Formation f, float tx, float ty, Mission mission)
+        private void IssueMove(Formation f, float tx, float ty, Mission mission, float now,
+            List<FormationCommandProposal> proposals)
         {
             Vec2 cur = TeamGeometry.GetFormationPosition(f, TeamPosKind.CachedMedian); // P1-④ 统一入口
             if (!ProtectPlan.ShouldIssueOrder(VecMath.Dist(cur.x, cur.y, tx, ty))) return; // 防抖
@@ -171,9 +177,9 @@ namespace CombatBrain.Ai
             WorldPosition wp = f.CachedMedianPosition;
             wp.SetVec2(target);
             if (wp.GetNavMesh() == UIntPtr.Zero) return; // 无导航点（RBM 同款）
-            CommandProvenance.Instance.Record(f.Index, CommandSource.Protect,
-                CommandKind.Move, 0, -1, tx, ty); // ATC-0 记录
-            f.SetMovementOrder(MovementOrder.MovementOrderMove(wp));
+            // CPS-1 迁移：直接 SetMovementOrder → P70 Defense 层提案（执行器 MapMovementOrder(Move) 落地同语义命令）
+            proposals.Add(FormationCommandProposal.DefenseProposal(f.Team.TeamIndex, f.Index, now,
+                CommandSource.Protect, CommandKind.Move, CommandDomain.Movement, -1, tx, ty));
         }
 
         // 弓手受压（队级预检）：任意己方远程编队的最近敌编队距其 ≤45m（引擎缓存，只读位置）。

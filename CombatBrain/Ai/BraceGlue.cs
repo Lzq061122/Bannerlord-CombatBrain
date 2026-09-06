@@ -14,10 +14,10 @@ namespace CombatBrain.Ai
     //   亦须过同一距离守卫，t71 敌骑尚远不站定）；剧集内站定（MovementOrderStop），退出（>70m/无敌骑）后交回正常 AI。
     // 动作：
     //   * 步兵编队 → 剧集武装沿统计架枪可用占比（多数兵零扫描：GetCountOfUnitsWithCondition 一次）
-    //     达标 → 每拍站定（Stop）；引擎对静止持枪兵自动架枪（架枪是武器 usage 引擎行为，非 AI 命令）。
-    //   * 无长杆降级：架枪可用占比 <30% → 不站定（交回正常防御 AI）。
-    //   * 架枪优先：本段在 protect 之后运行（OnMissionTick 顺序 protect→brace→block），后写者胜，
-    //     站定命令覆盖同拍保护机动（殿后档/回援），步兵就地架枪而非移动。
+    //     达标 → 提交 Stop 提案（P70 Defense 层）；引擎对静止持枪兵自动架枪（架枪是武器 usage 引擎行为，非 AI 命令）。
+    //   * 无长杆降级：架枪可用占比 <30% → 不提案（交回正常防御 AI）。
+    //   * 架枪优先（CPS-1 迁移显式化，§3.2）：Brace 胜 Protect 由 P70 冲突矩阵裁决（BraceGlue 不再依赖
+    //     OnMissionTick 的 protect→brace 调用顺序表达优先级；本层只提交提案，落地走唯一执行器）。
     // 反作弊闸（t12 行19 / t16 附 L131）：只读 己方编队位置(CachedMedianPosition)、敌编队位置
     //   （编队位置聚合，O(敌编队数)）、己方意图(F2)、己方兵装备架枪可用性(CanPerformBraceCached)；
     //   禁读：敌编队 MovementOrder/行为权重/士气值/血量/意图状态（proposal L166）。
@@ -55,7 +55,9 @@ namespace CombatBrain.Ai
 
         /// <summary>低频驱动：CombatAiMissionLogic.OnMissionTick 调用，内部按 TickInterval 节流。</summary>
         /// <param name="isEnemyFormationKnown">X6 感知接线：敌编队是否已知（观察者队+敌编队，KnowledgeView 过滤，可 null=不过滤=现状）。</param>
+        /// <param name="proposals">CPS-1 提案收集（本拍防御提案提交处；执行器拍末统一 Resolve+落地）。</param>
         public void Tick(Mission mission, float dt, float now, Vec2 playerCenter, Func<Team, IntentType> getIntent,
+            List<FormationCommandProposal> proposals,
             Func<Team, Formation, bool> isEnemyFormationKnown = null)
         {
             _sinceTick += dt;
@@ -69,7 +71,7 @@ namespace CombatBrain.Ai
                 Vec2 tc = TeamCenter(team);
                 if (VecMath.Dist(playerCenter.x, playerCenter.y, tc.x, tc.y) > DriveRadius)
                 {
-                    ReleaseOutsideRadius(team); // P0-⑤ 剧场外释放剧集状态与 Stop 命令（幂等）
+                    ReleaseOutsideRadius(team, now, proposals); // P0-⑤ 剧场外释放剧集状态与 Stop 命令（幂等）
                     continue;
                 }
 
@@ -96,7 +98,7 @@ namespace CombatBrain.Ai
                             // 崩溃）；动态值用拼接，{S} 保留给 Narrator.ComposeText 代填。文案逐字保持。
                             : "{S}步兵架枪迎敌（敌骑距" + d.ToString("F0") + "米）",
                         InGameFeedback.FormationColor, InGameFeedback.NotifyTactical);
-                    Execute(team, mission);
+                    Execute(team, mission, now, proposals);
                 }
                 else
                 {
@@ -110,8 +112,8 @@ namespace CombatBrain.Ai
             }
         }
 
-        // 步兵编队站定：占比达标 → Stop（架枪优先；F7 个体撤退不受编队命令影响）
-        private void Execute(Team team, Mission mission)
+        // 步兵编队站定：占比达标 → 提交 Stop 提案（架枪优先；F7 个体撤退不受编队命令影响）
+        private void Execute(Team team, Mission mission, float now, List<FormationCommandProposal> proposals)
         {
             _infantry.Clear();
             foreach (Formation f in team.FormationsIncludingEmpty)
@@ -133,8 +135,9 @@ namespace CombatBrain.Ai
                     _armed[inf] = armed;
                 }
                 if (!BracePlan.ShouldIssueBraceOrder(true, armed, false)) continue; // 降级：交回正常防御 AI
-                CommandProvenance.Instance.Record(inf.Index, CommandSource.Brace, CommandKind.Hold); // ATC-0 记录
-                inf.SetMovementOrder(MovementOrder.MovementOrderStop); // 站定（引擎对静止持枪兵自动架枪）
+                // CPS-1 迁移：直接 SetOrder → P70 Defense 层提案（统一仲裁+唯一执行器落地）
+                proposals.Add(FormationCommandProposal.DefenseProposal(team.TeamIndex, inf.Index, now,
+                    CommandSource.Brace, CommandKind.Hold, CommandDomain.Movement, -1, 0f, 0f));
             }
         }
 
@@ -149,9 +152,9 @@ namespace CombatBrain.Ai
 
         // P0-⑤ 剧场外命令泄漏修复：剧集激活（Stop 已下发）后玩家走出 70m，Tick 不再驱动本队——
         // 若不清理，_episode/_armed 永不释放、Stop 永久残留（原版 AI 未必覆盖）。出半径 → 复位剧集
-        // + 距离基线 + 只给本剧集站定过的步兵编队（_armed 命中）下发 Advance 恢复命令，交回原版。
+        // + 距离基线 + 只给本剧集站定过的步兵编队（_armed 命中）提交 Advance 提案恢复原版推进。
         // 幂等：未激活直接返回，重复调用无害（不刷命令）。
-        private void ReleaseOutsideRadius(Team team)
+        private void ReleaseOutsideRadius(Team team, float now, List<FormationCommandProposal> proposals)
         {
             if (!IsBracing(team.TeamIndex)) return;
             _episode[team.TeamIndex] = false;
@@ -163,8 +166,9 @@ namespace CombatBrain.Ai
                 if (f == null || f.CountOfUnits == 0) continue;
                 if (_armed.ContainsKey(f))
                 {
-                    CommandProvenance.Instance.Record(f.Index, CommandSource.Brace, CommandKind.Advance); // ATC-0 记录
-                    f.SetMovementOrder(MovementOrder.MovementOrderAdvance); // 交回原版默认推进（MovementOrder.cs L59，v1.4.8 核实）
+                    // CPS-1 迁移：直接 SetOrder → P70 Defense 层提案（Advance 交回原版默认推进）
+                    proposals.Add(FormationCommandProposal.DefenseProposal(team.TeamIndex, f.Index, now,
+                        CommandSource.Brace, CommandKind.Advance, CommandDomain.Movement, -1, 0f, 0f));
                 }
             }
             Release(team); // 清 _armed 评估缓存（幂等）
