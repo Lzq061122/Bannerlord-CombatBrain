@@ -66,18 +66,25 @@ namespace CombatBrain.Coordination
             return now > ExpiresAt;
         }
 
-        // CPS-1 迁移卡（cps1-migrate-defense）：防御系统（Morale/Protect/Brace）统一提案工厂（P70 Defense 层）。
+        // CPS-1 迁移卡（cps1-migrate-defense / repair-round-2）：防御系统（Morale/Protect/Brace）统一提案工厂（P70 Defense 层）。
         // 目的：三防御 Glue 的直接 SetOrder 迁移为提交本提案，经 Arbiter P70 矩阵 + Executor 唯一出口落地
         //   （§5.2 迁移要求）；单来源时胜者=原调用语义（行为等价），多来源冲突由矩阵显式裁决（不再靠 producer 顺序）。
         // TTL=1s（DefenseTtlSeconds）：防御 Glue 0.5s 节拍提交，拍末执行器消费，不跨拍残留（列表每拍 Clear）。
-        // ProposalId=formationId：防御 Glue 每 formation 每域每拍至多一提案，tie-break 最终键无碰撞。
+        // repair-round-2（QC finding）：
+        //   ① identity 统一为 Formation 对象引用哈希（RuntimeHelpers.GetHashCode(f)）——与执行器
+        //      ArbiterInput.FormationIdentity（对象引用哈希，防 Index 复用）一致；旧实现 identity=formationId
+        //      与执行器哈希不符 → 全部防御提案被 IdentityStale 拒绝（防御系统失效）。
+        //   ② ProposalId 改全局单调递增（Interlocked.Increment）——跨生成者唯一，恢复 tie-break 顺序无关性
+        //      （旧实现 ProposalId=formationId，同 formation 同域同 Source 同 Kind 提案会撞键）。
         public const float DefenseTtlSeconds = 1f;
+        private static int _nextProposalId;
 
-        public static FormationCommandProposal DefenseProposal(int teamId, int formationId, float now,
+        public static FormationCommandProposal DefenseProposal(int teamId, int formationId, int identity, float now,
             CommandSource source, CommandKind kind, CommandDomain domain, int targetId, float tx, float ty)
         {
-            FormationCommandProposal p = Create(teamId, formationId, formationId, now,
-                domain, kind, source, CommandPriority.Defense, formationId, now, DefenseTtlSeconds);
+            int proposalId = System.Threading.Interlocked.Increment(ref _nextProposalId); // 全局单调递增，跨生成者唯一
+            FormationCommandProposal p = Create(teamId, formationId, identity, now,
+                domain, kind, source, CommandPriority.Defense, proposalId, now, DefenseTtlSeconds);
             p.TargetId = targetId;
             p.TargetX = tx;
             p.TargetY = ty;

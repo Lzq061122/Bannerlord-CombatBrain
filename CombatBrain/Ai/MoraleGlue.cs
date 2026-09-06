@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Runtime.CompilerServices;
 using TaleWorlds.Library;
 using TaleWorlds.MountAndBlade;
 using CombatBrain.Morale;
@@ -223,16 +224,17 @@ namespace CombatBrain.Ai
             List<FormationCommandProposal> proposals)
         {
             int teamId = formation.Team.TeamIndex;
+            int identity = RuntimeHelpers.GetHashCode(formation); // repair-round-2：与执行器身份信号一致
             switch (state)
             {
                 case RetreatState.Disengage:
-                    proposals.Add(FormationCommandProposal.DefenseProposal(teamId, formation.Index, now,
+                    proposals.Add(FormationCommandProposal.DefenseProposal(teamId, formation.Index, identity, now,
                         CommandSource.Morale, CommandKind.Retreat, CommandDomain.Movement, -1, 0f, 0f)); // 分阶段脱离
                     break;
                 case RetreatState.Reform:
-                    proposals.Add(FormationCommandProposal.DefenseProposal(teamId, formation.Index, now,
+                    proposals.Add(FormationCommandProposal.DefenseProposal(teamId, formation.Index, identity, now,
                         CommandSource.Morale, CommandKind.Hold, CommandDomain.Movement, -1, 0f, 0f)); // 重整站定
-                    proposals.Add(FormationCommandProposal.DefenseProposal(teamId, formation.Index, now,
+                    proposals.Add(FormationCommandProposal.DefenseProposal(teamId, formation.Index, identity, now,
                         CommandSource.Morale, CommandKind.Arrangement, CommandDomain.Arrangement, -1, 0f, 0f)); // 重整列阵
                     break;
                 // Hold / RequestRetreat：不下令（保持原状，等待批准）
@@ -249,7 +251,8 @@ namespace CombatBrain.Ai
             _stateElapsed.Remove(formation);
             _morale.Remove(formation);
             // CPS-1 迁移：直接 SetOrder → P70 Defense 层提案（Advance 交回原版默认推进）
-            proposals.Add(FormationCommandProposal.DefenseProposal(formation.Team.TeamIndex, formation.Index, now,
+            proposals.Add(FormationCommandProposal.DefenseProposal(formation.Team.TeamIndex, formation.Index,
+                RuntimeHelpers.GetHashCode(formation), now,
                 CommandSource.Morale, CommandKind.Advance, CommandDomain.Movement, -1, 0f, 0f));
         }
 

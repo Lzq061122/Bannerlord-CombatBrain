@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Runtime.CompilerServices;
 using TaleWorlds.Core;
 using TaleWorlds.Engine;
 using TaleWorlds.Library;
@@ -100,7 +101,8 @@ namespace CombatBrain.Ai
             {
                 if (f == null || f.CountOfUnits == 0) continue;
                 // CPS-1 迁移：直接 SetOrder → P70 Defense 层提案（Advance 交回原版默认推进）
-                proposals.Add(FormationCommandProposal.DefenseProposal(team.TeamIndex, f.Index, now,
+                proposals.Add(FormationCommandProposal.DefenseProposal(team.TeamIndex, f.Index,
+                    RuntimeHelpers.GetHashCode(f), now,
                     CommandSource.Protect, CommandKind.Advance, CommandDomain.Movement, -1, 0f, 0f));
             }
         }
@@ -178,7 +180,8 @@ namespace CombatBrain.Ai
             wp.SetVec2(target);
             if (wp.GetNavMesh() == UIntPtr.Zero) return; // 无导航点（RBM 同款）
             // CPS-1 迁移：直接 SetMovementOrder → P70 Defense 层提案（执行器 MapMovementOrder(Move) 落地同语义命令）
-            proposals.Add(FormationCommandProposal.DefenseProposal(f.Team.TeamIndex, f.Index, now,
+            proposals.Add(FormationCommandProposal.DefenseProposal(f.Team.TeamIndex, f.Index,
+                RuntimeHelpers.GetHashCode(f), now,
                 CommandSource.Protect, CommandKind.Move, CommandDomain.Movement, -1, tx, ty));
         }
 

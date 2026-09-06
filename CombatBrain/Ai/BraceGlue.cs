@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Runtime.CompilerServices;
 using TaleWorlds.Library;
 using TaleWorlds.MountAndBlade;
 using CombatBrain;
@@ -135,8 +136,10 @@ namespace CombatBrain.Ai
                     _armed[inf] = armed;
                 }
                 if (!BracePlan.ShouldIssueBraceOrder(true, armed, false)) continue; // 降级：交回正常防御 AI
-                // CPS-1 迁移：直接 SetOrder → P70 Defense 层提案（统一仲裁+唯一执行器落地）
-                proposals.Add(FormationCommandProposal.DefenseProposal(team.TeamIndex, inf.Index, now,
+                // CPS-1 迁移：直接 SetOrder → P70 Defense 层提案（统一仲裁+唯一执行器落地）；
+                // repair-round-2：identity=对象引用哈希（与执行器 ArbiterInput.FormationIdentity 一致）
+                proposals.Add(FormationCommandProposal.DefenseProposal(team.TeamIndex, inf.Index,
+                    RuntimeHelpers.GetHashCode(inf), now,
                     CommandSource.Brace, CommandKind.Hold, CommandDomain.Movement, -1, 0f, 0f));
             }
         }
@@ -167,7 +170,8 @@ namespace CombatBrain.Ai
                 if (_armed.ContainsKey(f))
                 {
                     // CPS-1 迁移：直接 SetOrder → P70 Defense 层提案（Advance 交回原版默认推进）
-                    proposals.Add(FormationCommandProposal.DefenseProposal(team.TeamIndex, f.Index, now,
+                    proposals.Add(FormationCommandProposal.DefenseProposal(team.TeamIndex, f.Index,
+                        RuntimeHelpers.GetHashCode(f), now,
                         CommandSource.Brace, CommandKind.Advance, CommandDomain.Movement, -1, 0f, 0f));
                 }
             }

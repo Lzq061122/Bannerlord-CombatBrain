@@ -178,7 +178,7 @@ namespace CombatBrain.Ai
                 }
                 int hash = RuntimeHelpers.GetHashCode(f);
                 int prevHash;
-                if (_identityHashes.TryGetValue(key, out prevHash) && prevHash != hash)
+                if (_identityHashes.TryGetValue(key, out prevHash) && HasIdentityChanged(prevHash, hash))
                 {
                     _lastWrites.Remove(key);   // 不继承旧状态（§8.2）
                     _identityHashes[key] = hash;
@@ -223,6 +223,18 @@ namespace CombatBrain.Ai
         }
 
         // ---- 内部 ----
+
+        /// <summary>
+        /// §8.2 身份一致性判定（纯逻辑，供离线测；executor.Tick 对象引用哈希复核路径）：
+        /// 上拍哈希 → 本拍哈希 变化 = Formation 对象重建/Index 复用 → 不继承旧状态。
+        /// 首见（prevHash 不可用，由调用方 TryGetValue 控制）不视为变化。
+        /// repair-round-2（收 cps1-exec-low1）：本判定与生产者 DefenseProposal identity（同一哈希信号）配合，
+        /// 使 executor.Tick 身份一致性路径可被离线断言锁定。
+        /// </summary>
+        public static bool HasIdentityChanged(int prevHash, int currentHash)
+        {
+            return currentHash != 0 && prevHash != 0 && prevHash != currentHash;
+        }
 
         private static long Key(int teamId, int formationId) { return ((long)teamId << 10) | (uint)formationId; }
 
