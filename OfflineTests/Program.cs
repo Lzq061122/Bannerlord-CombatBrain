@@ -2637,6 +2637,53 @@ namespace OfflineTests
             // 20) 常量契约
             Check(IsolationDetector.SafeDistanceMeters == 80f && IsolationDetector.SupportThreshold == 0.3f
                 && IsolationDetector.RatioThreshold == 1.0f, "atc3 isolation constants");
+
+            // 21) isolation-fix 场景④尾声误报回归（实战样本 10:33:33 dist=4m）：主力怀抱内（≤30m）
+            //     SupportMainEffort 编队即使距离趋势+无支援+劣势三项同成立也不判孤立（编队从未远离）
+            var x1 = IsolationDetector.Evaluate(new IsolationInput
+            {
+                MainBodyDistance = 4f, DistanceIncreasing = true, SupportScore = 0.1f,
+                LocalForceRatio = 0.5f, Phase = BattlePhase.Engage,
+                Separation = SeparationIntent.None
+            });
+            Check(!x1.UnauthorizedIsolation, "isolation-fix dist=4m in main-body arms -> no isolation (实锤样本)");
+            Check(!x1.DistanceFactor, "isolation-fix dist=4m distance factor false (怀抱内趋势不成立)");
+
+            // 22) 边界：26m/30m（≤InnerSafeMeters 含界）→ 不报；31m+趋势 → 距离因子成立
+            var x2 = IsolationDetector.Evaluate(new IsolationInput
+            {
+                MainBodyDistance = 26f, DistanceIncreasing = true, SupportScore = 0.1f,
+                LocalForceRatio = 0.5f, Phase = BattlePhase.Engage,
+                Separation = SeparationIntent.None
+            });
+            Check(!x2.UnauthorizedIsolation, "isolation-fix dist=26m -> no isolation (中危样本修复)");
+            var x3 = IsolationDetector.Evaluate(new IsolationInput
+            {
+                MainBodyDistance = 30f, DistanceIncreasing = true, SupportScore = 0.1f,
+                LocalForceRatio = 0.5f, Phase = BattlePhase.Engage,
+                Separation = SeparationIntent.None
+            });
+            Check(!x3.UnauthorizedIsolation, "isolation-fix dist=30m boundary -> no isolation (InnerSafe 含界)");
+            var x4 = IsolationDetector.Evaluate(new IsolationInput
+            {
+                MainBodyDistance = 31f, DistanceIncreasing = true, SupportScore = 0.1f,
+                LocalForceRatio = 0.5f, Phase = BattlePhase.Engage,
+                Separation = SeparationIntent.None
+            });
+            Check(x4.UnauthorizedIsolation && x4.DistanceFactor,
+                "isolation-fix dist=31m + increasing -> isolation (离开主力带, 其余因子成立)");
+
+            // 23) 常量契约扩展 + 合法侧击不回归（场景④ Intercept 远出 8+ 次 iso=OK）
+            Check(IsolationDetector.InnerSafeMeters == 30f, "isolation-fix InnerSafeMeters 30 const");
+            var x5 = IsolationDetector.Evaluate(new IsolationInput
+            {
+                MainBodyDistance = 89f, DistanceIncreasing = true, SupportScore = 0.1f,
+                LocalForceRatio = 0.8f, Phase = BattlePhase.Engage,
+                Separation = SeparationIntent.Intercept
+            });
+            Check(!x5.UnauthorizedIsolation, "isolation-fix intercept 89m far -> no isolation (合法侧击不回归)");
+            // 真实孤立（80 人案例 180m >80m 安全带）仍命中（i8 已断言，此处显式复验不回归）
+            Check(i8.UnauthorizedIsolation, "isolation-fix 80-men case still isolated (真实孤立不回归)");
         }
 
         // ATC-4 CommitmentEvaluator（纯逻辑）：§3.4 枚举契约 + §10 判定纪律 6 条 + 80 人回归 + 例外（Flank/Intercept/Occupy）+ §4.3 Estimator

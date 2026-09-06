@@ -39,16 +39,29 @@ namespace CombatBrain.Coordination
     public static class IsolationDetector
     {
         public const float SafeDistanceMeters = 80f;  // 安全带：距 MainBody >80m 视为超带
+        public const float InnerSafeMeters = 30f;     // 主力怀抱半径（isolation-fix）：≤30m 内编队贴着主力，
+                                                      //   距离趋势不构成孤立——场景④尾声 dist=4m 实锤误报
+                                                      //   （SupportMainEffort 编队在 MainBody 中心被判 UnauthorizedIsolation，
+                                                      //   全场濒死时 Support/Ratio 三项同成立但编队从未远离）；
+                                                      //   与 ReserveClassifier.ReserveRadiusMeters=30 同口径（靠近主力边界）
         public const float SupportThreshold = 0.3f;   // 支援阈值：SupportScore <0.3 视为无支援
         public const float RatioThreshold = 1.0f;     // 局部兵力比 <1.0 视为不利
 
-        /// <summary>§4.4 判定（六因子全满足才 UnauthorizedIsolation）。</summary>
+        /// <summary>
+        /// §4.4 判定（六因子全满足才 UnauthorizedIsolation）。
+        /// isolation-fix（方向①：趋势因子加最小距离门槛，最小侵入）：
+        ///   DistanceFactor = (距离 ≥30m 且 距离增加) 或 超安全带(>80m)——主力怀抱内（≤30m）编队即使
+        ///   距离微小增加也不构成「远离」，防尾声误报（编队贴着主力但全场濒死致 Support/Ratio 因子误触发）；
+        ///   Support/Local/Separation 因子不动；80 人案例（>80m）仍命中；合法 Intercept/Flank 远出仍由
+        ///   Separation 因子豁免（不回归）。
+        /// </summary>
         public static IsolationDecision Evaluate(IsolationInput input)
         {
             var d = new IsolationDecision();
 
-            // 因子1：距离增加 或 超过安全带
-            d.DistanceFactor = input.DistanceIncreasing || input.MainBodyDistance > SafeDistanceMeters;
+            // 因子1：距离增加（仅安全带外 >30m 生效——≤30m 怀抱内趋势无意义，含界）或 超过安全带(>80m)
+            d.DistanceFactor = (input.MainBodyDistance > InnerSafeMeters && input.DistanceIncreasing)
+                || input.MainBodyDistance > SafeDistanceMeters;
             // 因子2：支援低于阈值
             d.SupportFactor = input.SupportScore < SupportThreshold;
             // 因子3：局部劣势 或 敌先到达
