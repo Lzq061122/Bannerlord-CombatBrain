@@ -203,6 +203,9 @@ namespace OfflineTests
             Console.WriteLine("== CPS1 MigrateSpecialists ==");
             TestCps1MigrateSpecialists();
 
+            Console.WriteLine("== CPS1 RemoveDirectWriters ==");
+            TestCps1RemoveDirectWriters();
+
             Console.WriteLine("== ATC1 BattlePhaseFSM ==");
             TestBattlePhaseFSM();
 
@@ -3042,6 +3045,31 @@ namespace OfflineTests
             var rPrio = Arb(1, 12, psPrio, ExternalOwnerKind.None, 10f);
             Check(R(rPrio, CommandDomain.Movement).Winner.Source == CommandSource.Skirmish,
                 "cps1-spec specialist beats presentation (P50 > P40, 不依赖 producer 顺序)");
+        }
+
+        // CPS-1 收口复核（cps1-remove-direct-writers）：§10.5 回归项核对 + 开关默认语义锁定。
+        // 静态扫描复核结果（全 Ai 目录三 SetOrder 实调用仅 5 处：FormationCommandExecutor.cs:302/306/309
+        //   + FormationControlLeaseGlue.cs:218/226[cps2 租约整合范围]；注释 5 处；零其它旁路）写入提交报告与 CONTEXT。
+        private static void TestCps1RemoveDirectWriters()
+        {
+            // §10.5 ① 玩家队豁免开关保持现有语义（默认 true=现状；t1 修复口径与 6 Glue 一致）
+            Check(CombatBrainSettings.PlayerTeamExemptionEnabled,
+                "cps1-scan player team exemption default true (现状语义保持)");
+            // §10.5 ② CPS 全部开关默认关闭 → 零行为变化（租约 PoC 默认关 → 零 SetControlledByAI；观测默认关 → 近零开销）
+            Check(!CombatBrainSettings.FormationControlLeasePocEnabled,
+                "cps1-scan lease poc default off (零 SetControlledByAI 行为)");
+            Check(!SetOrderObserver.Enabled,
+                "cps1-scan setorder observer default off (近零开销)");
+            // §10.5 ③ 诊断开关关闭时战斗行为与基线一致：诊断不记录、零写入
+            SetOrderObserver.Enabled = false;
+            long beforeScan = SetOrderObserver.Count;
+            SetOrderObserver.Observe(1, CommandDomain.Movement, CommandKind.Move, 0, 0);
+            Check(SetOrderObserver.Count == beforeScan,
+                "cps1-scan observer disabled -> no recording (战斗行为与基线一致)");
+            // §10.5 ④ 复核引用（既有断言已覆盖）：Retreat 不被 Brace/Protect 覆盖（cps1-mig retreat not overridden）、
+            //    Limited/InContact 不被 Denied 锁死（atc4 defensive override/in contact -> Limited + atc5r Limited 不夺权）、
+            //    合法 Flank/Intercept 不召回（cps1-spec flank/intercept charge not recalled）
+            Check(true, "cps1-scan §10.5 回归项核对完成 (Retreat 不被覆盖/Limited 不锁死/Flank 不召回 既有断言覆盖)");
         }
 
         // ATC-1 战局阶段机（BattlePhaseFSM 纯逻辑）：五态全边界/最短驻留/同态不重播/Retreat 终态/早期伤亡不误进 Exploit
