@@ -191,6 +191,9 @@ namespace OfflineTests
             Console.WriteLine("== CPS0 ProvenanceTruth ==");
             TestCps0ProvenanceTruth();
 
+            Console.WriteLine("== CPS1 CommandProposal ==");
+            TestCps1CommandProposal();
+
             Console.WriteLine("== ATC1 BattlePhaseFSM ==");
             TestBattlePhaseFSM();
 
@@ -2385,6 +2388,250 @@ namespace OfflineTests
             // 11) §10.1 环形缓冲绕回不串 Formation（声明式 ring 既有断言复用 + 观测 ring 容量契约）
             Check(SetOrderObserver.Count == 0 && SetOrderObserver.CountFor(CommandDomain.Movement, CommandSource.ExternalUnknown) == 0,
                 "cps0 observer clear empties counts");
+        }
+
+        // CPS-1 命令提案/策略/仲裁（FormationCommandProposal/Policy/Arbiter 纯逻辑）：
+        // §3.2 优先级契约锁定 + §10.2 Proposal 与仲裁 14 项全覆盖 + 稳定 tie-break（不依赖 producer 顺序）
+        // + 玩家/外部所有者无迟滞撤销 + 跨域兼容（Retreat 阻止表现层 Facing/Arrangement）
+        private static void TestCps1CommandProposal()
+        {
+            // A) §3.2 优先级契约集中定义并由测试锁定（禁 magic number 散落）
+            Check(CommandPriority.Player == 100 && CommandPriority.EngineForced == 90 && CommandPriority.Emergency == 80
+                && CommandPriority.Defense == 70 && CommandPriority.Commitment == 60 && CommandPriority.Specialist == 50
+                && CommandPriority.Presentation == 40 && CommandPriority.NativeFallback == 0,
+                "cps1 priority contract P100..P0 locked");
+            Check(FormationCommandPolicy.PriorityFor(CommandSource.PlayerOrManual) == CommandPriority.Player,
+                "cps1 player -> P100");
+            Check(FormationCommandPolicy.PriorityFor(CommandSource.Morale) == CommandPriority.Defense
+                && FormationCommandPolicy.PriorityFor(CommandSource.Protect) == CommandPriority.Defense
+                && FormationCommandPolicy.PriorityFor(CommandSource.Brace) == CommandPriority.Defense,
+                "cps1 defense sources -> P70");
+            Check(FormationCommandPolicy.PriorityFor(CommandSource.Cavalry) == CommandPriority.Specialist
+                && FormationCommandPolicy.PriorityFor(CommandSource.Skirmish) == CommandPriority.Specialist
+                && FormationCommandPolicy.PriorityFor(CommandSource.RangedPosition) == CommandPriority.Specialist,
+                "cps1 specialist sources -> P50");
+            Check(FormationCommandPolicy.PriorityFor(CommandSource.FormationTactics) == CommandPriority.Presentation
+                && FormationCommandPolicy.PriorityFor(CommandSource.FacingCorrection) == CommandPriority.Presentation,
+                "cps1 presentation sources -> P40");
+            Check(FormationCommandPolicy.PriorityFor(CommandSource.ArmyCoordination) == CommandPriority.Commitment,
+                "cps1 commitment source -> P60");
+            Check(FormationCommandPolicy.PriorityFor(CommandSource.OriginalUnknown) == CommandPriority.NativeFallback,
+                "cps1 unknown -> P0 native fallback");
+
+            // B) §10.2 第1项：每域唯一胜者（同域多提案 → 恰 1 个胜者）
+            var ps1 = new List<FormationCommandProposal>();
+            ps1.Add(P(1, CommandDomain.Movement, CommandKind.Advance, CommandSource.Cavalry, CommandPriority.Specialist, 1, 0f, 100f));
+            ps1.Add(P(1, CommandDomain.Movement, CommandKind.Move, CommandSource.RangedPosition, CommandPriority.Specialist, 2, 0f, 100f));
+            ps1.Add(P(1, CommandDomain.Movement, CommandKind.Hold, CommandSource.Protect, CommandPriority.Defense, 3, 0f, 100f));
+            var r1 = Arb(1, 1, ps1, ExternalOwnerKind.None, 10f);
+            int winnerCount1 = 0;
+            foreach (var rr in r1) if (rr.HasWinner) winnerCount1++;
+            Check(winnerCount1 == 1, "cps1 exactly one winner per domain (movement only)");
+            Check(R(r1, CommandDomain.Movement).Winner.Source == CommandSource.Protect,
+                "cps1 defense beats specialist (P70 > P50)");
+
+            // C) §10.2 第2项：三域可分别拥有（同 Formation 三域各一个胜者）
+            var ps2 = new List<FormationCommandProposal>();
+            ps2.Add(P(2, CommandDomain.Movement, CommandKind.Advance, CommandSource.Cavalry, CommandPriority.Specialist, 1, 0f, 100f));
+            ps2.Add(P(2, CommandDomain.Facing, CommandKind.Facing, CommandSource.FacingCorrection, CommandPriority.Presentation, 2, 0f, 100f));
+            ps2.Add(P(2, CommandDomain.Arrangement, CommandKind.Arrangement, CommandSource.FormationTactics, CommandPriority.Presentation, 3, 0f, 100f));
+            var r2 = Arb(2, 2, ps2, ExternalOwnerKind.None, 10f);
+            Check(R(r2, CommandDomain.Movement).HasWinner && R(r2, CommandDomain.Facing).HasWinner
+                && R(r2, CommandDomain.Arrangement).HasWinner,
+                "cps1 three domains independently owned");
+
+            // D) §10.2 第3项：玩家胜过一切（玩家提案 P100 vs 所有 CB）
+            var ps3 = new List<FormationCommandProposal>();
+            ps3.Add(P(3, CommandDomain.Movement, CommandKind.Advance, CommandSource.Cavalry, CommandPriority.Specialist, 1, 0f, 100f));
+            ps3.Add(P(3, CommandDomain.Movement, CommandKind.Move, CommandSource.PlayerOrManual, CommandPriority.Player, 2, 0f, 100f));
+            var r3 = Arb(3, 3, ps3, ExternalOwnerKind.None, 10f);
+            Check(R(r3, CommandDomain.Movement).Winner.Source == CommandSource.PlayerOrManual,
+                "cps1 player beats all CB proposals");
+            Check(R(r3, CommandDomain.Movement).Ownership == OwnershipDecision.PlayerOwns,
+                "cps1 player proposal -> PlayerOwns");
+
+            // E) §10.2 第4项：引擎强制胜过普通 CB（P90 > P50）
+            var ps4 = new List<FormationCommandProposal>();
+            ps4.Add(P(4, CommandDomain.Movement, CommandKind.Advance, CommandSource.Cavalry, CommandPriority.Specialist, 1, 0f, 100f));
+            ps4.Add(P(4, CommandDomain.Movement, CommandKind.Retreat, CommandSource.ArmyCoordination, CommandPriority.EngineForced, 2, 0f, 100f));
+            var r4 = Arb(4, 4, ps4, ExternalOwnerKind.None, 10f);
+            Check(R(r4, CommandDomain.Movement).Winner.Priority == CommandPriority.EngineForced,
+                "cps1 engine forced beats ordinary CB");
+
+            // F) §10.2 第5项：Emergency 胜过 Commitment（P80 > P60）
+            var ps5 = new List<FormationCommandProposal>();
+            ps5.Add(P(5, CommandDomain.Movement, CommandKind.Move, CommandSource.ArmyCoordination, CommandPriority.Commitment, 1, 0f, 100f));
+            ps5.Add(P(5, CommandDomain.Movement, CommandKind.Hold, CommandSource.FormationControlLease, CommandPriority.Emergency, 2, 0f, 100f));
+            var r5 = Arb(5, 5, ps5, ExternalOwnerKind.None, 10f);
+            Check(R(r5, CommandDomain.Movement).Winner.Priority == CommandPriority.Emergency,
+                "cps1 emergency beats commitment");
+
+            // G) §10.2 第6项：Morale Retreat vs Brace 矩阵（同 P70 → Retreat 胜）
+            var ps6 = new List<FormationCommandProposal>();
+            ps6.Add(P(6, CommandDomain.Movement, CommandKind.Hold, CommandSource.Brace, CommandPriority.Defense, 1, 0f, 100f));
+            ps6.Add(P(6, CommandDomain.Movement, CommandKind.Retreat, CommandSource.Morale, CommandPriority.Defense, 2, 0f, 100f));
+            var r6 = Arb(6, 6, ps6, ExternalOwnerKind.None, 10f);
+            Check(R(r6, CommandDomain.Movement).Winner.Source == CommandSource.Morale
+                && R(r6, CommandDomain.Movement).Winner.Kind == CommandKind.Retreat,
+                "cps1 retreat-brace matrix -> retreat wins");
+
+            // H) §10.2 第7项：Protect vs Brace 矩阵（同 P70 → Brace 胜，架枪优先显式化不再靠调用顺序）
+            var ps7 = new List<FormationCommandProposal>();
+            ps7.Add(P(7, CommandDomain.Movement, CommandKind.Move, CommandSource.Protect, CommandPriority.Defense, 1, 0f, 100f));
+            ps7.Add(P(7, CommandDomain.Movement, CommandKind.Hold, CommandSource.Brace, CommandPriority.Defense, 2, 0f, 100f));
+            var r7 = Arb(7, 7, ps7, ExternalOwnerKind.None, 10f);
+            Check(R(r7, CommandDomain.Movement).Winner.Source == CommandSource.Brace,
+                "cps1 protect-brace matrix -> brace wins");
+
+            // I) §10.2 第8项：专业战术胜过表现修正（P50 > P40）
+            var ps8 = new List<FormationCommandProposal>();
+            ps8.Add(P(8, CommandDomain.Movement, CommandKind.Move, CommandSource.Skirmish, CommandPriority.Specialist, 1, 0f, 100f));
+            ps8.Add(P(8, CommandDomain.Movement, CommandKind.Advance, CommandSource.FormationTactics, CommandPriority.Presentation, 2, 0f, 100f));
+            var r8 = Arb(8, 8, ps8, ExternalOwnerKind.None, 10f);
+            Check(R(r8, CommandDomain.Movement).Winner.Source == CommandSource.Skirmish,
+                "cps1 specialist beats presentation");
+
+            // J) §10.2 第9/10项：同级 tie-break 稳定 + producer 输入顺序不改变结果（正序 vs 逆序）
+            var ps9a = new List<FormationCommandProposal>();
+            ps9a.Add(P(9, CommandDomain.Movement, CommandKind.Move, CommandSource.Cavalry, CommandPriority.Specialist, 1, 0f, 100f));
+            ps9a.Add(P(9, CommandDomain.Movement, CommandKind.Move, CommandSource.Cavalry, CommandPriority.Specialist, 2, 0f, 100f));
+            var r9a = Arb(9, 9, ps9a, ExternalOwnerKind.None, 10f);
+            var ps9b = new List<FormationCommandProposal>();
+            ps9b.Add(P(9, CommandDomain.Movement, CommandKind.Move, CommandSource.Cavalry, CommandPriority.Specialist, 2, 0f, 100f));
+            ps9b.Add(P(9, CommandDomain.Movement, CommandKind.Move, CommandSource.Cavalry, CommandPriority.Specialist, 1, 0f, 100f));
+            var r9b = Arb(9, 9, ps9b, ExternalOwnerKind.None, 10f);
+            Check(R(r9a, CommandDomain.Movement).Winner.ProposalId == 1 && R(r9b, CommandDomain.Movement).Winner.ProposalId == 1,
+                "cps1 same-priority tie-break stable order-independent (ProposalId 1 wins)");
+
+            // K) §10.2 第11项：过期提案不参与
+            var ps10 = new List<FormationCommandProposal>();
+            ps10.Add(P(10, CommandDomain.Movement, CommandKind.Advance, CommandSource.Cavalry, CommandPriority.Specialist, 1, 0f, 5f));
+            ps10.Add(P(10, CommandDomain.Movement, CommandKind.Hold, CommandSource.Protect, CommandPriority.Defense, 2, 0f, 100f));
+            var r10 = Arb(10, 10, ps10, ExternalOwnerKind.None, 10f);
+            Check(R(r10, CommandDomain.Movement).HasWinner && R(r10, CommandDomain.Movement).Winner.ProposalId == 2,
+                "cps1 expired proposal excluded");
+            Check(HasRejected(r10, CommandDomain.Movement, RejectionReason.Expired),
+                "cps1 expired rejected with reason");
+
+            // L) §10.2 第12项：FormationIdentity 改变 → 提案失效
+            var ps11 = new List<FormationCommandProposal>();
+            ps11.Add(P(11, CommandDomain.Movement, CommandKind.Advance, CommandSource.Cavalry, CommandPriority.Specialist, 1, 0f, 100f));
+            var r11 = ArbIdentity(11, 11, 999, ps11, ExternalOwnerKind.None, 10f); // 当前 identity=999 != 提案 11
+            Check(!R(r11, CommandDomain.Movement).HasWinner, "cps1 identity change invalidates proposal");
+            Check(HasRejected(r11, CommandDomain.Movement, RejectionReason.IdentityStale),
+                "cps1 identity stale rejected");
+
+            // M) §10.2 第13项：NoSafeFallback 不产生独占申请
+            var ps12 = new List<FormationCommandProposal>();
+            var pEx = P(12, CommandDomain.Movement, CommandKind.Hold, CommandSource.FormationControlLease,
+                CommandPriority.Commitment, 1, 0f, 100f);
+            pEx.RequiresExclusiveControl = true;
+            pEx.HasSafeFallback = false; // NoSafeFallback
+            ps12.Add(pEx);
+            var r12 = Arb(12, 12, ps12, ExternalOwnerKind.None, 10f);
+            Check(!R(r12, CommandDomain.Movement).HasWinner, "cps1 exclusive without safe fallback not granted");
+            Check(HasRejected(r12, CommandDomain.Movement, RejectionReason.ExclusiveWithoutSafeFallback),
+                "cps1 no-safe-fallback rejected");
+
+            // N) §10.2 第14项：Fog 下未知敌不得构造目标
+            var ps13 = new List<FormationCommandProposal>();
+            var pFog = P(13, CommandDomain.Movement, CommandKind.Charge, CommandSource.Cavalry,
+                CommandPriority.Specialist, 1, 0f, 100f);
+            pFog.TargetKnown = false; // 迷雾：目标未知
+            ps13.Add(pFog);
+            var r13 = Arb(13, 13, ps13, ExternalOwnerKind.None, 10f);
+            Check(!R(r13, CommandDomain.Movement).HasWinner, "cps1 fog unknown target not constructed");
+            Check(HasRejected(r13, CommandDomain.Movement, RejectionReason.TargetUnknown),
+                "cps1 fog target rejected");
+
+            // O) §8.1：玩家/外部所有者出现 → 无迟滞立即撤销 CB 所有权（无玩家提案时）
+            var ps14 = new List<FormationCommandProposal>();
+            ps14.Add(P(14, CommandDomain.Movement, CommandKind.Advance, CommandSource.Cavalry, CommandPriority.Specialist, 1, 0f, 100f));
+            var r14 = Arb(14, 14, ps14, ExternalOwnerKind.Player, 10f);
+            var m14 = R(r14, CommandDomain.Movement);
+            Check(!m14.HasWinner, "cps1 player presence revokes CB winner immediately");
+            Check(m14.Ownership == OwnershipDecision.PlayerOwns, "cps1 player presence -> PlayerOwns");
+            Check(HasRejected(r14, CommandDomain.Movement, RejectionReason.PlayerOverrides),
+                "cps1 player overrides rejected");
+
+            // P) §3.2 跨域兼容：Movement=Retreat → 表现层 Facing/Arrangement 被阻止
+            var ps15 = new List<FormationCommandProposal>();
+            ps15.Add(P(15, CommandDomain.Movement, CommandKind.Retreat, CommandSource.Morale, CommandPriority.Defense, 1, 0f, 100f));
+            ps15.Add(P(15, CommandDomain.Facing, CommandKind.Facing, CommandSource.FacingCorrection, CommandPriority.Presentation, 2, 0f, 100f));
+            ps15.Add(P(15, CommandDomain.Arrangement, CommandKind.Arrangement, CommandSource.FormationTactics, CommandPriority.Presentation, 3, 0f, 100f));
+            var r15 = Arb(15, 15, ps15, ExternalOwnerKind.None, 10f);
+            Check(R(r15, CommandDomain.Movement).Winner.Kind == CommandKind.Retreat,
+                "cps1 cross-domain movement retreat wins");
+            Check(!R(r15, CommandDomain.Facing).HasWinner && !R(r15, CommandDomain.Facing).ShouldApplyNow,
+                "cps1 retreat blocks presentation facing");
+            Check(!R(r15, CommandDomain.Arrangement).HasWinner,
+                "cps1 retreat blocks presentation arrangement");
+            Check(HasRejected(r15, CommandDomain.Facing, RejectionReason.CrossDomainBlocked),
+                "cps1 facing cross-domain blocked reason");
+
+            // Q) Movement=Rejoin（Move）→ Facing 表现修正兼容可应用
+            var ps16 = new List<FormationCommandProposal>();
+            ps16.Add(P(16, CommandDomain.Movement, CommandKind.Move, CommandSource.ArmyCoordination, CommandPriority.Commitment, 1, 0f, 100f));
+            ps16.Add(P(16, CommandDomain.Facing, CommandKind.Facing, CommandSource.FacingCorrection, CommandPriority.Presentation, 2, 0f, 100f));
+            var r16 = Arb(16, 16, ps16, ExternalOwnerKind.None, 10f);
+            Check(R(r16, CommandDomain.Movement).Winner.Kind == CommandKind.Move && R(r16, CommandDomain.Facing).HasWinner,
+                "cps1 rejoin facing compatible (applied)");
+        }
+
+        // ---- CPS-1 测试辅助 ----
+        private static FormationCommandProposal P(int formationId, CommandDomain domain, CommandKind kind,
+            CommandSource source, int priority, int proposalId, float now, float ttl)
+        {
+            return FormationCommandProposal.Create(formationId, formationId, formationId, 0f,
+                domain, kind, source, priority, proposalId, now, ttl);
+        }
+
+        private static List<FormationArbitrationResult> Arb(int teamId, int formationId,
+            List<FormationCommandProposal> ps, ExternalOwnerKind owner, float now)
+        {
+            return FormationCommandArbiter.Resolve(new ArbiterInput
+            {
+                TeamId = teamId,
+                FormationId = formationId,
+                FormationIdentity = formationId,
+                Now = now,
+                Owner = owner,
+                Proposals = ps
+            });
+        }
+
+        private static List<FormationArbitrationResult> ArbIdentity(int teamId, int formationId, int identity,
+            List<FormationCommandProposal> ps, ExternalOwnerKind owner, float now)
+        {
+            return FormationCommandArbiter.Resolve(new ArbiterInput
+            {
+                TeamId = teamId,
+                FormationId = formationId,
+                FormationIdentity = identity,
+                Now = now,
+                Owner = owner,
+                Proposals = ps
+            });
+        }
+
+        private static FormationArbitrationResult R(List<FormationArbitrationResult> rs, CommandDomain d)
+        {
+            for (int i = 0; i < rs.Count; i++)
+            {
+                if (rs[i].Domain == d) return rs[i];
+            }
+            return default(FormationArbitrationResult);
+        }
+
+        private static bool HasRejected(List<FormationArbitrationResult> rs, CommandDomain d, RejectionReason reason)
+        {
+            FormationArbitrationResult rr = R(rs, d);
+            if (rr.RejectedProposals == null) return false;
+            for (int i = 0; i < rr.RejectedProposals.Count; i++)
+            {
+                if (rr.RejectedProposals[i].Reason == reason) return true;
+            }
+            return false;
         }
 
         // ATC-1 战局阶段机（BattlePhaseFSM 纯逻辑）：五态全边界/最短驻留/同态不重播/Retreat 终态/早期伤亡不误进 Exploit
