@@ -3296,8 +3296,8 @@ namespace OfflineTests
             Check(!e0.AcquireNow && !e1.AcquireNow && mE.ActiveCount == 0,
                 "atc5r emergency/retreat never acquire (不锁死)");
             // 6) MinimumHold 未到不释放（Granted 拍 1 @t=1.0 < MinHoldUntil=1.5）
-            var inG = new LeaseInput { TeamId = 1, FormationId = 2, GenerationGuard = 1, PocEnabled = true,
-                FieldBattle = true, FormationValid = true, IsAIControlled = true, HasCommitment = true,
+            var inG = new LeaseInput { TeamId = 1, FormationId = 2, Identity = _leaseSentinel, PocEnabled = true,
+                FieldBattle = true, FormationValid = true, IsAIControlled = false, HasCommitment = true, // 租约持有中（CB 已关 AI）
                 Permission = (int)CommitmentPermission.Granted, Reasons = 0, Fallback = SafeFallbackKind.Hold, Now = 1.0f };
             LeaseDecision g0 = m.Update(inG);
             Check(!g0.ReleaseNow && m.ActiveCount == 1, "atc5r minhold blocks release");
@@ -3315,20 +3315,21 @@ namespace OfflineTests
             mT.Update(LeaseIn(1, 4, (int)CommitmentPermission.Denied, 0, SafeFallbackKind.Rejoin, now: 0f));
             mT.Update(LeaseIn(1, 4, (int)CommitmentPermission.Denied, 0, SafeFallbackKind.Rejoin, now: 0.5f));
             Check(mT.ActiveCount == 1, "atc5r ttl lease acquired");
-            var expired = mT.UpdateWatchdog(3.0f); // 3.0-0.5=2.5 > TTL 1.5
+            var wb = new List<KeyValuePair<int, int>>(); // watchdog 复用缓冲（OPT）
+            var expired = mT.UpdateWatchdog(3.0f, wb); // 3.0-0.5=2.5 > TTL 1.5
             Check(expired.Count == 1 && mT.ActiveCount == 0, "atc5r watchdog expires lease (fail-open)");
 
             // 8) Renew 延长 TTL（1.5s 续租后 2.5s 不逾期）
             var mR = new FormationControlLeaseManager();
             mR.Update(LeaseIn(1, 5, (int)CommitmentPermission.Denied, 0, SafeFallbackKind.Rejoin, now: 0f));
             mR.Update(LeaseIn(1, 5, (int)CommitmentPermission.Denied, 0, SafeFallbackKind.Rejoin, now: 0.5f));
-            var renewIn = LeaseIn(1, 5, (int)CommitmentPermission.Denied, 0, SafeFallbackKind.Rejoin, now: 1.5f);
+            var renewIn = LeaseIn(1, 5, (int)CommitmentPermission.Denied, 0, SafeFallbackKind.Rejoin, ai: false, now: 1.5f); // 租约持有中
             LeaseDecision rd = mR.Update(renewIn); // 1.5-0.5=1.0 ≥ RenewMinGap → Renew
             Check(rd.Renew, "atc5r renew extends ttl");
-            Check(mR.UpdateWatchdog(2.6f).Count == 0, "atc5r renewed lease not expired at 2.6 (2.6-1.5=1.1<TTL)");
+            Check(mR.UpdateWatchdog(2.6f, wb).Count == 0, "atc5r renewed lease not expired at 2.6 (2.6-1.5=1.1<TTL)");
 
             // 9) 幂等：同 key 再 Acquire 需重新两拍（Release 后同 key 不残留）
-            Check(mR.UpdateWatchdog(4.0f).Count == 1, "atc5r renewal stops -> ttl expiry after gap");
+            Check(mR.UpdateWatchdog(4.0f, wb).Count == 1, "atc5r renewal stops -> ttl expiry after gap");
 
             // 10) 跨 Team/Formation 隔离
             var mI = new FormationControlLeaseManager();
@@ -3355,14 +3356,15 @@ namespace OfflineTests
             mP.Update(LeaseIn(1, 7, (int)CommitmentPermission.Denied, 0, SafeFallbackKind.Rejoin, player: true, now: 0f));
             mP.Update(LeaseIn(1, 7, (int)CommitmentPermission.Denied, 0, SafeFallbackKind.Rejoin, player: true, now: 0.5f));
             Check(mP.ActiveCount == 0, "atc5r player formation skipped");
-            // 14) identity 变化失效（guard 变化 → FormationRemoved）
+            // 14) identity 变化失效（P4：同一 Index 新对象 → 对象引用不同 → 旧租约不继承）
             var mG = new FormationControlLeaseManager();
             mG.Update(LeaseIn(1, 8, (int)CommitmentPermission.Denied, 0, SafeFallbackKind.Rejoin, now: 0f));
             mG.Update(LeaseIn(1, 8, (int)CommitmentPermission.Denied, 0, SafeFallbackKind.Rejoin, now: 0.5f));
+            Check(mG.ActiveCount == 1, "atc5r identity lease acquired");
             LeaseDecision gd = mG.Update(LeaseIn(1, 8, (int)CommitmentPermission.Denied, 0,
-                SafeFallbackKind.Rejoin, guard: 2, now: 1.0f));
+                SafeFallbackKind.Rejoin, identity: new object(), now: 1.0f));
             Check(gd.ReleaseNow && gd.ReleaseReason == LeaseReleaseReason.FormationRemoved && mG.ActiveCount == 0,
-                "atc5r identity change invalidates lease (Id 复用不继承)");
+                "atc5r identity change invalidates lease (同一 Index 新对象不继承)");
             // 15) FormationId 复用不继承（RemoveFormation 后同 key 重评估需两拍）
             var mF = new FormationControlLeaseManager();
             mF.Update(LeaseIn(1, 9, (int)CommitmentPermission.Denied, 0, SafeFallbackKind.Rejoin, now: 0f));
@@ -3440,6 +3442,67 @@ namespace OfflineTests
                 && (int)LeaseReleaseReason.UnsupportedMission == 8 && (int)LeaseReleaseReason.EmergencyFailOpen == 9,
                 "atc5r release reasons auditable (1..9)");
 
+            // ---- atc5r-fix P1-P4+OPT 返修断言（≥12）----
+
+            // 29) P1：租约期间外部把 IsAIControlled 改回 true（玩家/外部接管）→ 立即 Release + PlayerOrExternalControl
+            var mP1 = new FormationControlLeaseManager();
+            mP1.Update(LeaseIn(1, 30, (int)CommitmentPermission.Denied, 0, SafeFallbackKind.Rejoin, now: 0f));
+            mP1.Update(LeaseIn(1, 30, (int)CommitmentPermission.Denied, 0, SafeFallbackKind.Rejoin, now: 0.5f));
+            LeaseDecision p1 = mP1.Update(LeaseIn(1, 30, (int)CommitmentPermission.Granted, 0,
+                SafeFallbackKind.Hold, ai: true, now: 1.0f)); // 租约期间外部已恢复 AI 控制
+            Check(p1.ReleaseNow && p1.ReleaseReason == LeaseReleaseReason.PlayerOrExternalControl && mP1.ActiveCount == 0,
+                "atc5r-fix P1 external restore -> release, no SetControlledByAI(true)");
+
+            // 30) P1：租约期间玩家成为 owner（IsPlayerFormation=true）→ 立即 Release + PlayerOrExternalControl
+            var mP1b = new FormationControlLeaseManager();
+            mP1b.Update(LeaseIn(1, 31, (int)CommitmentPermission.Denied, 0, SafeFallbackKind.Rejoin, now: 0f));
+            mP1b.Update(LeaseIn(1, 31, (int)CommitmentPermission.Denied, 0, SafeFallbackKind.Rejoin, now: 0.5f));
+            LeaseDecision p1b = mP1b.Update(LeaseIn(1, 31, (int)CommitmentPermission.Denied, 0,
+                SafeFallbackKind.Rejoin, player: true, now: 1.0f));
+            Check(p1b.ReleaseNow && p1b.ReleaseReason == LeaseReleaseReason.PlayerOrExternalControl,
+                "atc5r-fix P1 player owner during lease -> release without restore");
+
+            // 31) P3：HasActiveForTeam 单编队域（该队有租约 true）
+            var mP3 = new FormationControlLeaseManager();
+            mP3.Update(LeaseIn(1, 32, (int)CommitmentPermission.Denied, 0, SafeFallbackKind.Rejoin, now: 0f));
+            mP3.Update(LeaseIn(1, 32, (int)CommitmentPermission.Denied, 0, SafeFallbackKind.Rejoin, now: 0.5f));
+            Check(mP3.HasActiveForTeam(1), "atc5r-fix P3 team1 has active lease");
+            Check(!mP3.HasActiveForTeam(2), "atc5r-fix P3 team2 no lease (单编队域)");
+            mP3.Update(LeaseIn(2, 33, (int)CommitmentPermission.Denied, 0, SafeFallbackKind.Rejoin, now: 1.0f));
+            mP3.Update(LeaseIn(2, 33, (int)CommitmentPermission.Denied, 0, SafeFallbackKind.Rejoin, now: 1.5f));
+            Check(mP3.HasActiveForTeam(1) && mP3.HasActiveForTeam(2), "atc5r-fix P3 two teams isolated leases");
+
+            // 32) P4：同 Identity（同一对象）续租保持租约（对象未重建不误失效）
+            var mP4 = new FormationControlLeaseManager();
+            mP4.Update(LeaseIn(1, 34, (int)CommitmentPermission.Denied, 0, SafeFallbackKind.Rejoin, now: 0f));
+            mP4.Update(LeaseIn(1, 34, (int)CommitmentPermission.Denied, 0, SafeFallbackKind.Rejoin, now: 0.5f));
+            LeaseDecision p4 = mP4.Update(LeaseIn(1, 34, (int)CommitmentPermission.Denied, 0,
+                SafeFallbackKind.Rejoin, ai: false, now: 1.0f)); // 租约持有中（同哨兵对象）
+            Check(!p4.ReleaseNow && mP4.ActiveCount == 1, "atc5r-fix P4 same identity keeps lease");
+
+            // 33) OPT：watchdog 无租约零分配（空缓冲 + 同一引用复用）
+            var mO = new FormationControlLeaseManager();
+            var ob = new List<KeyValuePair<int, int>>();
+            List<KeyValuePair<int, int>> o1 = mO.UpdateWatchdog(5.0f, ob);
+            Check(o1.Count == 0 && ReferenceEquals(o1, ob), "atc5r-fix OPT no lease -> empty reused buffer (零分配)");
+            // 34) OPT：有租约 TTL 到期填充缓冲（同一引用）
+            mO.Update(LeaseIn(1, 35, (int)CommitmentPermission.Denied, 0, SafeFallbackKind.Rejoin, now: 0f));
+            mO.Update(LeaseIn(1, 35, (int)CommitmentPermission.Denied, 0, SafeFallbackKind.Rejoin, now: 0.5f));
+            List<KeyValuePair<int, int>> o2 = mO.UpdateWatchdog(3.0f, ob);
+            Check(o2.Count == 1 && ReferenceEquals(o2, ob), "atc5r-fix OPT lease expiry fills reused buffer");
+
+            // 35) P2：Hold+安全带内但无 MainBody 点（strength=0）→ NoSafeFallback（不 Acquire 不关 AI）
+            var armyNoMain = new ArmyContextSnapshot { MainBodyX = 0f, MainBodyY = 0f, MainBodyStrength = 0 };
+            Check(FormationControlLeaseManager.ResolveFallback(CommitmentPermission.Hold, armyNoMain, 10f)
+                == SafeFallbackKind.NoSafeFallback, "atc5r-fix P2 hold no mainbody -> no safe fallback");
+            // 36) P2：fallback=NoSafeFallback 连续两拍 → 不 Acquire（不关 AI 无人负责窗口消除）
+            var mP2 = new FormationControlLeaseManager();
+            mP2.Update(LeaseIn(1, 36, (int)CommitmentPermission.Denied, 0, SafeFallbackKind.NoSafeFallback, now: 0f));
+            LeaseDecision p2b = mP2.Update(LeaseIn(1, 36, (int)CommitmentPermission.Denied, 0,
+                SafeFallbackKind.NoSafeFallback, now: 0.5f));
+            Check(!p2b.AcquireNow && mP2.ActiveCount == 0,
+                "atc5r-fix P2 no safe command -> never acquire (先验证再关 AI)");
+
             // ---- 常量/枚举契约（2 条）----
             Check(FormationControlLeaseManager.DecisionCadenceSeconds == 0.5f
                 && FormationControlLeaseManager.LeaseTtlSeconds == 1.5f
@@ -3454,14 +3517,16 @@ namespace OfflineTests
                 "atc5r owner/state enum contract");
         }
 
-        // LeaseInput 便捷构造（测试用）
+        // LeaseInput 便捷构造（测试用；identity 默认共享哨兵对象——同 key 租约内 Identity 稳定，
+        //   identity 显式传新对象模拟「同一 Index 新对象」P4 场景）
+        private static readonly object _leaseSentinel = new object();
         private static LeaseInput LeaseIn(int team, int form, int perm, int reasons, SafeFallbackKind fb,
             bool poc = true, bool field = true, bool valid = true, bool ai = true, bool player = false,
-            bool hasCommit = true, bool contact = false, bool retr = false, int guard = 1, float now = 0f)
+            bool hasCommit = true, bool contact = false, bool retr = false, object identity = null, float now = 0f)
         {
             return new LeaseInput
             {
-                TeamId = team, FormationId = form, GenerationGuard = guard,
+                TeamId = team, FormationId = form, Identity = identity != null ? identity : _leaseSentinel,
                 PocEnabled = poc, FieldBattle = field, FormationValid = valid, IsAIControlled = ai,
                 IsPlayerFormation = player, HasCommitment = hasCommit, Permission = perm, Reasons = reasons,
                 InContact = contact, RetreatOrEmergencyOrDefensive = retr, Fallback = fb, Now = now

@@ -28,6 +28,8 @@ namespace CombatBrain.Ai
         private readonly Dictionary<long, string> _lastFallback = new Dictionary<long, string>(); // 边沿日志防抖（每租约上次 fallback）
         private readonly HashSet<long> _loggedAcquire = new HashSet<long>();  // Acquire 边沿只记一次
         private readonly HashSet<long> _loggedRelease = new HashSet<long>();  // Release 边沿只记一次
+        // atc5r-fix OPT：watchdog 过期租约复用缓冲（每帧 Clear 复用，无租约时零分配）
+        private readonly List<KeyValuePair<int, int>> _expiredBuffer = new List<KeyValuePair<int, int>>();
 
         public int ActiveCount { get { return _manager.ActiveCount; } }
 
@@ -35,17 +37,18 @@ namespace CombatBrain.Ai
         public delegate CommitmentDecision? CommitmentReader(Team team, Formation formation);
 
         /// <summary>
-        /// 驱动：每帧 watchdog（轻量，无租约 O(1)）+ 0.5s producer 拍（默认关闭时零动作）。
+        /// 驱动：每帧 watchdog（轻量，无租约 O(1) 零分配，复用缓冲）+ 0.5s producer 拍（默认关闭时零动作）。
         /// </summary>
         public void Tick(Mission mission, float dt, float now,
             CommitmentReader commitmentReader, System.Func<Team, ArmyContextSnapshot> armyReader)
         {
-            // 每帧 watchdog：只遍历活跃租约，TTL 到期安全释放（不下战术命令）
-            List<KeyValuePair<int, int>> expired = _manager.UpdateWatchdog(now);
-            for (int i = 0; i < expired.Count; i++)
+            // 每帧 watchdog：只遍历活跃租约，TTL 到期安全释放（不下战术命令）；复用缓冲（OPT 零分配）
+            _manager.UpdateWatchdog(now, _expiredBuffer);
+            for (int i = 0; i < _expiredBuffer.Count; i++)
             {
-                ReleaseFormation(mission, expired[i].Key, expired[i].Value, LeaseReleaseReason.Expired);
+                ReleaseFormation(mission, _expiredBuffer[i].Key, _expiredBuffer[i].Value, LeaseReleaseReason.Expired);
             }
+            _expiredBuffer.Clear();
 
             _sinceTick += dt;
             if (_sinceTick < FormationControlLeaseManager.DecisionCadenceSeconds) return;
@@ -74,16 +77,21 @@ namespace CombatBrain.Ai
                     FormationControlLeaseManager.MinimumHoldSeconds));
             }
 
+            // atc5r-fix P3 单编队域：PocFormationKind 过滤（§4.3）+ 每 Team 只选最小 FormationId 候选
+            //   （确定性选择；禁止开关一开同时接管多支编队——每 Team 至多一个活跃租约）
             foreach (Team team in mission.Teams)
             {
                 if (team == null || !team.MBTeam.IsValid) continue;
+                Formation candidate = null;
                 foreach (Formation f in team.FormationsIncludingEmpty)
                 {
                     if (f == null || f.CountOfUnits == 0 || f.QuerySystem == null) continue;
-                    // PoC 编队域（§4.3）：仅 Infantry 域（远程/骑射/骑兵编队不试验）
-                    if (f.QuerySystem.IsRangedFormation || f.QuerySystem.IsCavalryFormation
-                        || f.QuerySystem.IsRangedCavalryFormation) continue;
-                    EvaluateFormation(mission, team, f, now, commitmentReader, armyReader);
+                    if (!MatchesPocKind(f)) continue; // PocFormationKind 实际过滤
+                    if (candidate == null || f.Index < candidate.Index) candidate = f;
+                }
+                if (candidate != null)
+                {
+                    EvaluateFormation(mission, team, candidate, now, commitmentReader, armyReader);
                 }
             }
         }
@@ -121,11 +129,23 @@ namespace CombatBrain.Ai
             SafeFallbackKind fallback = FormationControlLeaseManager.ResolveFallback(
                 decision.Value.Permission, army, distToMain);
 
+            // atc5r-fix P2：先验证安全命令有效再 Acquire（消除「关 AI 后无安全命令」无人负责窗口）——
+            //   Rejoin 需 MainBody 点导航有效（boundaries + navmesh）；无效 → 降级 NoSafeFallback 不 Acquire 不关 AI
+            if (fallback == SafeFallbackKind.Rejoin)
+            {
+                WorldPosition wp = f.CachedMedianPosition;
+                wp.SetVec2(new Vec2(army.MainBodyX, army.MainBodyY));
+                if (wp.GetNavMesh() == UIntPtr.Zero || !mission.IsPositionInsideBoundaries(wp.AsVec2))
+                {
+                    fallback = SafeFallbackKind.NoSafeFallback;
+                }
+            }
+
             var input = new LeaseInput
             {
                 TeamId = team.TeamIndex,
                 FormationId = f.Index,
-                GenerationGuard = f.Index, // 第一版 identity guard=编队索引（FormationId 复用由 RemoveFormation/清空检测兜底）
+                Identity = f, // atc5r-fix P4：编队对象引用作真实 identity 信号（非 f.Index——对象重建/Index 复用不继承旧租约）
                 PocEnabled = CombatBrainSettings.FormationControlLeasePocEnabled, // 现有集中配置文件（规格 §4.3）
                 FieldBattle = IsFieldBattle(mission),
                 FormationValid = f.CountOfUnits > 0,
@@ -206,12 +226,15 @@ namespace CombatBrain.Ai
         // Release 边沿：SetControlledByAI(true)（仅 if WasAIControlledBeforeAcquire 且已由 CB Acquire）
         private void Release(Mission mission, Team team, Formation f, LeaseDecision d)
         {
-            // 状态机已移除租约；恢复条件=曾由 CB Acquire（_lastFallback 有记录）且当前非 AI 控制
+            // 状态机已移除租约；恢复条件=曾由 CB Acquire + 当前非 AI 控制 + 外部未接管（P1）
             long key = FormationControlLeaseManager.Key(team.TeamIndex, f.Index);
             bool acquiredByCb = _lastFallback.ContainsKey(key);
-            if (acquiredByCb && !f.IsAIControlled)
+            // atc5r-fix P1：外部接管（玩家成为 owner / 外部已把 IsAIControlled 改回 true）→ 绝不 SetControlledByAI(true)
+            //   （不得把玩家刚取得的控制权交回 AI）；三条件全满足才恢复：WasAIControlledBeforeAcquire（租约
+            //   存在即隐含）+ AcquiredByCombatBrain（acquiredByCb）+ 外部未接管
+            if (acquiredByCb && !f.IsAIControlled && !IsPlayerControlled(team, f))
             {
-                f.SetControlledByAI(true); // 无损恢复原生 AI（§5.3：仅已 Acquire 的编队）
+                f.SetControlledByAI(true); // 无损恢复原生 AI（§5.3：仅已 Acquire 且外部未接管的编队）
             }
             _lastFallback.Remove(key);
             if (_loggedRelease.Add(key))
@@ -237,15 +260,35 @@ namespace CombatBrain.Ai
                 if (f == null || f.Index != formationId) continue;
                 long key = FormationControlLeaseManager.Key(teamIndex, formationId);
                 bool acquiredByCb = _lastFallback.ContainsKey(key);
-                if (acquiredByCb && !f.IsAIControlled)
+                // P1：外部接管 → 不 SetControlledByAI(true)；watchdog 只安全释放，不下战术命令
+                if (acquiredByCb && !f.IsAIControlled && !IsPlayerControlled(team, f))
                 {
-                    f.SetControlledByAI(true); // watchdog 只安全释放，不下战术命令
+                    f.SetControlledByAI(true);
                 }
                 _lastFallback.Remove(key);
                 break;
             }
             CombatLog.Log(string.Format(
                 "[ControlLease] team={0} f={1} state=ExpiredRelease release={2}", teamIndex, formationId, reason));
+        }
+
+        // atc5r-fix P1：外部/玩家接管判定（PlayerOwner/HasPlayerControlledTroop/IsPlayerTroopInFormation/玩家队）
+        private static bool IsPlayerControlled(Team team, Formation f)
+        {
+            return team != null && (team.IsPlayerTeam || f.PlayerOwner != null
+                || f.HasPlayerControlledTroop || f.IsPlayerTroopInFormation);
+        }
+
+        // atc5r-fix P3：PocFormationKind 过滤（§4.3 单域；0=Infantry——远程/骑射/骑兵不试验）
+        private static bool MatchesPocKind(Formation f)
+        {
+            int kind = CombatBrainSettings.FormationControlLeasePocFormationKind;
+            if (kind == 0)
+            {
+                return !f.QuerySystem.IsRangedFormation && !f.QuerySystem.IsCavalryFormation
+                    && !f.QuerySystem.IsRangedCavalryFormation;
+            }
+            return false; // 其它 Kind 域第一版不支持（0=Infantry 唯一）
         }
 
         // 普通单机野战（攻城/守城/突围 fail-open）

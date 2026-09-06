@@ -53,12 +53,15 @@ namespace CombatBrain.Coordination
         NoSafeFallback = 3        // 无法证明安全 → 不 Acquire（Shadow 记录）
     }
 
-    /// <summary>每拍输入（胶水层从公开聚合填充；全部纯数值，零 TaleWorlds）。</summary>
+    /// <summary>每拍输入（胶水层从公开聚合填充；纯逻辑，零 TaleWorlds——Identity 为 System.object 引用信号）。</summary>
     public struct LeaseInput
     {
         public int TeamId;                 // 队索引
         public int FormationId;            // 编队索引
-        public int GenerationGuard;        // 编队身份 guard（identity/generation；Id 复用防继承）
+        // atc5r-fix P4：Identity=编队对象引用（真实 identity 信号；非 f.Index——Index 复用不继承旧租约）。
+        //   胶水层传 Formation 对象引用；对象重建（同一 Index 新对象）→ ReferenceEquals 不等 → 旧租约失效；
+        //   清空（Count==0）由 FormationValid=false 路径处理（FormationRemoved）。零 TaleWorlds：System.object。
+        public object Identity;
         public bool PocEnabled;            // PoC 开关（默认 false）
         public bool FieldBattle;           // 普通单机野战（Mission.IsFieldBattle）
         public bool FormationValid;        // 非空且身份有效
@@ -85,12 +88,12 @@ namespace CombatBrain.Coordination
         public int FormationId;
     }
 
-    /// <summary>每租约状态字段（§4.1 字段全）。</summary>
+    /// <summary>每租约状态字段（§4.1 字段全；P4：GenerationGuard 改 Identity=对象引用真实信号）。</summary>
     public sealed class FormationControlLease
     {
         public int TeamId;
         public int FormationId;
-        public int GenerationGuard;                 // identity/generation guard
+        public object Identity;                  // 编队对象引用（真实 identity；Index 复用不继承旧租约）
         public bool WasAIControlledBeforeAcquire;   // 取得前 IsAIControlled（Release 恢复前提）
         public float AcquiredAt;                    // Acquire 时刻
         public float LastRenewedAt;                 // 最近续租时刻
@@ -198,7 +201,7 @@ namespace CombatBrain.Coordination
                     {
                         TeamId = input.TeamId,
                         FormationId = input.FormationId,
-                        GenerationGuard = input.GenerationGuard,
+                        Identity = input.Identity,
                         WasAIControlledBeforeAcquire = input.IsAIControlled,
                         AcquiredAt = input.Now,
                         LastRenewedAt = input.Now,
@@ -226,10 +229,15 @@ namespace CombatBrain.Coordination
             {
                 return Release(key, lease, d, immediate);
             }
-            // 身份 guard 变化（FormationId 复用不继承旧租约）
-            if (input.GenerationGuard != lease.GenerationGuard)
+            // P4：Identity 变化（同一 Index 新对象/编队重建）→ 旧租约失效不继承
+            if (!ReferenceEquals(input.Identity, lease.Identity))
             {
                 return Release(key, lease, d, LeaseReleaseReason.FormationRemoved);
+            }
+            // P1：租约期间 IsAIControlled 由外部改回 true（玩家/外部已接管）→ 立即 Release 且不恢复
+            if (input.IsAIControlled)
+            {
+                return Release(key, lease, d, LeaseReleaseReason.PlayerOrExternalControl);
             }
 
             // TTL 到期（producer 停止续租）→ 释放
@@ -267,11 +275,14 @@ namespace CombatBrain.Coordination
             return RenewIfDue(input, lease, d);
         }
 
-        /// <summary>每帧 watchdog：只遍历活跃租约（无租约 O(1)），TTL 到期安全释放，不下战术命令。</summary>
-        public List<KeyValuePair<int, int>> UpdateWatchdog(float now)
+        /// <summary>
+        /// 每帧 watchdog：只遍历活跃租约（无租约 O(1)），TTL 到期安全释放，不下战术命令。
+        /// atc5r-fix OPT：复用调用方缓冲（胶水层持字段复用）——无租约时零分配（Clear 后直接返回）。
+        /// </summary>
+        public List<KeyValuePair<int, int>> UpdateWatchdog(float now, List<KeyValuePair<int, int>> buffer)
         {
-            var expired = new List<KeyValuePair<int, int>>();
-            if (_leases.Count == 0) return expired; // O(1) 无租约
+            buffer.Clear();
+            if (_leases.Count == 0) return buffer; // O(1) 无租约，零分配
             var staleKeys = new List<long>();
             foreach (KeyValuePair<long, FormationControlLease> kv in _leases)
             {
@@ -284,10 +295,10 @@ namespace CombatBrain.Coordination
                 {
                     _leases.Remove(staleKeys[i]);
                     _grantedTicks.Remove(staleKeys[i]);
-                    expired.Add(new KeyValuePair<int, int>(lease.TeamId, lease.FormationId));
+                    buffer.Add(new KeyValuePair<int, int>(lease.TeamId, lease.FormationId));
                 }
             }
-            return expired;
+            return buffer;
         }
 
         /// <summary>幂等 ReleaseAll（Mission 结束/清场/开关关闭）。</summary>
@@ -318,6 +329,16 @@ namespace CombatBrain.Coordination
         {
             FormationControlLease lease;
             return _leases.TryGetValue(Key(teamId, formationId), out lease) ? lease : null;
+        }
+
+        /// <summary>atc5r-fix P3：该队是否已有活跃租约（每 Team 至多一个——单编队域约束，胶水层据此跳过其它候选）。</summary>
+        public bool HasActiveForTeam(int teamId)
+        {
+            foreach (FormationControlLease lease in _leases.Values)
+            {
+                if (lease.TeamId == teamId) return true;
+            }
+            return false;
         }
 
         private static LeaseReleaseReason ImmediateReleaseReason(LeaseInput input, FormationControlLease lease)
