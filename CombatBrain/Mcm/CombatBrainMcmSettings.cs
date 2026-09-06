@@ -55,5 +55,16 @@ namespace CombatBrain.Mcm
             get => CombatBrainSettings.NarrationSpectatorMode;
             set => CombatBrainSettings.NarrationSpectatorMode = value;
         }
+
+        // ATC-5R 编队控制权租约 PoC 测试开关（atc5r-nits）：运行期 R1-R8 验证时置 true（仅普通野战 +
+        //   Infantry 域单编队试验）；默认 false=安全态零 SetControlledByAI 零行为变化。
+        // 本 PoC 不等同 ATC-5 全量门控；R1-R8 未验证前不得 GO（PoC Ready / Runtime Pending）。
+        [SettingPropertyBool("编队控制权租约 PoC（实验）", RequireRestart = false)]
+        [SettingPropertyGroup("真实度")]
+        public bool FormationControlLeasePocEnabled
+        {
+            get => CombatBrainSettings.FormationControlLeasePocEnabled;
+            set => CombatBrainSettings.FormationControlLeasePocEnabled = value;
+        }
     }
 }

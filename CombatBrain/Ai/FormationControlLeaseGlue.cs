@@ -12,9 +12,14 @@ namespace CombatBrain.Ai
     // ATC-5R 编队控制权租约胶水层（FormationControlLeaseGlue）—— 职责局限（规格 §4.2）：
     //   检查 mission/team/formation 是否允许 PoC；读 ATC-4 per-formation CommitmentDecision；调租约状态机
     //   （FormationControlLeaseManager 纯逻辑）；Acquire 边沿 SetControlledByAI(false)+安全命令变化沿 SetOrder；
-    //   Release 边沿 SetControlledByAI(true)（仅 if WasAIControlledBeforeAcquire 且已由 CB Acquire）；
-    //   异常/清场/Mission 结束幂等 ReleaseAll；watchdog 每帧只遍历活跃租约（无租约 O(1)）。
+    //   Release 边沿 SetControlledByAI(true)（仅 if WasAIControlledBeforeAcquire 且已由 CB Acquire 且外部未接管）；
+    //   异常/清场/Mission 结束幂等 ReleaseAll；watchdog 每帧只遍历活跃租约（无租约 O(1) 零分配）。
     //   acquire/release 逻辑不复制进多个 Glue（本文件唯一）。
+    // atc5r-nits low2：watchdog 语义透明化——本 watchdog 依赖 MissionBehavior.OnMissionTick 每帧调度
+    //   （CombatAiMissionLogic lease Bench 段调用），是「进程内 fail-open」而非 OS 级真 fail-open：
+    //   若引擎停止 tick 本行为（崩溃/挂起/场景异常），租约不会自动释放，SetControlledByAI(false) 可能滞留；
+    //   兜底语义=引擎正常 tick 时 producer 停止续租 → TTL 到期释放（Expired），Mission 收尾钩子
+    //   ReleaseAll(MissionEnding) 幂等兜底。透明记录，不做虚假 fail-open 承诺。
     // PoC 开关默认关闭（CombatBrainSettings.FormationControlLeasePocEnabled=false）：关闭时本层零
     //   SetControlledByAI 调用、零战斗行为变化、Shadow 输出保持、性能差异接近零（producer 拍直接返回）。
     // 硬约束（规格 §2）：禁 Harmony/反射私有；禁全图逐 Agent；禁每帧高频 SetOrder 对刷；禁全局冻结 AI。
@@ -91,6 +96,16 @@ namespace CombatBrain.Ai
                 }
                 if (candidate != null)
                 {
+                    // atc5r-nits low1：同队已有活跃租约（最小编队解散后 TTL 窗口内）且候选非该租约编队
+                    //   → 新候选不 Acquire（前置防御防短暂同队双租约；watchdog fail-open 仅兜底）
+                    bool candidateHasLease = _manager.GetLease(team.TeamIndex, candidate.Index) != null;
+                    if (!candidateHasLease && _manager.HasActiveForTeam(team.TeamIndex))
+                    {
+                        CombatLog.Log(string.Format(
+                            "[ControlLease] team={0} f={1} state=Skip permission=? skip=SameTeamLeaseActive ai={2}",
+                            team.TeamIndex, candidate.Index, candidate.IsAIControlled ? 1 : 0));
+                        continue;
+                    }
                     EvaluateFormation(mission, team, candidate, now, commitmentReader, armyReader);
                 }
             }

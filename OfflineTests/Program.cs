@@ -3471,6 +3471,10 @@ namespace OfflineTests
             mP3.Update(LeaseIn(2, 33, (int)CommitmentPermission.Denied, 0, SafeFallbackKind.Rejoin, now: 1.0f));
             mP3.Update(LeaseIn(2, 33, (int)CommitmentPermission.Denied, 0, SafeFallbackKind.Rejoin, now: 1.5f));
             Check(mP3.HasActiveForTeam(1) && mP3.HasActiveForTeam(2), "atc5r-fix P3 two teams isolated leases");
+            // atc5r-nits low1：同队已租约（f=32）时新候选（f=99 无租约）→ 胶水 HasActiveForTeam 前置判定成立
+            //   （!candidateHasLease && HasActiveForTeam(team) → 拒 Acquire；防最小编队解散后 TTL 窗口内同队双租约）
+            Check(mP3.GetLease(1, 32) != null && mP3.HasActiveForTeam(1) && mP3.GetLease(1, 99) == null,
+                "atc5r-nits low1 same-team lease blocks new candidate (前置防御判定)");
 
             // 32) P4：同 Identity（同一对象）续租保持租约（对象未重建不误失效）
             var mP4 = new FormationControlLeaseManager();
