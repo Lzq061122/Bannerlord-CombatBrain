@@ -132,9 +132,11 @@ namespace CombatBrain.Ai
             ArmyContextSnapshot army = armyReader(team);
             if (!decision.HasValue) return;
 
-            // 玩家/外部控制编队跳过（PlayerOwner/HasPlayerControlledTroop/IsPlayerTroopInFormation/玩家队）
-            bool isPlayerFormation = team.IsPlayerTeam || f.PlayerOwner != null
-                || f.HasPlayerControlledTroop || f.IsPlayerTroopInFormation;
+            // 玩家/外部控制编队跳过（PlayerOwner/HasPlayerControlledTroop/IsPlayerTroopInFormation 无条件；
+            // 玩家队豁免 P0-④ 走 CombatBrainSettings.PlayerTeamExemptionEnabled（MCM 可开关 t66，与其它 6 个 Glue 口径一致）；
+            // 红线 3：玩家所属/含玩家控制兵员的编队任何时候不接管，不随开关放开）
+            bool isPlayerFormation = (CombatBrainSettings.PlayerTeamExemptionEnabled && team.IsPlayerTeam)
+                || f.PlayerOwner != null || f.HasPlayerControlledTroop || f.IsPlayerTroopInFormation;
 
             // 距 MainBody 距离（安全降级判定）
             Vec2 fc = TeamGeometry.GetFormationPosition(f, TeamPosKind.CachedMedian);
@@ -287,11 +289,13 @@ namespace CombatBrain.Ai
                 "[ControlLease] team={0} f={1} state=ExpiredRelease release={2}", teamIndex, formationId, reason));
         }
 
-        // atc5r-fix P1：外部/玩家接管判定（PlayerOwner/HasPlayerControlledTroop/IsPlayerTroopInFormation/玩家队）
+        // atc5r-fix P1：外部/玩家接管判定（PlayerOwner/HasPlayerControlledTroop/IsPlayerTroopInFormation 无条件；
+        // 玩家队豁免 P0-④ 走 CombatBrainSettings.PlayerTeamExemptionEnabled（MCM 可开关 t66，与其它 6 个 Glue 口径一致）；
+        // 红线 3：玩家所属/含玩家控制兵员的编队任何时候不接管，不随开关放开）
         private static bool IsPlayerControlled(Team team, Formation f)
         {
-            return team != null && (team.IsPlayerTeam || f.PlayerOwner != null
-                || f.HasPlayerControlledTroop || f.IsPlayerTroopInFormation);
+            return team != null && ((CombatBrainSettings.PlayerTeamExemptionEnabled && team.IsPlayerTeam)
+                || f.PlayerOwner != null || f.HasPlayerControlledTroop || f.IsPlayerTroopInFormation);
         }
 
         // atc5r-fix P3：PocFormationKind 过滤（§4.3 单域；0=Infantry——远程/骑射/骑兵不试验）
