@@ -188,6 +188,9 @@ namespace OfflineTests
             Console.WriteLine("== ATC0 OutputLayer ==");
             TestProvenanceOutput();
 
+            Console.WriteLine("== CPS0 ProvenanceTruth ==");
+            TestCps0ProvenanceTruth();
+
             Console.WriteLine("== ATC1 BattlePhaseFSM ==");
             TestBattlePhaseFSM();
 
@@ -2272,6 +2275,116 @@ namespace OfflineTests
             p7.Record(1, CommandSource.Brace, CommandKind.Hold);
             string trace7 = p7.BuildOrderTrace(1);
             Check(trace7 == "Protect:Move → Brace:Hold(overrode Protect) → final=Hold", "atc4-phase same-tick override after fix");
+        }
+
+        // CPS-0 真实 setter 观测与来源语义修正（规格「战场命令控制面收口与原版AI权衡正式派单规格-2026-09-06」§10.1 Provenance 8 项 +
+        //   §4.3.3 同拍/跨拍分开）：CB scope 进/出/异常清理/无 scope 记 ExternalUnknown/三域分记/同拍跨拍分开/
+        //   环形缓冲绕回/诊断关不记/Mission Clear 清空/新来源枚举契约/稳定重复命令不误计跨拍替换
+        private static void TestCps0ProvenanceTruth()
+        {
+            // 1) §10.1 CB 来源 scope 正确进入与退出（§4.2.2 ThreadStatic 显式 scope，禁 StackTrace）
+            Check(CommandSourceScope.Current == CommandSource.ExternalUnknown, "cps0 no scope -> ExternalUnknown");
+            using (CommandSourceScope.Enter(CommandSource.FormationTactics))
+            {
+                Check(CommandSourceScope.Current == CommandSource.FormationTactics, "cps0 scope entered -> FormationTactics");
+            }
+            Check(CommandSourceScope.Current == CommandSource.ExternalUnknown, "cps0 scope exit -> ExternalUnknown");
+
+            // 2) §10.1 异常时 scope 仍清理（§4.2.3 try/finally；§10.1）
+            try
+            {
+                using (CommandSourceScope.Enter(CommandSource.FacingCorrection))
+                {
+                    throw new System.InvalidOperationException("cps0 boom");
+                }
+            }
+            catch (System.InvalidOperationException) { }
+            Check(CommandSourceScope.Current == CommandSource.ExternalUnknown, "cps0 scope cleaned on exception (try/finally)");
+
+            // 3) §10.1 无 scope 记 ExternalUnknown + 三域分记（§4.2.4/§4.2.5）
+            SetOrderObserver.Enabled = true;
+            SetOrderObserver.NotifyTick(0f);
+            SetOrderObserver.Clear();
+            SetOrderObserver.Observe(1, CommandDomain.Movement, CommandKind.Move, 0, 0);
+            SetOrderObserver.Observe(2, CommandDomain.Facing, CommandKind.Facing, 1, 0);
+            SetOrderObserver.Observe(3, CommandDomain.Arrangement, CommandKind.Arrangement, 2, 0);
+            Check(SetOrderObserver.Count == 3, "cps0 observer three domains recorded");
+            Check(SetOrderObserver.CountFor(CommandDomain.Movement, CommandSource.ExternalUnknown) == 1,
+                "cps0 no scope movement -> ExternalUnknown");
+            Check(SetOrderObserver.CountFor(CommandDomain.Facing, CommandSource.ExternalUnknown) == 1,
+                "cps0 no scope facing -> ExternalUnknown");
+            Check(SetOrderObserver.CountFor(CommandDomain.Arrangement, CommandSource.ExternalUnknown) == 1,
+                "cps0 no scope arrangement -> ExternalUnknown");
+
+            // 4) CB scope 内观测 → CB 真实来源（§4.2.2）
+            using (CommandSourceScope.Enter(CommandSource.FormationControlLease))
+            {
+                SetOrderObserver.Observe(4, CommandDomain.Movement, CommandKind.Move, 0, 0);
+            }
+            Check(SetOrderObserver.CountFor(CommandDomain.Movement, CommandSource.FormationControlLease) == 1,
+                "cps0 cb scope observed -> cb source");
+
+            // 5) §10.1 诊断关闭不记录（§4.2.7 近零开销）
+            SetOrderObserver.Enabled = false;
+            SetOrderObserver.Observe(5, CommandDomain.Movement, CommandKind.Move, 0, 0);
+            Check(SetOrderObserver.Count == 4, "cps0 disabled observe not recorded");
+            Check(SetOrderObserver.CountFor(CommandDomain.Movement, CommandSource.ExternalUnknown) == 1,
+                "cps0 disabled counts unchanged");
+
+            // 6) §10.1 环形缓冲绕回不串 Formation（观测 ring 固定容量破顶覆盖最旧）
+            SetOrderObserver.Enabled = true;
+            SetOrderObserver.Clear();
+            for (int i = 0; i < SetOrderObserver.Capacity + 3; i++)
+            {
+                SetOrderObserver.Observe(i, CommandDomain.Movement, CommandKind.Move, 0, 0);
+            }
+            Check(SetOrderObserver.Count == SetOrderObserver.Capacity, "cps0 observer ring caps at Capacity 128");
+            SetOrderObserver.Enabled = false;
+            SetOrderObserver.Clear();
+
+            // 7) §10.1 Mission Clear 清空（CommandProvenance 含覆盖统计复位）
+            var p = new CommandProvenance();
+            p.BeginLogicalTick(0f);
+            p.Record(1, CommandSource.FormationTactics, CommandKind.Arrangement);
+            p.Record(1, CommandSource.FacingCorrection, CommandKind.Facing);
+            p.Clear();
+            Check(p.Count == 0 && p.SameTickOverrideCount == 0 && p.CrossTickReplacementCount == 0,
+                "cps0 clear resets count and override counters");
+
+            // 8) §10.1 同拍覆盖与跨拍替换分开统计（§4.3.3）
+            var q = new CommandProvenance();
+            q.BeginLogicalTick(0f);
+            q.Record(2, CommandSource.FormationTactics, CommandKind.Arrangement);
+            q.Record(2, CommandSource.FacingCorrection, CommandKind.Facing); // 同拍覆盖
+            Check(q.SameTickOverrideCount == 1 && q.CrossTickReplacementCount == 0,
+                "cps0 same-tick override counted separately (SameTickOverride=1)");
+            Check(q.At(0).OverrideKind == CommandOverrideKind.SameTick, "cps0 override kind same-tick marked");
+            q.BeginLogicalTick(1f);
+            q.Record(2, CommandSource.Morale, CommandKind.Retreat); // 跨拍 + Kind/Source 实质变化 → 跨拍替换
+            Check(q.CrossTickReplacementCount == 1 && q.SameTickOverrideCount == 1,
+                "cps0 cross-tick replacement counted separately (CrossTickReplacement=1)");
+            Check(q.At(1).OverrideKind == CommandOverrideKind.CrossTick, "cps0 override kind cross-tick marked");
+            string summary = q.BuildOverrideSummary();
+            Check(summary.Contains("SameTickOverride=1") && summary.Contains("CrossTickReplacement=1"),
+                "cps0 override summary separates same/cross tick");
+
+            // 9) §4.3.3 稳定重复命令（同源同 Kind 跨拍）不误计跨拍替换
+            var r = new CommandProvenance();
+            r.BeginLogicalTick(0f);
+            r.Record(3, CommandSource.Cavalry, CommandKind.Hold);
+            r.BeginLogicalTick(1f);
+            r.Record(3, CommandSource.Cavalry, CommandKind.Hold);
+            Check(r.CrossTickReplacementCount == 0, "cps0 stable repeat not cross-tick replacement");
+            Check(r.At(0).OverrideKind == CommandOverrideKind.None, "cps0 stable repeat no override kind");
+
+            // 10) §4.3 新来源枚举契约（追加不重排既有值；OriginalUnknown 仅历史兼容）
+            Check((int)CommandSource.FormationTactics == 10 && (int)CommandSource.FacingCorrection == 11
+                && (int)CommandSource.PlayerOrManual == 12 && (int)CommandSource.ExternalUnknown == 13,
+                "cps0 CommandSource 10..13 appended (FormationTactics/FacingCorrection/PlayerOrManual/ExternalUnknown)");
+
+            // 11) §10.1 环形缓冲绕回不串 Formation（声明式 ring 既有断言复用 + 观测 ring 容量契约）
+            Check(SetOrderObserver.Count == 0 && SetOrderObserver.CountFor(CommandDomain.Movement, CommandSource.ExternalUnknown) == 0,
+                "cps0 observer clear empties counts");
         }
 
         // ATC-1 战局阶段机（BattlePhaseFSM 纯逻辑）：五态全边界/最短驻留/同态不重播/Retreat 终态/早期伤亡不误进 Exploit

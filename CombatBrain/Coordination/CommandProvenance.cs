@@ -1,13 +1,26 @@
 namespace CombatBrain.Coordination
 {
     using System.Collections.Generic;
+    using CombatBrain;
+    using TaleWorlds.MountAndBlade;
 
-    // ATC-0 命令来源与 Why 观测（CommandProvenance）—— 纯逻辑（零 TaleWorlds 依赖，可离线测）。
+    // ATC-0 命令来源与 Why 观测（CommandProvenance）—— 纯逻辑核心（零 TaleWorlds 依赖，可离线测）。
     // 职责：记录 CombatBrain 各子系统对 Formation 下达的命令来源/类型/目标，回答「谁提出命令、
     //   同拍是否被覆盖、被拒后有无安全降级」的前置观测（ATC 规格 §1.3）。本卡不做任何行为变化：
     //   只记录，不包装/不改变命令、不调整执行顺序。
     // 反作弊闸：只读已有决策状态（哪个 Glue 调了哪个命令方法），零新增禁读。
     // 性能：固定容量 ring buffer，Record O(1) 破顶覆盖最旧（禁 List.RemoveRange，P0-⑥ 同款教训）。
+    // CPS-0 追加（规格「战场命令控制面收口与原版AI权衡正式派单规格-2026-09-06」§4，2026-09-06）：
+    //   * 来源语义修正（§4.3）：CommandSource 追加 FormationTactics/FacingCorrection 真实来源
+    //     （FacingCorrection/FormationTactics 等由 CB 自己调用却记成 OriginalUnknown 的位置改为真实来源）；
+    //     SameTickOverride 与 CrossTickReplacement 分开统计（OverrideKind + 双计数器）；
+    //     OriginalUnknown 仅作历史兼容值，新数据不得继续写入含混来源。
+    //   * 真实 setter 观测（§4.2）：SetOrderObserver + CommandSourceScope（ThreadStatic，禁 StackTrace）+ 只读
+    //     Harmony Prefix（Formation.SetMovementOrder/SetFacingOrder/SetArrangementOrder），不修改参数、
+    //     不跳过原方法、不改变返回结果；无 scope 记 ExternalUnknown（禁止命名为 NativeTeamAI）；
+    //     诊断开关默认关闭近零开销；patch 失败 fail-open 并写启动日志。
+    //   * 观测挂载部分需 TaleWorlds.MountAndBlade/HarmonyLib 编译期引用（CombatBrain.csproj 0Harmony.dll）；
+    //     纯逻辑部分（Record/计数/scope/观测记录）仍零运行时游戏依赖，可离线测。
     public enum CommandSource
     {
         OriginalUnknown = 0,   // 原版/未归属
@@ -19,7 +32,29 @@ namespace CombatBrain.Coordination
         Protect = 6,           // F3 保护核心
         Brace = 7,             // F4 架枪反骑
         ArmyCoordination = 8,  // ATC 系列（预留）
-        FormationControlLease = 9 // ATC-5R 编队控制权租约（追加不重排既有值，§7.1）
+        FormationControlLease = 9, // ATC-5R 编队控制权租约（追加不重排既有值，§7.1）
+        // CPS-0 追加（不重排既有值）：真实来源与观测来源（规格 CPS-0 §4.1/§4.3）
+        FormationTactics = 10, // 编队阵型修正（t89 全面接管，FormationTactics 自行 SetArrangementOrder）
+        FacingCorrection = 11, // 编队朝向修正（X3，FacingCorrection 自行 SetFacingOrder）
+        PlayerOrManual = 12,   // 观测来源：玩家/手动命令（仅可靠公开信号可标，§4.2.4）
+        ExternalUnknown = 13   // 观测来源：无 CB scope 的外部/原版/第三方写入（禁止命名为 NativeTeamAI，§4.1）
+    }
+
+    // CPS-0 §4.2：命令域（三个 setter 观测维度）
+    public enum CommandDomain
+    {
+        None = 0,
+        Movement = 1,    // SetMovementOrder
+        Facing = 2,      // SetFacingOrder
+        Arrangement = 3  // SetArrangementOrder
+    }
+
+    // CPS-0 §4.3.3：覆盖/替换分类——同拍覆盖（SameTickOverride）与跨拍替换（CrossTickReplacement）分开统计
+    public enum CommandOverrideKind
+    {
+        None = 0,       // 无覆盖/无替换
+        SameTick = 1,   // 同一逻辑拍内被后续命令覆盖（覆盖链）
+        CrossTick = 2   // 更早逻辑拍的命令被本拍命令实质替换（Kind 或 Source 变化）
     }
 
     public enum CommandKind
@@ -49,6 +84,7 @@ namespace CombatBrain.Coordination
         public float TargetY;          // 目标位置 Y（无目标=0）
         public bool WasOverridden;     // 同拍被后续命令覆盖
         public CommandSource OverriddenBy; // 覆盖者（WasOverridden=true 时有效）
+        public CommandOverrideKind OverrideKind; // CPS-0 §4.3.3：SameTick=同拍覆盖 / CrossTick=跨拍替换 / None=无
 
         public FormationDecisionTrace(int formationId, float time, CommandSource source, CommandKind kind,
             int reasonCode, int targetId, float tx, float ty)
@@ -63,6 +99,7 @@ namespace CombatBrain.Coordination
             TargetY = ty;
             WasOverridden = false;
             OverriddenBy = CommandSource.OriginalUnknown;
+            OverrideKind = CommandOverrideKind.None;
         }
     }
 
@@ -84,6 +121,10 @@ namespace CombatBrain.Coordination
                                                   //    防旧 Formation 的 _lastByFormation 指向其他编队的新记录）
         private float _lastTick = -1f;            // 当前逻辑拍（BeginLogicalTick 设置；-1=未开始）
 
+        // CPS-0 §4.3.3：分开统计——同拍覆盖（SameTickOverride）与跨拍替换（CrossTickReplacement）
+        public long SameTickOverrideCount;
+        public long CrossTickReplacementCount;
+
         public CommandProvenance()
         {
             _slotFormation = new int[Capacity];
@@ -96,6 +137,7 @@ namespace CombatBrain.Coordination
         public void BeginLogicalTick(float now)
         {
             _lastTick = now;
+            SetOrderObserver.NotifyTick(now); // CPS-0：同步 setter 观测的时间基准（§4.2.5 调用时间）
         }
 
         /// <summary>记录一条命令（O(1)，破顶覆盖最旧；同 Formation 同拍后续命令 → 上一条 WasOverridden）。</summary>
@@ -112,7 +154,17 @@ namespace CombatBrain.Coordination
                 {
                     last.WasOverridden = true;
                     last.OverriddenBy = source;
+                    last.OverrideKind = CommandOverrideKind.SameTick; // CPS-0 §4.3.3
                     _ring[prev] = last;
+                    SameTickOverrideCount++;
+                }
+                // CPS-0 §4.3.3：跨拍替换——上一条在更早逻辑拍且命令实质变化（Kind 或 Source 不同）→ 分开统计
+                else if (last.Time >= 0f && now - last.Time >= SameTickEpsilon
+                    && (last.Kind != kind || last.Source != source))
+                {
+                    last.OverrideKind = CommandOverrideKind.CrossTick;
+                    _ring[prev] = last;
+                    CrossTickReplacementCount++;
                 }
             }
 
@@ -144,6 +196,8 @@ namespace CombatBrain.Coordination
             _lastByFormation.Clear();
             for (int i = 0; i < _slotFormation.Length; i++) _slotFormation[i] = -1;
             _lastTick = -1f;
+            SameTickOverrideCount = 0;      // CPS-0 §4.3.3：Mission Clear 清空覆盖统计
+            CrossTickReplacementCount = 0;
         }
 
         /// <summary>读第 i 条（0..Count-1；供日志/聚合/测试遍历，不改变状态）。</summary>
@@ -246,6 +300,209 @@ namespace CombatBrain.Coordination
                   .Append("/o").Append(overridden).Append(";");
             }
             return sb.ToString();
+        }
+
+        // CPS-0 §4.3.3：同拍覆盖与跨拍替换分开统计的输出摘要（供 5s 汇总/战斗结束输出，只读计数）
+        public string BuildOverrideSummary()
+        {
+            return "SameTickOverride=" + SameTickOverrideCount
+                + ";CrossTickReplacement=" + CrossTickReplacementCount;
+        }
+    }
+
+    // CPS-0 §4.2.5：setter 级真实调用观测记录（与声明式 FormationDecisionTrace 分离；ring 固定容量）
+    public struct SetOrderObservation
+    {
+        public int FormationId;        // Formation.Index
+        public float Time;             // 逻辑拍时间（BeginLogicalTick 同步基准）
+        public CommandDomain Domain;   // Movement / Facing / Arrangement
+        public CommandSource Source;   // 真实来源：CB scope 模块 / PlayerOrManual / ExternalUnknown（无 scope）
+        public CommandKind Kind;       // 命令种类（第一版为域级近似：Move/Facing/Arrangement）
+        public int PreState;           // 调用前命令 Type（int；0=未知）
+        public int PostState;          // 调用后命令 Type（int；0=未知；第一版 Prefix 观测填 0）
+    }
+
+    /// <summary>
+    /// CPS-0 §4.2.2/§4.2.3：CombatBrain 调用来源 scope（ThreadStatic 栈式，禁每次抓 StackTrace）。
+    /// 执行器/胶水在调用三个 SetOrder 前 Enter，using + try/finally 保证退出与异常清理（§10.1）；
+    /// 无 scope 时观测记 ExternalUnknown（§4.2.4，禁止命名为 NativeTeamAI）。
+    /// </summary>
+    public sealed class CommandSourceScope : System.IDisposable
+    {
+        [System.ThreadStatic] private static CommandSourceScope _active;
+        private readonly CommandSourceScope _previous;
+        private readonly CommandSource _source;
+        private bool _disposed;
+
+        private CommandSourceScope(CommandSource source)
+        {
+            _source = source;
+            _previous = _active;
+        }
+
+        /// <summary>进入来源 scope（调用三个 SetOrder 之前；返回对象须 using/Dispose 保证清理）。</summary>
+        public static CommandSourceScope Enter(CommandSource source)
+        {
+            var scope = new CommandSourceScope(source);
+            _active = scope;
+            return scope;
+        }
+
+        /// <summary>当前来源（无 scope → ExternalUnknown，§4.2.4）。</summary>
+        public static CommandSource Current
+        {
+            get { return _active != null ? _active._source : CommandSource.ExternalUnknown; }
+        }
+
+        public void Dispose()
+        {
+            if (_disposed) return;
+            _disposed = true;
+            _active = _previous; // 异常路径由 try/finally 保证执行（§10.1）
+        }
+    }
+
+    /// <summary>
+    /// CPS-0 §4.2：真实 setter 观测（Formation.SetMovementOrder/SetFacingOrder/SetArrangementOrder 只读 Prefix）。
+    /// 诊断开关默认关闭 → patch 不应用 → 每次 SetOrder 零额外开销（§4.2.7 近零开销）；
+    /// patch 版本签名不匹配 → fail-open 并写启动日志「观测不可用」（§4.2.8）。
+    /// 纯数据记录部分（Observe/CountFor/At/Clear）零游戏运行时依赖，可离线测；
+    /// Harmony 挂载在嵌套类 Patches（惰性加载，OfflineTests 不触碰）。
+    /// 注：Enable() 的启动调用点由 cps0-runtime-baseline 卡接入（本卡实现机制 + fail-open）。
+    /// </summary>
+    public static class SetOrderObserver
+    {
+        public static bool Enabled;             // 诊断开关（默认 false=近零开销；MCM 暴露留 runtime-baseline 卡）
+        public static float LastTick;           // 逻辑拍时间基准（CommandProvenance.BeginLogicalTick 同步）
+        public const int Capacity = 128;        // 观测 ring 固定容量（破顶覆盖最旧，O(1)）
+
+        private static readonly SetOrderObservation[] _ring = new SetOrderObservation[Capacity];
+        private static int _head;
+        private static int _count;
+        // 聚合计数：key = domain*16 + source → 次数（固定小表，无逐帧分配）
+        private static readonly Dictionary<int, long> _counts = new Dictionary<int, long>();
+
+        public static int Count { get { return _count; } }
+
+        public static void NotifyTick(float now) { LastTick = now; }
+
+        public static SetOrderObservation At(int i)
+        {
+            if (i < 0 || i >= _count) return default(SetOrderObservation);
+            int idx = (_head - _count + i + Capacity) % Capacity;
+            if (idx < 0) idx += Capacity;
+            return _ring[idx];
+        }
+
+        public static long CountFor(CommandDomain domain, CommandSource source)
+        {
+            long v;
+            return _counts.TryGetValue(Key(domain, source), out v) ? v : 0L;
+        }
+
+        private static int Key(CommandDomain d, CommandSource s) { return (int)d * 16 + (int)s; }
+
+        public static void Clear()
+        {
+            _head = 0;
+            _count = 0;
+            _counts.Clear();
+        }
+
+        /// <summary>纯数据观测入口（Harmony Prefix 与离线测试共用；诊断关闭不记录；无 scope → ExternalUnknown）。</summary>
+        public static void Observe(int formationId, CommandDomain domain, CommandKind kind,
+            int preState, int postState)
+        {
+            if (!Enabled) return; // §4.2.7：诊断关闭不记录（近零开销）
+            var obs = new SetOrderObservation
+            {
+                FormationId = formationId,
+                Time = LastTick,
+                Domain = domain,
+                Source = CommandSourceScope.Current, // ThreadStatic：无 scope → ExternalUnknown（§4.2.4）
+                Kind = kind,
+                PreState = preState,
+                PostState = postState
+            };
+            _ring[_head] = obs;
+            _head = (_head + 1) % Capacity;
+            if (_count < Capacity) _count++;
+            int k = Key(domain, obs.Source);
+            long c;
+            _counts.TryGetValue(k, out c);
+            _counts[k] = c + 1;
+        }
+
+        /// <summary>启用观测（应用只读 Harmony patch）。版本签名不匹配 → 捕获 → fail-open + 启动日志（§4.2.8）。</summary>
+        public static void Enable()
+        {
+            if (Enabled) return;
+            try
+            {
+                Patches.Apply();
+                Enabled = true;
+            }
+            catch (System.Exception ex)
+            {
+                Enabled = false; // fail-open：观测不可用不影响任何战斗行为
+                CombatLog.Log("[SetOrderObserver] 观测不可用（Harmony patch 失败，fail-open）：" + ex.Message);
+            }
+        }
+
+        public static void Disable()
+        {
+            if (!Enabled) return;
+            try { Patches.Unapply(); }
+            catch (System.Exception) { /* fail-open：幂等 */ }
+            Enabled = false;
+        }
+
+        // Harmony 只读观测挂载（CPS-0 §4.2 第1条）：不修改参数、不跳过原方法、不改变返回结果。
+        // 仅诊断观测；PatchAll 只扫描本嵌套类（本程序集唯一带 HarmonyPatch 的类）。
+        internal static class Patches
+        {
+            private const string HarmonyId = "com.combatbrain.setorderobserver";
+            private static HarmonyLib.Harmony _harmony;
+
+            public static void Apply()
+            {
+                if (_harmony != null) return;
+                _harmony = new HarmonyLib.Harmony(HarmonyId);
+                _harmony.PatchAll(typeof(Patches).Assembly); // 版本签名不匹配/无 target → 抛 → Enable 捕获 fail-open
+            }
+
+            public static void Unapply()
+            {
+                if (_harmony == null) return;
+                _harmony.UnpatchAll(HarmonyId);
+                _harmony = null;
+            }
+
+            [HarmonyLib.HarmonyPatch(typeof(Formation), nameof(Formation.SetMovementOrder))]
+            [HarmonyLib.HarmonyPrefix]
+            private static void MovementPrefix(Formation __instance, MovementOrder order)
+            {
+                // 只读观测：不修改参数、不跳过原方法、不改变返回结果（§4.2 第1条）；
+                // 命令种类用统一 OrderType（v1.4.8：MovementOrder.OrderType 公开属性），不读私有字段（反作弊闸）
+                SetOrderObserver.Observe(__instance.Index, CommandDomain.Movement, CommandKind.Move,
+                    (int)order.OrderType, 0);
+            }
+
+            [HarmonyLib.HarmonyPatch(typeof(Formation), nameof(Formation.SetFacingOrder))]
+            [HarmonyLib.HarmonyPrefix]
+            private static void FacingPrefix(Formation __instance, FacingOrder order)
+            {
+                SetOrderObserver.Observe(__instance.Index, CommandDomain.Facing, CommandKind.Facing,
+                    (int)order.OrderType, 0);
+            }
+
+            [HarmonyLib.HarmonyPatch(typeof(Formation), nameof(Formation.SetArrangementOrder))]
+            [HarmonyLib.HarmonyPrefix]
+            private static void ArrangementPrefix(Formation __instance, ArrangementOrder order)
+            {
+                SetOrderObserver.Observe(__instance.Index, CommandDomain.Arrangement, CommandKind.Arrangement,
+                    (int)order.OrderType, 0);
+            }
         }
     }
 }

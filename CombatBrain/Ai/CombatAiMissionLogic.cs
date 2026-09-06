@@ -1687,7 +1687,8 @@ namespace CombatBrain.Ai
                     // t89 全面接管：检测原版 Circle 防御环（BehaviorDefensiveRing 下发）→ 强制改写（ShouldOverride 幂等）
                     if (FormationTactics.ShouldOverride(MapArrangementKind(f.ArrangementOrder), want))
                     {
-                        CommandProvenance.Instance.Record(f.Index, CommandSource.OriginalUnknown,
+                        // CPS-0 §4.3.1：FormationTactics 自行 SetArrangementOrder → 真实来源（不再记 OriginalUnknown 含混来源）
+                        CommandProvenance.Instance.Record(f.Index, CommandSource.FormationTactics,
                             CommandKind.Arrangement, (int)want); // ATC-0 记录（不改命令）
                         f.SetArrangementOrder(target);
                     }
@@ -2036,7 +2037,8 @@ namespace CombatBrain.Ai
                     if (FacingCorrection.DecideFacing(fc.x, fc.y, target.x, target.y,
                         lastDir.x, lastDir.y, _elapsed, lastTime, out dx, out dy, out dist))
                     {
-                        CommandProvenance.Instance.Record(f.Index, CommandSource.OriginalUnknown,
+                        // CPS-0 §4.3.1：FacingCorrection 自行 SetFacingOrder → 真实来源（不再记 OriginalUnknown 含混来源）
+                        CommandProvenance.Instance.Record(f.Index, CommandSource.FacingCorrection,
                             CommandKind.Facing, 0, -1, target.x, target.y); // ATC-0 记录（不改命令）
                         f.SetFacingOrder(FacingOrder.FacingOrderLookAtDirection(new Vec2(dx, dy)));
                         _facingLastDir[f] = new Vec2(dx, dy);

@@ -50,6 +50,13 @@
       <HintPath>$(GameDir)\Modules\Bannerlord.MBOptionScreen\bin\Win64_Shipping_Client\MCMv5.dll</HintPath>
       <Private>false</Private>
     </Reference>
+    <!-- CPS-0：Harmony 只读观测（SetOrderObserver）编译期引用。来源：游戏 Modules\Bannerlord.Harmony\bin\Win64_Shipping_Client\0Harmony.dll
+         （用户已装，模块随游戏加载 0Harmony；Private=false 不拷进 CombatBrain 模块）。
+         仅诊断观测（Formation 三个 SetOrder Prefix），默认关闭不应用 patch；运行时缺 0Harmony 亦 fail-open 不崩。 -->
+    <Reference Include="0Harmony">
+      <HintPath>$(GameDir)\Modules\Bannerlord.Harmony\bin\Win64_Shipping_Client\0Harmony.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
   </ItemGroup>
 
   <ItemGroup>

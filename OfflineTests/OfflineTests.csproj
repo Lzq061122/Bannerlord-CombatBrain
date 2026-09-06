@@ -71,6 +71,34 @@
     <Compile Include="..\CombatBrain\Coordination\IsolationDetector.cs" Link="Coordination\IsolationDetector.cs" />
     <Compile Include="..\CombatBrain\Coordination\CommitmentEvaluator.cs" Link="Coordination\CommitmentEvaluator.cs" />
     <Compile Include="..\CombatBrain\Coordination\FormationControlLease.cs" Link="Coordination\FormationControlLease.cs" />
+    <!-- CPS-0：CommandProvenance.cs 的 Enable() fail-open 日志用 CombatLog（纯 System 依赖，可安全 link） -->
+    <Compile Include="..\CombatBrain\CombatLog.cs" Link="CombatLog.cs" />
+  </ItemGroup>
+
+  <!-- CPS-0：OfflineTests 直接 link 编译 CombatBrain/Coordination/CommandProvenance.cs（含 SetOrderObserver
+       Harmony 观测挂载），需编译期引用 0Harmony + TaleWorlds（仅编译解析类型；运行时测试只触碰纯逻辑，
+       不加载游戏/Harmony 程序集；Private=false 不拷贝）。 -->
+  <ItemGroup>
+    <Reference Include="0Harmony">
+      <HintPath>E:\SteamLibrary\steamapps\common\Mount &amp; Blade II Bannerlord\Modules\Bannerlord.Harmony\bin\Win64_Shipping_Client\0Harmony.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="TaleWorlds.MountAndBlade">
+      <HintPath>E:\SteamLibrary\steamapps\common\Mount &amp; Blade II Bannerlord\bin\Win64_Shipping_Client\TaleWorlds.MountAndBlade.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="TaleWorlds.Core">
+      <HintPath>E:\SteamLibrary\steamapps\common\Mount &amp; Blade II Bannerlord\bin\Win64_Shipping_Client\TaleWorlds.Core.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="TaleWorlds.Library">
+      <HintPath>E:\SteamLibrary\steamapps\common\Mount &amp; Blade II Bannerlord\bin\Win64_Shipping_Client\TaleWorlds.Library.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="TaleWorlds.Engine">
+      <HintPath>E:\SteamLibrary\steamapps\common\Mount &amp; Blade II Bannerlord\bin\Win64_Shipping_Client\TaleWorlds.Engine.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
   </ItemGroup>
 
 </Project>
