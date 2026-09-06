@@ -170,6 +170,9 @@ namespace OfflineTests
             Console.WriteLine("== N1 NarratorPure ==");
             TestNarratorPure();
 
+            Console.WriteLine("== narrate-fix P0 崩溃回归 ==");
+            TestNarrateFix();
+
             Console.WriteLine("== N2 NarrativeEvents ==");
             TestNarrativeEvents();
 
@@ -1939,6 +1942,52 @@ namespace OfflineTests
 
             // 4) 指挥模式默认值 false（观感派单 §2.1）
             Check(!CombatBrainSettings.NarrationSpectatorMode, "n1 spectator mode default false (指挥模式)");
+        }
+
+        // narrate-fix P0：N1 Narrator 模板被 string.Format 误处理崩溃回归——修复后 7 处调用点模板
+        //   不再经 string.Format（{S} 非合法格式项→FormatException→游戏崩溃）；此处直接对修复后模板
+        //   字符串验证 ComposeText 正确代填 {S}，且模板不含 {0}-{9} 非法格式项（防复发）。
+        private static void TestNarrateFix()
+        {
+            var enemy = new Narrator.NarrationInfo { IsEnemyOfPlayer = true, HasPlayerTeam = true, FactionName = "帝国" };
+
+            // 1) 骑兵跃迁模板（CavalryGlue 修复后拼接式）："{S}骑兵 " + state + "→" + next
+            string cav = "{S}骑兵 " + "冲锋" + "→" + "回撤";
+            Check(!ContainsFormatItem(cav), "narrate-fix cavalry template no illegal format items");
+            Check(Narrator.ComposeText(enemy, cav, false) == "敌军骑兵 冲锋→回撤", "narrate-fix cavalry {S} filled");
+
+            // 2) 士气跃迁模板（MoraleGlue 修复后拼接式）："{S}编队 " + a + "→" + b + "（士气" + F2 + "）"
+            string morale = "{S}编队 " + "撤退" + "→" + "重整" + "（士气" + 0.42f.ToString("F2") + "）";
+            Check(!ContainsFormatItem(morale), "narrate-fix morale template no illegal format items");
+            Check(Narrator.ComposeText(enemy, morale, false) == "敌军编队 撤退→重整（士气0.42）", "narrate-fix morale {S} filled");
+
+            // 3) 架枪模板（BraceGlue 修复后拼接式）："{S}步兵架枪迎敌（敌骑距" + F0 + "米）"
+            string brace = "{S}步兵架枪迎敌（敌骑距" + 30f.ToString("F0") + "米）";
+            Check(!ContainsFormatItem(brace), "narrate-fix brace template no illegal format items");
+            Check(Narrator.ComposeText(enemy, brace, false) == "敌军步兵架枪迎敌（敌骑距30米）", "narrate-fix brace {S} filled");
+
+            // 4) 战术播报模板（CombatAiMissionLogic 修复后拼接式）："{S}战术：" + intent + "——" + brief
+            string tact = "{S}战术：" + "进攻" + "——" + "前压";
+            Check(!ContainsFormatItem(tact), "narrate-fix tactical template no illegal format items");
+            Check(Narrator.ComposeText(enemy, tact, false) == "敌军战术：进攻——前压", "narrate-fix tactical {S} filled");
+
+            // 5) 阶段文案模板（修复后拼接式）："{S}进入" + phaseText；原因模板："{S}——" + cause
+            string phase = "{S}进入" + "接战";
+            string cause = "{S}——" + "敌军溃败";
+            Check(!ContainsFormatItem(phase) && !ContainsFormatItem(cause),
+                "narrate-fix phase/cause templates no illegal format items");
+            Check(Narrator.ComposeText(enemy, phase, false) == "敌军进入接战", "narrate-fix phase {S} filled");
+            Check(Narrator.ComposeText(enemy, cause, false) == "敌军——敌军溃败", "narrate-fix cause {S} filled");
+        }
+
+        // narrate-fix P0：模板是否含 {0}..{9} 格式项（string.Format 非法占位符检测，防复发）
+        private static bool ContainsFormatItem(string template)
+        {
+            for (int i = 0; i <= 9; i++)
+            {
+                if (template.IndexOf("{" + i + "}", StringComparison.Ordinal) >= 0) return true;
+            }
+            return false;
         }
 
         // N2 L0 战场事件（NarrativeEvents 纯逻辑）：五事件进出双阈值/迟滞不重播/E4 置信门/rout 斜率/模板

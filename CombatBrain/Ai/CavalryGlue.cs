@@ -212,7 +212,9 @@ namespace CombatBrain.Ai
                 Narrator.Notify(CombatAiMissionLogic.NarrateInfo(formation.Team,
                     Mission.Current != null ? Mission.Current.PlayerTeam : null),
                     "骑兵", // N1 叙事统一出口（编队级全量，FSM 跃迁一次性事件，正常模式显示）
-                    string.Format("{S}骑兵 {1}→{2}", FeedbackText.Cavalry(state), FeedbackText.Cavalry(next)),
+                    // narrate-fix P0：模板含 {S} 占位符不得经 string.Format（{S} 非合法格式项→FormatException 崩溃）；
+                    // 动态值用拼接，{S}/{O} 保留给 Narrator.ComposeText 代填。文案逐字保持。
+                    "{S}骑兵 " + FeedbackText.Cavalry(state) + "→" + FeedbackText.Cavalry(next),
                     InGameFeedback.FormationColor, InGameFeedback.NotifyTactical);
             }
         }

@@ -609,9 +609,10 @@ namespace CombatBrain.Ai
                         own.TeamIndex, newIntent, v.ToString()));
                     Narrator.Notify(NarrateInfo(own, Mission.PlayerTeam), NarrateCategory(own, "意图"), // N1 统一出口（P1-4：category 按 Team 区分，多队同拍不互相压制）
                         // t62 战术层播报：{S}+战术名+态势摘要（正常模式显示；hold 6s 天然限频 +
-                        // NotifyTactical 3s 去重/速率上限防刷屏；编队级跃迁仍为细节行）
-                        string.Format("{S}战术：{1}——{2}",
-                            FeedbackText.Intent(newIntent), FeedbackText.TacticBrief(newIntent)),
+                        // NotifyTactical 3s 去重/速率上限防刷屏；编队级跃迁仍为细节行）。
+                        // narrate-fix P0：模板含 {S} 占位符不得经 string.Format（{S} 非合法格式项→FormatException
+                        // 崩溃）；动态值用拼接，{S} 保留给 Narrator.ComposeText 代填。文案逐字保持。
+                        "{S}战术：" + FeedbackText.Intent(newIntent) + "——" + FeedbackText.TacticBrief(newIntent),
                         InGameFeedback.TacticalColor, InGameFeedback.NotifyTactical);
 
                     // N3 L1 动态原因（§4）：缓冲内最近未过期 L0 事件 → 追加第二条 toast。
@@ -624,7 +625,7 @@ namespace CombatBrain.Ai
                         if (!string.IsNullOrEmpty(causeText))
                         {
                             Narrator.Notify(NarrateInfo(own, Mission.PlayerTeam), NarrateCategory(own, "意图.原因"),
-                                string.Format("{S}——{0}", causeText),
+                                "{S}——" + causeText, // narrate-fix P0：模板含 {S} 不经 string.Format（防 FormatException），拼接保 {S} 代填
                                 InGameFeedback.TacticalColor, InGameFeedback.NotifyTactical);
                         }
                     }
@@ -634,8 +635,7 @@ namespace CombatBrain.Ai
                     if (state.LastStrategicClass != null && state.LastStrategicClass != newClass)
                     {
                         Narrator.Notify(NarrateInfo(own, Mission.PlayerTeam), NarrateCategory(own, "事件"),
-                            string.Format("战局变化：{S}由{0}转入{1}",
-                                state.LastStrategicClass, newClass),
+                            "战局变化：{S}由" + state.LastStrategicClass + "转入" + newClass, // narrate-fix P0：{S} 不经 string.Format
                             InGameFeedback.SpecialColor, InGameFeedback.NotifyTactical);
                         state.EventBuffer.Push(NarrativeEventKind.E5TacticalShift, _elapsed); // E5 也入缓冲（原因）
                     }
@@ -1113,7 +1113,7 @@ namespace CombatBrain.Ai
             if (!string.IsNullOrEmpty(phaseText))
             {
                 Narrator.Notify(NarrateInfo(own, Mission.PlayerTeam), NarrateCategory(own, "战局"),
-                    string.Format("{S}进入{0}", phaseText),
+                    "{S}进入" + phaseText, // narrate-fix P0：{S} 不经 string.Format（防 FormatException），拼接保 {S} 代填
                     InGameFeedback.TacticalColor, InGameFeedback.NotifyTactical);
             }
         }

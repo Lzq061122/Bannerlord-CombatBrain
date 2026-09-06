@@ -92,7 +92,9 @@ namespace CombatBrain.Ai
                         "架枪", // N1 叙事统一出口（编队级边沿，激活一次性）
                         intentBrace
                             ? "{S}步兵架枪迎敌（奉命）"
-                            : string.Format("{S}步兵架枪迎敌（敌骑距{0:F0}米）", d),
+                            // narrate-fix P0：模板含 {S} 占位符不得经 string.Format（{S} 非合法格式项→FormatException
+                            // 崩溃）；动态值用拼接，{S} 保留给 Narrator.ComposeText 代填。文案逐字保持。
+                            : "{S}步兵架枪迎敌（敌骑距" + d.ToString("F0") + "米）",
                         InGameFeedback.FormationColor, InGameFeedback.NotifyTactical);
                     Execute(team, mission);
                 }

@@ -189,7 +189,10 @@ namespace CombatBrain.Ai
                 Narrator.Notify(CombatAiMissionLogic.NarrateInfo(formation.Team,
                     Mission.Current != null ? Mission.Current.PlayerTeam : null),
                     "士气", // N1 叙事统一出口（编队级全量，撤退 FSM 跃迁一次性事件，正常模式显示）
-                    string.Format("{S}编队 {1}→{2}（士气{3:F2}）", FeedbackText.Morale(state), FeedbackText.Morale(next), m.Moral),
+                    // narrate-fix P0：模板含 {S} 占位符不得经 string.Format（{S} 非合法格式项→FormatException 崩溃）；
+                    // 动态值用拼接，{S} 保留给 Narrator.ComposeText 代填。文案逐字保持（士气 F2 两位小数）。
+                    "{S}编队 " + FeedbackText.Morale(state) + "→" + FeedbackText.Morale(next)
+                        + "（士气" + m.Moral.ToString("F2") + "）",
                     InGameFeedback.FormationColor, InGameFeedback.NotifyTactical);
 
                 // N2 E3 自身崩溃（§3 E3 备注）：被指挥队自身士气崩溃 → 撤退 FSM 跃迁到 Disengage 时补一条。
