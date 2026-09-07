@@ -3780,6 +3780,31 @@ namespace OfflineTests
             Check(CombatBrain.Settings.Cps3RuntimeSettings.ForceLeaseCandidateEnabled,
                 "cps3r-force mcm target roundtrip");
             CombatBrain.Settings.Cps3RuntimeSettings.ForceLeaseCandidateEnabled = false;
+
+            // F) t46 repair（Emergency 冲突 Acquire 守卫）：注入决策=普通 Denied（Reasons 无 Emergency/Defensive）——
+            //    RetreatOrEmergencyOrDefensive=false → 状态机 deniedOrHold 判定可通过（FormationControlLease.cs:184-186）
+            var forced = new CommitmentDecision
+            {
+                Permission = CommitmentPermission.Denied,
+                Reasons = CommitmentReason.None
+            };
+            Check(forced.Reasons == CommitmentReason.None,
+                "cps3r-force-r2 injection plain denied (no emergency/defensive)");
+            bool retreatOrEmergency = (forced.Reasons & CommitmentReason.EmergencyOverride) != 0
+                || (forced.Reasons & CommitmentReason.DefensiveOverride) != 0;
+            Check(!retreatOrEmergency,
+                "cps3r-force-r2 injection not retreat/emergency/defensive (Acquire 守卫不阻)");
+            bool deniedOrHold = forced.Permission == CommitmentPermission.Denied && !retreatOrEmergency;
+            Check(deniedOrHold,
+                "cps3r-force-r2 deniedOrHold true (deniedOrHold 判定可通过)");
+            // 真实链路保持：普通 Denied + 远离 MainBody → Rejoin（Acquire 前置）；安全带内 → NoSafeFallback（不伪造）
+            var armyMain2 = new ArmyContextSnapshot { MainBodyStrength = 100, MainBodyX = 0f, MainBodyY = 0f };
+            Check(FormationControlLeaseManager.ResolveFallback(forced.Permission, armyMain2, 50f)
+                == SafeFallbackKind.Rejoin,
+                "cps3r-force-r2 plain denied + far -> Rejoin (真实 Acquire 前置)");
+            Check(FormationControlLeaseManager.ResolveFallback(forced.Permission, armyMain2, 10f)
+                == SafeFallbackKind.NoSafeFallback,
+                "cps3r-force-r2 plain denied + safe zone -> NoSafeFallback (不伪造)");
         }
 
         // ATC-1 战局阶段机（BattlePhaseFSM 纯逻辑）：五态全边界/最短驻留/同态不重播/Retreat 终态/早期伤亡不误进 Exploit

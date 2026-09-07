@@ -233,18 +233,22 @@ namespace CombatBrain.Ai
             _forceTriggered = true;
         }
 
-        // ForceLease 决策注入：Denied+EmergencyOverride——只稳定制造「许可决策」前置条件，
-        // ResolveFallback/Update/Acquire/提案/执行器/TTL/Release/setter 观测全走真实路径
+        // ForceLease 决策注入：普通 Denied（Reasons 无 Emergency/Defensive）——只稳定制造「许可决策」前置条件，
+        // ResolveFallback/Update/Acquire/提案/执行器/TTL/Release/setter 观测全走真实路径。
+        // t46 repair（Emergency 冲突 Acquire 守卫）：EmergencyOverride 经 EvaluateFormation 置
+        //   RetreatOrEmergencyOrDefensive → 状态机 deniedOrHold 判定要求 !RetreatOrEmergencyOrDefensive
+        //   （Emergency 不夺权守卫，FormationControlLease.cs:184-186）→ 注入决策永远被拒（Acquire 不可达）。
+        //   改注入普通 Denied（Reasons=None）→ deniedOrHold=true → Fallback=Rejoin（远离 MainBody）→ 真实 Acquire。
         private void TriggerForceCandidate(Mission mission, Team team, Formation f, float now,
             System.Func<Team, ArmyContextSnapshot> armyReader, List<FormationCommandProposal> proposals)
         {
             var forced = new CommitmentDecision
             {
                 Permission = CommitmentPermission.Denied,
-                Reasons = CommitmentReason.EmergencyOverride
+                Reasons = CommitmentReason.None // t46：普通 Denied（无 Emergency/Defensive），Acquire 守卫可通过
             };
             CombatLog.Log(string.Format(
-                "[ControlLease] force-candidate trigger team={0} f={1}（注入 Denied+EmergencyOverride，走真实 Acquire 链路）",
+                "[ControlLease] force-candidate trigger team={0} f={1}（注入普通 Denied，走真实 Acquire 链路）",
                 team.TeamIndex, f.Index));
             EvaluateFormation(mission, team, f, now, (t, fo) => forced, armyReader, proposals);
         }
