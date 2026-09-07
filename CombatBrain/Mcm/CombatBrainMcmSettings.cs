@@ -1,6 +1,7 @@
 using MCM.Abstractions.Attributes;
 using MCM.Abstractions.Attributes.v2;
 using MCM.Abstractions.Base.Global;
+using MCM.Common; // Dropdown<T>（t28 repair：MCMv5 正确下拉类型，实证 BetterPikesSettings.cs:28）
 
 namespace CombatBrain.Mcm
 {
@@ -80,14 +81,33 @@ namespace CombatBrain.Mcm
             set => CombatBrain.Settings.Cps3RuntimeSettings.Enabled = value;
         }
 
-        // Mode 枚举下拉（MCMv5 SettingPropertyDropdown：属性类型为枚举时自动生成选项，四值 A/B/C/D）
+        // cps3-mcm-switches repair（t28）：MCMv5 SettingPropertyDropdown 不支持原生 C# 枚举属性（实测只显示名称
+        //   无下拉可点）——改 MCMv5 正确类型 Dropdown<string>（MCM.Common，实证 BetterPikesSettings.cs:28），
+        //   SelectedIndex（0..3）↔ Cps3RuntimeSettings.Mode（Cps3Mode A..D）双向转换（Cps3RuntimeSettings
+        //   ModeFromSelectedIndex/SelectedIndexFromMode 纯逻辑）；默认 SelectedIndex=0=A 安全态；RequireRestart=false 热切。
+        private static readonly string[] Cps3ModeNames =
+            { "A: Native 全关", "B: Shadow", "C: 仲裁共存", "D: 单域排他" };
+        private readonly Dropdown<string> _cps3ModeDropdown = new Dropdown<string>(Cps3ModeNames, 0);
+
         [SettingPropertyDropdown("CPS 验证模式", RequireRestart = false,
             HintText = "A=Native 全关对照（三域 CB 命令全关）/ B=Shadow（决策运行不落地）/ C=仲裁共存（原版仍控）/ D=单域排他（需租约 PoC 开）")]
         [SettingPropertyGroup("CPS 验证")]
-        public CombatBrain.Settings.Cps3Mode Cps3ValidationMode
+        public Dropdown<string> Cps3ValidationMode
         {
-            get => CombatBrain.Settings.Cps3RuntimeSettings.Mode;
-            set => CombatBrain.Settings.Cps3RuntimeSettings.Mode = value;
+            get
+            {
+                // get 同步：外部集中 static 改动 Mode 也能在 UI 反映（SelectedIndex 跟随枚举）
+                _cps3ModeDropdown.SelectedIndex = CombatBrain.Settings.Cps3RuntimeSettings.SelectedIndexFromMode(
+                    CombatBrain.Settings.Cps3RuntimeSettings.Mode);
+                return _cps3ModeDropdown;
+            }
+            set
+            {
+                // set 同步：SelectedIndex ↔ Cps3Mode（0..3 ↔ A..D；越界钳制安全态）
+                CombatBrain.Settings.Cps3RuntimeSettings.Mode = CombatBrain.Settings.Cps3RuntimeSettings.ModeFromSelectedIndex(
+                    value.SelectedIndex);
+                _cps3ModeDropdown.SelectedIndex = value.SelectedIndex;
+            }
         }
 
         [SettingPropertyBool("命令来源观测", RequireRestart = false,

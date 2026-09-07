@@ -3346,7 +3346,27 @@ namespace OfflineTests
                 && (int)CombatBrain.Settings.Cps3Mode.D_ExclusivePoc == 3,
                 "cps3-mcm mode dropdown four values A/B/C/D");
 
-            // C) MCM get/set 直读写（字段即存储）：Mode 与开关 roundtrip
+            // C) t28 repair：Dropdown SelectedIndex ↔ Cps3Mode 双向转换（MCM Dropdown<string> get/set 薄转发核心）
+            Check(CombatBrain.Settings.Cps3RuntimeSettings.SelectedIndexFromMode(CombatBrain.Settings.Cps3Mode.A_NativeBaseline) == 0
+                && CombatBrain.Settings.Cps3RuntimeSettings.SelectedIndexFromMode(CombatBrain.Settings.Cps3Mode.D_ExclusivePoc) == 3,
+                "cps3-mcm dropdown index from mode (A->0, D->3)");
+            Check(CombatBrain.Settings.Cps3RuntimeSettings.ModeFromSelectedIndex(0) == CombatBrain.Settings.Cps3Mode.A_NativeBaseline
+                && CombatBrain.Settings.Cps3RuntimeSettings.ModeFromSelectedIndex(3) == CombatBrain.Settings.Cps3Mode.D_ExclusivePoc,
+                "cps3-mcm mode from dropdown index (0->A, 3->D)");
+            bool indexRoundtrip = true;
+            for (int idx = 0; idx <= 3; idx++)
+            {
+                CombatBrain.Settings.Cps3Mode m = CombatBrain.Settings.Cps3RuntimeSettings.ModeFromSelectedIndex(idx);
+                if (CombatBrain.Settings.Cps3RuntimeSettings.SelectedIndexFromMode(m) != idx) indexRoundtrip = false;
+            }
+            Check(indexRoundtrip, "cps3-mcm dropdown index <-> mode roundtrip (0..3 ↔ A/B/C/D)");
+            Check(CombatBrain.Settings.Cps3RuntimeSettings.ModeFromSelectedIndex(-1) == CombatBrain.Settings.Cps3Mode.A_NativeBaseline
+                && CombatBrain.Settings.Cps3RuntimeSettings.ModeFromSelectedIndex(9) == CombatBrain.Settings.Cps3Mode.A_NativeBaseline,
+                "cps3-mcm out-of-range index clamps to A (安全态)");
+            Check(CombatBrain.Settings.Cps3RuntimeSettings.SelectedIndexFromMode(CombatBrain.Settings.Cps3Mode.A_NativeBaseline) == 0,
+                "cps3-mcm default index 0 = A (安全态)");
+
+            // D) MCM get/set 直读写（字段即存储）：Mode 与开关 roundtrip
             CombatBrain.Settings.Cps3RuntimeSettings.Mode = CombatBrain.Settings.Cps3Mode.D_ExclusivePoc;
             CombatBrain.Settings.Cps3RuntimeSettings.Enabled = true;
             CombatBrain.Settings.Cps3RuntimeSettings.ObserverEnabled = true;

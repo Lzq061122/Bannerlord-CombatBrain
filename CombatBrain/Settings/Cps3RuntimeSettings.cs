@@ -46,5 +46,22 @@ namespace CombatBrain.Settings
                     return true; // A/B：任意组合合法（对照/观测不参与执行路线）
             }
         }
+
+        // cps3-mcm-switches repair（t28）：MCMv5 SettingPropertyDropdown 不支持原生 C# 枚举属性（实测不渲染下拉），
+        //   正确写法为 Dropdown<string> 属性（实证 BetterPikesSettings.cs:28）；本方法提供 Dropdown SelectedIndex
+        //   ↔ Cps3Mode 枚举的纯逻辑双向转换（离线可测；MCM 属性 get/set 薄转发调用）。
+        /// <summary>Dropdown SelectedIndex（0..3）→ Cps3Mode（A..D）；越界钳制到 A（安全态）。</summary>
+        public static Cps3Mode ModeFromSelectedIndex(int index)
+        {
+            if (index < 0 || index > 3) return Cps3Mode.A_NativeBaseline;
+            return (Cps3Mode)index;
+        }
+
+        /// <summary>Cps3Mode（A..D）→ Dropdown SelectedIndex（0..3）。</summary>
+        public static int SelectedIndexFromMode(Cps3Mode mode)
+        {
+            int i = (int)mode;
+            return i >= 0 && i <= 3 ? i : 0;
+        }
     }
 }
