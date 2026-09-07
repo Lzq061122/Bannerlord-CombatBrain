@@ -306,6 +306,18 @@ namespace CombatBrain.Ai
                 return;
             }
 
+            // t30 repair：观测运行期热切（原仅启动一次性 gated by ObserverEnabled，游戏内 MCM 开不生效）——
+            // 每帧同步（两个 bool 读 + 边沿 Enable/Disable，近零开销）：配置开且未挂载 → Enable()（幂等不重复 Patch）；
+            // 配置关且已挂载（战斗中关）→ Disable()（对称幂等）
+            if (SetOrderObserver.ShouldEnable(CombatBrain.Settings.Cps3RuntimeSettings.ObserverEnabled))
+            {
+                SetOrderObserver.Enable();
+            }
+            else if (SetOrderObserver.ShouldDisable(CombatBrain.Settings.Cps3RuntimeSettings.ObserverEnabled))
+            {
+                SetOrderObserver.Disable();
+            }
+
             // ATC-0 命令来源观测：逻辑拍起点（同拍覆盖链判定基准；只记录，不改命令）
             CommandProvenance.Instance.BeginLogicalTick(_elapsed);
 
@@ -470,7 +482,10 @@ namespace CombatBrain.Ai
             if (_cps2ObservationTimer <= 0f)
             {
                 _cps2ObservationTimer = 5f;
-                if (CombatBrain.Settings.Cps2PoCSettings.RouteBObservationEnabled)
+                // t30 repair：汇总门控与 ObserverEnabled 对齐（原仅 RouteBObservationEnabled——默认关且 MCM 未暴露，
+                //   用户开「命令来源观测」也无输出）；两开关任一开启即汇总（MCM 暴露的主开关=ObserverEnabled）
+                if (CombatBrain.Settings.Cps3RuntimeSettings.ObserverEnabled
+                    || CombatBrain.Settings.Cps2PoCSettings.RouteBObservationEnabled)
                 {
                     CombatLog.Log("[Cps2Observation] " + Cps2LeaseObserver.BuildSummary());
                 }

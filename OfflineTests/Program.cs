@@ -221,6 +221,9 @@ namespace OfflineTests
             Console.WriteLine("== CPS3 McmSwitches ==");
             TestCps3McmSwitches();
 
+            Console.WriteLine("== CPS3 ObservationHotswap ==");
+            TestCps3ObservationHotswap();
+
             Console.WriteLine("== ATC1 BattlePhaseFSM ==");
             TestBattlePhaseFSM();
 
@@ -3384,6 +3387,40 @@ namespace OfflineTests
             Check(!CombatBrain.Settings.Cps3RuntimeSettings.Enabled
                 && CombatBrain.Settings.Cps3RuntimeSettings.Mode == CombatBrain.Settings.Cps3Mode.A_NativeBaseline,
                 "cps3-mcm reset restores safe state");
+        }
+
+        // t30 repair（cps3-runtime-prep 观测热切缺陷）：Enable() 运行期热切同步判定（ShouldEnable/ShouldDisable 纯逻辑，
+        //  CombatAiMissionLogic.Tick 每帧调用——游戏内 MCM 开「命令来源观测」后开新战斗即挂 Harmony patch）+ 汇总门控对齐
+        private static void TestCps3ObservationHotswap()
+        {
+            // A) 默认安全态：配置关 → 不启用观测（无 Harmony patch 挂载）
+            Check(!SetOrderObserver.ShouldEnable(false),
+                "cps3-obs configured off -> no enable (安全态)");
+            Check(!CombatBrain.Settings.Cps3RuntimeSettings.ObserverEnabled
+                && !CombatBrain.Settings.Cps2PoCSettings.RouteBObservationEnabled,
+                "cps3-obs summary gated off by default (无 [Cps2Observation] 输出)");
+
+            // B) 配置开且未挂载 → 需启用（游戏内 MCM 开「命令来源观测」→ 新战斗 Tick 首部 Enable）
+            bool savedEnabled = SetOrderObserver.Enabled;
+            SetOrderObserver.Enabled = false; // 模拟未挂载
+            Check(SetOrderObserver.ShouldEnable(true),
+                "cps3-obs configured on + not mounted -> enable needed (热切)");
+
+            // C) 幂等：已挂载（Enabled=true）→ 不重复 Enable（不重复 Patch）
+            SetOrderObserver.Enabled = true; // 模拟已挂载
+            Check(!SetOrderObserver.ShouldEnable(true),
+                "cps3-obs already mounted -> no duplicate enable (幂等)");
+
+            // D) Disable 对称：配置关且已挂载（战斗中关）→ 需 Disable（幂等）
+            Check(SetOrderObserver.ShouldDisable(false),
+                "cps3-obs configured off + mounted -> disable needed (对称)");
+            Check(!SetOrderObserver.ShouldDisable(true),
+                "cps3-obs configured on -> no disable");
+
+            // E) 复位（不污染后续测试/生产语义）
+            SetOrderObserver.Enabled = savedEnabled;
+            Check(!SetOrderObserver.ShouldEnable(false) && !SetOrderObserver.ShouldDisable(false),
+                "cps3-obs restore safe state (不启用不 Disable)");
         }
 
         // ATC-1 战局阶段机（BattlePhaseFSM 纯逻辑）：五态全边界/最短驻留/同态不重播/Retreat 终态/早期伤亡不误进 Exploit

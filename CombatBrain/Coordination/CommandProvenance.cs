@@ -433,6 +433,23 @@ namespace CombatBrain.Coordination
             _counts[k] = c + 1;
         }
 
+        // t30 repair（cps3-runtime-prep 观测热切缺陷）：运行期观测同步判定（纯逻辑，可离线测）。
+        // 原缺陷：Enable() 仅 SubModule 启动一次性调用（gated by ObserverEnabled 启动时默认 false），
+        //   游戏内 MCM 开启后不生效（Harmony patch 未挂上，ExternalUnknown=0 实锤）。
+        // 修复：CombatAiMissionLogic.Tick 首部每帧调 ShouldEnable/ShouldDisable——配置开且未挂载 → Enable()
+        //   （幂等：Enable 内部 if(Enabled)return，重复调用不重复 Patch）；配置关且已挂载 → Disable()（对称）。
+        /// <summary>是否需要启用观测（配置开 && 未挂载；幂等——已挂载返回 false 不重复 Patch）。</summary>
+        public static bool ShouldEnable(bool configuredOn)
+        {
+            return configuredOn && !Enabled;
+        }
+
+        /// <summary>是否需要停用观测（配置关 && 已挂载；对称 Disable 幂等）。</summary>
+        public static bool ShouldDisable(bool configuredOn)
+        {
+            return !configuredOn && Enabled;
+        }
+
         /// <summary>启用观测（应用只读 Harmony patch）。版本签名不匹配 → 捕获 → fail-open + 启动日志（§4.2.8）。</summary>
         public static void Enable()
         {
