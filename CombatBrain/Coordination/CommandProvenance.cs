@@ -385,6 +385,13 @@ namespace CombatBrain.Coordination
             return "[SetOrderObserver] 观测已挂载（Harmony patch OK, id=" + HarmonyId + ", prefixes=" + prefixCount + "）";
         }
 
+        /// <summary>t36：HarmonyLib 运行时版本 + 0Harmony 加载来源诊断日志文本（与编译引用版本/模块对比；可离线断言格式）。</summary>
+        public static string BuildVersionLog(string version, string location)
+        {
+            return "[SetOrderObserver] HarmonyLib 运行时版本=" + version
+                + "；0Harmony 加载=" + location + "（csproj 引用 Bannerlord.Harmony 模块 0Harmony.dll）";
+        }
+
         private static readonly SetOrderObservation[] _ring = new SetOrderObservation[Capacity];
         private static int _head;
         private static int _count;
@@ -484,7 +491,10 @@ namespace CombatBrain.Coordination
         }
 
         // Harmony 只读观测挂载（CPS-0 §4.2 第1条）：不修改参数、不跳过原方法、不改变返回结果。
-        // 仅诊断观测；PatchAll 只扫描本嵌套类（本程序集唯一带 HarmonyPatch 的类）。
+        // t36 repair（0/3 挂载失败 BLOCKER）：PatchAll 程序集扫描静默失败（三 setter 零 patch 且无异常，
+        //   captain 实测日志「观测挂载异常：仅 0/3 target 有 prefix」）——改显式 Patch 逐个打三 setter，
+        //   不依赖 PatchAll 扫描；记录运行时 HarmonyLib 版本与 0Harmony 加载来源（csproj 引用 Bannerlord.Harmony
+        //   模块，运行时可能绑定其它模块/版本的 0Harmony.dll——游戏 Modules 多个 0Harmony.dll）。
         internal static class Patches
         {
             private static HarmonyLib.Harmony _harmony;
@@ -492,11 +502,37 @@ namespace CombatBrain.Coordination
             public static void Apply()
             {
                 if (_harmony != null) return;
-                _harmony = new HarmonyLib.Harmony(HarmonyId);
-                _harmony.PatchAll(typeof(Patches).Assembly); // 版本签名不匹配/无 target → 抛 → Enable 捕获 fail-open
-                // t34（cps3-observer-diagnostics）：挂载核验——三 target 各至少 1 个 prefix（GetPatchInfo 只读查询），
-                //   成功写唯一标识日志（幂等：Apply 仅 _harmony==null 时执行一次）；不足则写异常日志——
-                //   下次运行期采样可明确区分「patch 未挂上」vs「patch 挂上但原版未调 setter」
+                var harmony = new HarmonyLib.Harmony(HarmonyId);
+                try
+                {
+                    // 显式 Patch 三 setter（不依赖 PatchAll 程序集扫描——消除扫描静默失败路径）
+                    harmony.Patch(MethodOf(nameof(Formation.SetMovementOrder)),
+                        prefix: PrefixMethod(nameof(MovementPrefix)));
+                    harmony.Patch(MethodOf(nameof(Formation.SetFacingOrder)),
+                        prefix: PrefixMethod(nameof(FacingPrefix)));
+                    harmony.Patch(MethodOf(nameof(Formation.SetArrangementOrder)),
+                        prefix: PrefixMethod(nameof(ArrangementPrefix)));
+                }
+                catch (System.Exception)
+                {
+                    _harmony = null; // 允许下次重试；异常冒泡到 Enable catch → 「观测不可用（具体异常）」fail-open
+                    throw;
+                }
+                _harmony = harmony;
+
+                // t36：运行时 HarmonyLib 版本 + 0Harmony 加载来源诊断（与编译引用版本/模块对比）
+                string version = "unknown";
+                string location = "unknown";
+                try
+                {
+                    var asm = typeof(HarmonyLib.Harmony).Assembly;
+                    version = asm.GetName().Version != null ? asm.GetName().Version.ToString() : "unknown";
+                    location = asm.Location;
+                }
+                catch (System.Exception) { }
+                CombatLog.Log(BuildVersionLog(version, location));
+
+                // t34 核验：三 target 各至少 1 个 patch；成功写唯一标识日志（幂等），不足写异常日志
                 int prefixCount = CountVerifiedPrefixes();
                 if (prefixCount == 3)
                 {
@@ -516,7 +552,24 @@ namespace CombatBrain.Coordination
                 _harmony = null;
             }
 
-            // 核验三 setter 各至少 1 个 prefix（HarmonyLib.Harmony.GetPatchInfo 只读；公开方法反射非私有，反作弊闸守）
+            // 显式 Patch 辅助：目标方法反射（公开方法，非私有字段反射，反作弊闸守）
+            private static System.Reflection.MethodBase MethodOf(string methodName)
+            {
+                System.Reflection.MethodBase m = typeof(Formation).GetMethod(methodName);
+                if (m == null) throw new System.InvalidOperationException("SetOrderObserver 目标方法缺失: " + methodName);
+                return m;
+            }
+
+            // 显式 Patch 辅助：prefix 方法委托（本嵌套类私有静态方法）
+            private static HarmonyLib.HarmonyMethod PrefixMethod(string methodName)
+            {
+                System.Reflection.MethodInfo m = typeof(Patches).GetMethod(methodName,
+                    System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static);
+                if (m == null) throw new System.InvalidOperationException("SetOrderObserver prefix 方法缺失: " + methodName);
+                return new HarmonyLib.HarmonyMethod(m);
+            }
+
+            // 核验三 setter 各至少 1 个 patch（HarmonyLib.Harmony.GetPatchInfo 只读；公开方法反射非私有，反作弊闸守）
             private static int CountVerifiedPrefixes()
             {
                 int n = 0;
@@ -535,8 +588,10 @@ namespace CombatBrain.Coordination
                 return patches != null && patches.Owners != null && patches.Owners.Count > 0;
             }
 
-            [HarmonyLib.HarmonyPatch(typeof(Formation), nameof(Formation.SetMovementOrder))]
-            [HarmonyLib.HarmonyPrefix]
+            // t36：显式 Patch 目标（三 setter；诊断/测试共用方法名清单）
+            public static readonly string[] PatchTargetMethodNames =
+                { "SetMovementOrder", "SetFacingOrder", "SetArrangementOrder" };
+
             private static void MovementPrefix(Formation __instance, MovementOrder order)
             {
                 // 只读观测：不修改参数、不跳过原方法、不改变返回结果（§4.2 第1条）；
@@ -545,16 +600,12 @@ namespace CombatBrain.Coordination
                     (int)order.OrderType, 0);
             }
 
-            [HarmonyLib.HarmonyPatch(typeof(Formation), nameof(Formation.SetFacingOrder))]
-            [HarmonyLib.HarmonyPrefix]
             private static void FacingPrefix(Formation __instance, FacingOrder order)
             {
                 SetOrderObserver.Observe(__instance.Index, CommandDomain.Facing, CommandKind.Facing,
                     (int)order.OrderType, 0);
             }
 
-            [HarmonyLib.HarmonyPatch(typeof(Formation), nameof(Formation.SetArrangementOrder))]
-            [HarmonyLib.HarmonyPrefix]
             private static void ArrangementPrefix(Formation __instance, ArrangementOrder order)
             {
                 SetOrderObserver.Observe(__instance.Index, CommandDomain.Arrangement, CommandKind.Arrangement,

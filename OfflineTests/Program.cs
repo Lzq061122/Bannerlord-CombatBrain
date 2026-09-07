@@ -230,6 +230,9 @@ namespace OfflineTests
             Console.WriteLine("== CPS3 ObserverDiagnostics ==");
             TestCps3ObserverDiagnostics();
 
+            Console.WriteLine("== CPS3 HarmonyExplicitPatch ==");
+            TestCps3HarmonyExplicitPatch();
+
             Console.WriteLine("== ATC1 BattlePhaseFSM ==");
             TestBattlePhaseFSM();
 
@@ -3498,6 +3501,32 @@ namespace OfflineTests
             //    异常串为 Apply 内字面文本（代码审查级，0/3 场景由异常分支输出）
             Check(!SetOrderObserver.BuildMountLog(0).Contains("观测不可用"),
                 "cps3-diag mount log is success-only (失败沿用观测不可用路径)");
+        }
+
+        // t36 repair（Harmony 显式 Patch + 版本诊断）：PatchAll 扫描静默失败（0/3）根因修复——
+        // 显式 Patch 三 setter + 运行时 HarmonyLib 版本/0Harmony 加载来源诊断（游戏 Modules 11 份 0Harmony.dll）
+        private static void TestCps3HarmonyExplicitPatch()
+        {
+            // A) 显式 Patch 目标清单（三 setter，与核验/测试共用）
+            string[] targets = SetOrderObserver.Patches.PatchTargetMethodNames;
+            Check(targets.Length == 3 && targets[0] == "SetMovementOrder"
+                && targets[1] == "SetFacingOrder" && targets[2] == "SetArrangementOrder",
+                "cps3-harmony explicit patch targets 3 setters");
+
+            // B) 运行时 HarmonyLib 版本诊断日志格式（version + 0Harmony 加载来源，与编译引用对比）
+            string vlog = SetOrderObserver.BuildVersionLog("2.4.2.0", "E:\\...\\Bannerlord.Harmony\\bin\\Win64_Shipping_Client\\0Harmony.dll");
+            Check(vlog.StartsWith("[SetOrderObserver] HarmonyLib 运行时版本=")
+                && vlog.Contains("2.4.2.0") && vlog.Contains("0Harmony 加载=")
+                && vlog.Contains("Bannerlord.Harmony"),
+                "cps3-harmony version diagnostics log format (版本+加载来源)");
+
+            // C) 挂载成功日志沿用（t34）；幂等：Apply 仅 _harmony==null 一次（代码审查级，运行时路径）
+            Check(SetOrderObserver.BuildMountLog(3).Contains("prefixes=3"),
+                "cps3-harmony mount log prefixes=3 kept");
+
+            // D) 失败路径：显式 Patch 任一步抛异常 → Enable catch「观测不可用（具体异常）」fail-open（t3 保留）
+            Check(SetOrderObserver.BuildMountLog(0).StartsWith("[SetOrderObserver] 观测已挂载"),
+                "cps3-harmony mount log only success template (失败走异常分支)");
         }
 
         // ATC-1 战局阶段机（BattlePhaseFSM 纯逻辑）：五态全边界/最短驻留/同态不重播/Retreat 终态/早期伤亡不误进 Exploit
