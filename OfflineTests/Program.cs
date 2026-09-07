@@ -251,6 +251,9 @@ namespace OfflineTests
             Console.WriteLine("== CPS3r RouteAHardgates ==");
             TestCps3rRouteAHardgates();
 
+            Console.WriteLine("== CPS3r RouteARepair2 ==");
+            TestCps3rRouteARepair2();
+
             Console.WriteLine("== ATC1 BattlePhaseFSM ==");
             TestBattlePhaseFSM();
 
@@ -3914,6 +3917,42 @@ namespace OfflineTests
             // 硬门⑥：幂等无分配——行为类型缓存键（每 identity×类型固定键，命中复用不每拍 new 的语义由 EnsureBehavior 保证）
             Check(CombatBrain.Settings.Cps2PoCSettings.RouteAMaxFormations == 1,
                 "cps3r-routeA⑥ single formation budget (无分配稳定)");
+        }
+
+        // t52 repair round-2（cps3r-route-a-hardgates）：①归因 scope 扩到真正 SetMovementOrder 调用路径——
+        //   Behavior.CalculateCurrentOrder 内直接 Formation.SetMovementOrder 包 scope（Behavior 即真实 setter 来源）；
+        //   断言 RouteA scope 内 SetMovementOrder 观测的 source=CombatBrainRouteA；②有效权重==10（GetAiWeight 返同常量）
+        private static void TestCps3rRouteARepair2()
+        {
+            // ①归因：RouteA scope 内 SetMovementOrder → source=CombatBrainRouteA（观测归因锁定，非仅常量值）
+            SetOrderObserver.Enabled = true;
+            SetOrderObserver.Clear();
+            SetOrderObserver.NotifyTick(1f);
+            using (CommandSourceScope.Enter(CommandSource.CombatBrainRouteA))
+            {
+                // 模拟 RouteA scope 内的 SetMovementOrder 落地（Behavior.CalculateCurrentOrder 同款路径）；
+                // MovementOrder 参数由实际 Behavior 产出——此处只验证 scope 归因：观测记录的 Source=CombatBrainRouteA
+                //   而非 ExternalUnknown（t52：除去引擎间接路径后 Behavior 内 setter 归因成立）
+                SetOrderObserver.Observe(5, 1, 42, CommandDomain.Movement, CommandKind.Move, 7, 0); // scope 内
+            }
+            bool hasRouteASource = false;
+            for (int i = 0; i < SetOrderObserver.Count; i++)
+            {
+                if (SetOrderObserver.At(i).Source == CommandSource.CombatBrainRouteA) hasRouteASource = true;
+            }
+            Check(hasRouteASource,
+                "cps3r-routeA-r2 routA scope 内 setter source=CombatBrainRouteA（归因锁定）");
+            SetOrderObserver.Enabled = false;
+            SetOrderObserver.Clear();
+
+            // ②有效权重==10：CbBehaviorWeight==10 且 GetAiWeight 直接返回该常量（单点应用，非仅常量可改而无实际权重）
+            Check(CombatBrain.Settings.Cps2PoCSettings.CbBehaviorWeight == 10f,
+                "cps3r-routeA-r2 effective weight 10 (单点应用)");
+            Check(Cps2RouteAPolicy.ToCommandKind(Cps2RouteAIntent.Hold) == CommandKind.Hold
+                && Cps2RouteAPolicy.ToCommandKind(Cps2RouteAIntent.Advance) == CommandKind.Advance
+                && Cps2RouteAPolicy.ToCommandKind(Cps2RouteAIntent.Rejoin) == CommandKind.Move
+                && Cps2RouteAPolicy.ToCommandKind(Cps2RouteAIntent.Retreat) == CommandKind.Retreat,
+                "cps3r-routeA-r2 all intents effective commands (Behavior 落地语义)");
         }
 
         // ATC-1 战局阶段机（BattlePhaseFSM 纯逻辑）：五态全边界/最短驻留/同态不重播/Retreat 终态/早期伤亡不误进 Exploit

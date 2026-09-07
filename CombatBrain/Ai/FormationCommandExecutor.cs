@@ -642,7 +642,10 @@ namespace CombatBrain.Ai
     // ---- 路线 A 自定义 BehaviorComponent 子类（Movement 域；继承 TaleWorlds.MountAndBlade.BehaviorComponent，
     //     构造 base(formation)（BehaviorComponent.cs:76），override protected abstract GetAiWeight（:154）
     //     + protected virtual CalculateCurrentOrder（:172）设 CurrentOrder（protected set，:65）） ----
-    // t50：GetAiWeight 返回单值 w（硬门⑤消除 100 放大）；落地 CurrentOrder 在 RouteA scope 内（硬门④归因）
+    // t50：GetAiWeight 返回单值 w（硬门⑤消除 100 放大）；落地 SetMovementOrder 在 RouteA scope 内（硬门④归因）。
+    // t52 repair：scope 不再只包 CurrentOrder——Behavior 是引擎驱动，引擎在 Behavior 返回后才有真正 SetMovementOrder
+    //   （Formation.FormationAI.Tick），不在 Behavior scope 内 → 归因仍是 ExternalUnknown。改为在 CalculateCurrentOrder
+    //   内直接 Formation.SetMovementOrder 并包 scope（Behavior 即真实 setter 来源，消除间接路径归因盲区）。
 
     internal sealed class CbHoldBehavior : BehaviorComponent
     {
@@ -650,8 +653,9 @@ namespace CombatBrain.Ai
         protected override float GetAiWeight() { return CombatBrain.Settings.Cps2PoCSettings.CbBehaviorWeight; }
         protected override void CalculateCurrentOrder()
         {
+            CurrentOrder = MovementOrder.MovementOrderStop;
             using (CommandSourceScope.Enter(CommandSource.CombatBrainRouteA))
-                CurrentOrder = MovementOrder.MovementOrderStop;
+                Formation.SetMovementOrder(CurrentOrder);
         }
     }
 
@@ -661,8 +665,9 @@ namespace CombatBrain.Ai
         protected override float GetAiWeight() { return CombatBrain.Settings.Cps2PoCSettings.CbBehaviorWeight; }
         protected override void CalculateCurrentOrder()
         {
+            CurrentOrder = MovementOrder.MovementOrderAdvance;
             using (CommandSourceScope.Enter(CommandSource.CombatBrainRouteA))
-                CurrentOrder = MovementOrder.MovementOrderAdvance;
+                Formation.SetMovementOrder(CurrentOrder);
         }
     }
 
@@ -676,8 +681,9 @@ namespace CombatBrain.Ai
         {
             WorldPosition wp = Formation.CachedMedianPosition;
             wp.SetVec2(new Vec2(_targetX, _targetY));
+            CurrentOrder = MovementOrder.MovementOrderMove(wp); // Rejoin：向 MainBody 移动（§5.2）
             using (CommandSourceScope.Enter(CommandSource.CombatBrainRouteA))
-                CurrentOrder = MovementOrder.MovementOrderMove(wp); // Rejoin：向 MainBody 移动（§5.2）
+                Formation.SetMovementOrder(CurrentOrder);
         }
     }
 
@@ -687,8 +693,9 @@ namespace CombatBrain.Ai
         protected override float GetAiWeight() { return CombatBrain.Settings.Cps2PoCSettings.CbBehaviorWeight; }
         protected override void CalculateCurrentOrder()
         {
+            CurrentOrder = MovementOrder.MovementOrderRetreat;
             using (CommandSourceScope.Enter(CommandSource.CombatBrainRouteA))
-                CurrentOrder = MovementOrder.MovementOrderRetreat;
+                Formation.SetMovementOrder(CurrentOrder);
         }
     }
 }
