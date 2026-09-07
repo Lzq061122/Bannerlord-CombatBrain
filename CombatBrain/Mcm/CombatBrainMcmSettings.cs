@@ -66,5 +66,46 @@ namespace CombatBrain.Mcm
             get => CombatBrainSettings.FormationControlLeasePocEnabled;
             set => CombatBrainSettings.FormationControlLeasePocEnabled = value;
         }
+
+        // CPS-3 运行期验证四字段（cps3-mcm-switches，t24 的 Cps3RuntimeSettings 游戏内热切）：
+        // get/set 直读写 Cps3RuntimeSettings 静态字段（无拷贝失步，MCM UI 改动即时生效，RequireRestart=false）。
+        // 默认安全态：Enabled=false/ObserverEnabled=false/ShadowLog=false/Mode=A（零行为变化）。
+        // 用途：用户游戏内切换 A/B/C/D 四组采样模式（§7.1），避免每次改源码重编译。
+        [SettingPropertyBool("CPS 验证模式启用", RequireRestart = false,
+            HintText = "开=按下方模式运行验证采样；关=现状（仲裁共存，零行为变化）")]
+        [SettingPropertyGroup("CPS 验证")]
+        public bool Cps3ValidationEnabled
+        {
+            get => CombatBrain.Settings.Cps3RuntimeSettings.Enabled;
+            set => CombatBrain.Settings.Cps3RuntimeSettings.Enabled = value;
+        }
+
+        // Mode 枚举下拉（MCMv5 SettingPropertyDropdown：属性类型为枚举时自动生成选项，四值 A/B/C/D）
+        [SettingPropertyDropdown("CPS 验证模式", RequireRestart = false,
+            HintText = "A=Native 全关对照（三域 CB 命令全关）/ B=Shadow（决策运行不落地）/ C=仲裁共存（原版仍控）/ D=单域排他（需租约 PoC 开）")]
+        [SettingPropertyGroup("CPS 验证")]
+        public CombatBrain.Settings.Cps3Mode Cps3ValidationMode
+        {
+            get => CombatBrain.Settings.Cps3RuntimeSettings.Mode;
+            set => CombatBrain.Settings.Cps3RuntimeSettings.Mode = value;
+        }
+
+        [SettingPropertyBool("命令来源观测", RequireRestart = false,
+            HintText = "开=启用 setter 级命令来源观测（三域 ExternalUnknown 计数，日志供 CPS-3 分析）；关=近零开销")]
+        [SettingPropertyGroup("CPS 验证")]
+        public bool Cps3ObserverEnabled
+        {
+            get => CombatBrain.Settings.Cps3RuntimeSettings.ObserverEnabled;
+            set => CombatBrain.Settings.Cps3RuntimeSettings.ObserverEnabled = value;
+        }
+
+        [SettingPropertyBool("Shadow 决策日志", RequireRestart = false,
+            HintText = "B 模式下输出 WouldApply 决策日志（供决策 vs 落地对比）")]
+        [SettingPropertyGroup("CPS 验证")]
+        public bool Cps3ShadowLogEnabled
+        {
+            get => CombatBrain.Settings.Cps3RuntimeSettings.ShadowWouldApplyLogEnabled;
+            set => CombatBrain.Settings.Cps3RuntimeSettings.ShadowWouldApplyLogEnabled = value;
+        }
     }
 }

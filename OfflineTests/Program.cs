@@ -218,6 +218,9 @@ namespace OfflineTests
             Console.WriteLine("== CPS3 RuntimePrep ==");
             TestCps3RuntimePrep();
 
+            Console.WriteLine("== CPS3 McmSwitches ==");
+            TestCps3McmSwitches();
+
             Console.WriteLine("== ATC1 BattlePhaseFSM ==");
             TestBattlePhaseFSM();
 
@@ -3322,6 +3325,45 @@ namespace OfflineTests
                 "cps3-runtime shadow decision runs without applying (决策不落地)");
             Check(CommandProvenance.Instance.Count == beforeShadow + 1,
                 "cps3-runtime shadow decision recorded (供 WouldApply 对比)");
+        }
+
+        // CPS-3 MCM 开关（cps3-mcm-switches）：Cps3RuntimeSettings 四字段的 MCM 薄转发目标——
+        // get/set 直读写本静态字段（CombatBrainMcmSettings 属性一行转发，代码审查级）；
+        // 默认安全态 + 模式枚举下拉 A/B/C/D 四值 + get/set roundtrip
+        private static void TestCps3McmSwitches()
+        {
+            // A) 默认安全态（MCM 映射源字段：Enabled=false/Observer=false/Shadow=false/Mode=A 零行为变化）
+            Check(!CombatBrain.Settings.Cps3RuntimeSettings.Enabled
+                && !CombatBrain.Settings.Cps3RuntimeSettings.ObserverEnabled
+                && !CombatBrain.Settings.Cps3RuntimeSettings.ShadowWouldApplyLogEnabled
+                && CombatBrain.Settings.Cps3RuntimeSettings.Mode == CombatBrain.Settings.Cps3Mode.A_NativeBaseline,
+                "cps3-mcm defaults safe (Enabled=false/Observer=false/Shadow=false/Mode=A)");
+
+            // B) Mode 枚举下拉四值（MCMv5 SettingPropertyDropdown 枚举属性自动生成选项 A/B/C/D）
+            Check((int)CombatBrain.Settings.Cps3Mode.A_NativeBaseline == 0
+                && (int)CombatBrain.Settings.Cps3Mode.B_ShadowOnly == 1
+                && (int)CombatBrain.Settings.Cps3Mode.C_ArbiterCoexist == 2
+                && (int)CombatBrain.Settings.Cps3Mode.D_ExclusivePoc == 3,
+                "cps3-mcm mode dropdown four values A/B/C/D");
+
+            // C) MCM get/set 直读写（字段即存储）：Mode 与开关 roundtrip
+            CombatBrain.Settings.Cps3RuntimeSettings.Mode = CombatBrain.Settings.Cps3Mode.D_ExclusivePoc;
+            CombatBrain.Settings.Cps3RuntimeSettings.Enabled = true;
+            CombatBrain.Settings.Cps3RuntimeSettings.ObserverEnabled = true;
+            CombatBrain.Settings.Cps3RuntimeSettings.ShadowWouldApplyLogEnabled = true;
+            Check(CombatBrain.Settings.Cps3RuntimeSettings.Mode == CombatBrain.Settings.Cps3Mode.D_ExclusivePoc
+                && CombatBrain.Settings.Cps3RuntimeSettings.Enabled
+                && CombatBrain.Settings.Cps3RuntimeSettings.ObserverEnabled
+                && CombatBrain.Settings.Cps3RuntimeSettings.ShadowWouldApplyLogEnabled,
+                "cps3-mcm get/set roundtrip (MCM 属性薄转发目标)");
+            // 复位安全态（不污染后续测试/生产语义）
+            CombatBrain.Settings.Cps3RuntimeSettings.Mode = CombatBrain.Settings.Cps3Mode.A_NativeBaseline;
+            CombatBrain.Settings.Cps3RuntimeSettings.Enabled = false;
+            CombatBrain.Settings.Cps3RuntimeSettings.ObserverEnabled = false;
+            CombatBrain.Settings.Cps3RuntimeSettings.ShadowWouldApplyLogEnabled = false;
+            Check(!CombatBrain.Settings.Cps3RuntimeSettings.Enabled
+                && CombatBrain.Settings.Cps3RuntimeSettings.Mode == CombatBrain.Settings.Cps3Mode.A_NativeBaseline,
+                "cps3-mcm reset restores safe state");
         }
 
         // ATC-1 战局阶段机（BattlePhaseFSM 纯逻辑）：五态全边界/最短驻留/同态不重播/Retreat 终态/早期伤亡不误进 Exploit
