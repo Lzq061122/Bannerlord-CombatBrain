@@ -209,6 +209,9 @@ namespace OfflineTests
             Console.WriteLine("== CPS1 RepairChargeTarget ==");
             TestCps1RepairChargeTarget();
 
+            Console.WriteLine("== CPS2 LeaseIntegration ==");
+            TestCps2LeaseIntegration();
+
             Console.WriteLine("== ATC1 BattlePhaseFSM ==");
             TestBattlePhaseFSM();
 
@@ -2787,15 +2790,18 @@ namespace OfflineTests
             Check(!wroteJ && skipLog.Contains(FormationCommandExecutor.WriteSkipReason.NotFieldBattle),
                 "cps1-exec non-field-battle fail-open");
 
-            // K) 租约复核未过 fail-open（LeaseOk=false → 不写）
+            // K) 租约复核未过 fail-open（LeaseOk=false + 租约域提案 → 不写；cps2-lease-integration 语义：
+            //    LeaseNotOk 仅约束 Source=FormationControlLease 提案，其它域提案不受租约闸误拒）
             var leaseBad = new FormationCommandExecutor.FormationStatus
             { Valid = true, PlayerOwned = false, FieldBattle = true, LeaseOk = false };
+            var wLease = FormationCommandProposal.EmergencyProposal(1, 9, 9, 10f, CommandSource.FormationControlLease,
+                CommandKind.Hold, CommandDomain.Movement, 0, -1, 0f, 0f); // 租约域 fallback 提案
             skipLog.Clear();
-            bool wroteK = FormationCommandExecutor.ExecuteWinner(wI, leaseBad, default(FormationCommandExecutor.LastDomainWrite),
+            bool wroteK = FormationCommandExecutor.ExecuteWinner(wLease, leaseBad, default(FormationCommandExecutor.LastDomainWrite),
                 FormationCommandExecutor.PositionHysteresisMeters, FormationCommandExecutor.FacingHysteresisRadians,
                 p => { sinkCalls++; }, skipLog);
             Check(!wroteK && skipLog.Contains(FormationCommandExecutor.WriteSkipReason.LeaseNotOk),
-                "cps1-exec lease check fail-open");
+                "cps1-exec lease check fail-open (租约域提案+LeaseOk=false 不写)");
 
             // L) 首次写入（上拍未写 → 直接写，不受迟滞影响）
             var lastEmpty = default(FormationCommandExecutor.LastDomainWrite); // Written=false
@@ -3098,6 +3104,70 @@ namespace OfflineTests
             Check(wCh.Kind == CommandKind.Charge && wCh.TargetId == 9
                 && FormationCommandExecutor.ShouldUseChargeToTarget(wCh),
                 "cps1-repair-charge executor consumes TargetId (定向冲锋端到端)");
+        }
+
+        // CPS-2 租约整合（cps2-lease-integration）：租约 fallback 迁移进唯一执行器——
+        // P80 Emergency 层提案（§6.2.1 Lease 只决定所有权边沿）+ LeaseOk 接入真实租约状态
+        // （§6.2.4 仅约束租约域提案）+ 单来源行为等价 + P80 胜 P70
+        private static void TestCps2LeaseIntegration()
+        {
+            // A) EmergencyProposal 工厂契约（P80/FormationControlLease）
+            var ep = FormationCommandProposal.EmergencyProposal(1, 2, 2, 10f, CommandSource.FormationControlLease,
+                CommandKind.Move, CommandDomain.Movement, 0, -1, 55f, 66f);
+            Check(ep.Source == CommandSource.FormationControlLease && ep.Kind == CommandKind.Move
+                && ep.Priority == CommandPriority.Emergency && ep.TargetX == 55f && ep.TargetY == 66f,
+                "cps2-lease emergency proposal factory (P80/FormationControlLease/Rejoin 目标)");
+
+            // B) 租约 fallback Rejoin 单来源行为等价：胜者=Move + MainBody 目标保持（原 MovementOrderMove 语义）
+            var psR = new List<FormationCommandProposal>();
+            psR.Add(FormationCommandProposal.EmergencyProposal(1, 2, 2, 10f, CommandSource.FormationControlLease,
+                CommandKind.Move, CommandDomain.Movement, 0, -1, 55f, 66f));
+            var rR = Arb(1, 2, psR, ExternalOwnerKind.None, 10f);
+            var mR = R(rR, CommandDomain.Movement);
+            Check(mR.HasWinner && mR.Winner.Source == CommandSource.FormationControlLease
+                && mR.Winner.Kind == CommandKind.Move && mR.Winner.TargetX == 55f && mR.Winner.TargetY == 66f,
+                "cps2-lease rejoin single-source winner = move + MainBody (等价)");
+
+            // C) Hold fallback 单来源：胜者=Hold（原 MovementOrderStop 语义）
+            var psH = new List<FormationCommandProposal>();
+            psH.Add(FormationCommandProposal.EmergencyProposal(1, 2, 2, 10f, CommandSource.FormationControlLease,
+                CommandKind.Hold, CommandDomain.Movement, 0, -1, 0f, 0f));
+            var rH = Arb(1, 2, psH, ExternalOwnerKind.None, 10f);
+            Check(R(rH, CommandDomain.Movement).Winner.Kind == CommandKind.Hold,
+                "cps2-lease hold single-source winner = hold (等价)");
+
+            // D) P80 租约 fallback 胜 P70 防御（同域冲突：租约 Hold vs Brace Stop → 租约 P80 胜，§3.2 显式优先级）
+            var psMix = new List<FormationCommandProposal>();
+            psMix.Add(FormationCommandProposal.DefenseProposal(1, 3, 3, 10f, CommandSource.Brace,
+                CommandKind.Hold, CommandDomain.Movement, -1, 0f, 0f));
+            psMix.Add(FormationCommandProposal.EmergencyProposal(1, 3, 3, 10f, CommandSource.FormationControlLease,
+                CommandKind.Hold, CommandDomain.Movement, 0, -1, 0f, 0f));
+            var rMix = Arb(1, 3, psMix, ExternalOwnerKind.None, 10f);
+            Check(R(rMix, CommandDomain.Movement).Winner.Source == CommandSource.FormationControlLease,
+                "cps2-lease fallback beats defense (P80 > P70, 租约期间执行权优先)");
+
+            // E) §6.2.4：LeaseOk 只约束租约域提案——非租约域提案在 LeaseOk=false 编队正常执行（防误拒回归）
+            var okSink = 0;
+            var okStatusNoLease = new FormationCommandExecutor.FormationStatus
+            { Valid = true, PlayerOwned = false, FieldBattle = true, LeaseOk = false };
+            var defP = FormationCommandProposal.DefenseProposal(1, 4, 4, 10f, CommandSource.Protect,
+                CommandKind.Move, CommandDomain.Movement, -1, 20f, 20f);
+            var wroteDef = FormationCommandExecutor.ExecuteWinner(defP, okStatusNoLease,
+                default(FormationCommandExecutor.LastDomainWrite),
+                FormationCommandExecutor.PositionHysteresisMeters, FormationCommandExecutor.FacingHysteresisRadians,
+                p => { okSink++; }, null);
+            Check(wroteDef && okSink == 1,
+                "cps2-lease non-lease proposal executes without lease (LeaseOk 仅约束租约域)");
+
+            // F) 租约域提案 + LeaseOk=true → 执行成功（Acquire 后执行器落地）
+            var leaseOkStatus = new FormationCommandExecutor.FormationStatus
+            { Valid = true, PlayerOwned = false, FieldBattle = true, LeaseOk = true };
+            int leaseSink = 0;
+            var wroteLease = FormationCommandExecutor.ExecuteWinner(ep, leaseOkStatus,
+                default(FormationCommandExecutor.LastDomainWrite),
+                FormationCommandExecutor.PositionHysteresisMeters, FormationCommandExecutor.FacingHysteresisRadians,
+                p => { leaseSink++; }, null);
+            Check(wroteLease && leaseSink == 1, "cps2-lease lease proposal executes with active lease (LeaseOk=true)");
         }
 
         // ATC-1 战局阶段机（BattlePhaseFSM 纯逻辑）：五态全边界/最短驻留/同态不重播/Retreat 终态/早期伤亡不误进 Exploit

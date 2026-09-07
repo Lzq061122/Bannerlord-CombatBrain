@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Runtime.CompilerServices;
 using TaleWorlds.Core;
 using TaleWorlds.Engine;
 using TaleWorlds.Library;
@@ -38,14 +39,28 @@ namespace CombatBrain.Ai
 
         public int ActiveCount { get { return _manager.ActiveCount; } }
 
+        // cps2-lease-integration：§6.2.7 租约持有期间 ExternalUnknown 写入观测（路线 B 失败判定输入；
+        //   仅诊断观测开启时有数据——SetOrderObserver.Enabled=false 时跳过，运行期 cps3 开启）
+        private long _lastExternalWriteCount;
+
         /// <summary>读 ATC-4 per-formation CommitmentDecision（null=无有效决策）。</summary>
         public delegate CommitmentDecision? CommitmentReader(Team team, Formation formation);
+
+        /// <summary>
+        /// cps2-lease-integration：租约活跃判定（执行器 FormationStatus.LeaseOk 实际接入——
+        ///   租约域 fallback 提案仅在活跃租约编队上被执行）。公开只读，零副作用。
+        /// </summary>
+        public bool HasActiveLease(int teamIndex, int formationIndex)
+        {
+            return _manager.GetLease(teamIndex, formationIndex) != null;
+        }
 
         /// <summary>
         /// 驱动：每帧 watchdog（轻量，无租约 O(1) 零分配，复用缓冲）+ 0.5s producer 拍（默认关闭时零动作）。
         /// </summary>
         public void Tick(Mission mission, float dt, float now,
-            CommitmentReader commitmentReader, System.Func<Team, ArmyContextSnapshot> armyReader)
+            CommitmentReader commitmentReader, System.Func<Team, ArmyContextSnapshot> armyReader,
+            List<FormationCommandProposal> proposals)
         {
             // 每帧 watchdog：只遍历活跃租约，TTL 到期安全释放（不下战术命令）；复用缓冲（OPT 零分配）
             _manager.UpdateWatchdog(now, _expiredBuffer);
@@ -70,6 +85,9 @@ namespace CombatBrain.Ai
                 return;
             }
             if (mission == null || !IsFieldBattle(mission)) return; // 非普通单机野战 fail-open（租约由立即条件释放）
+
+            // §6.2.7：租约期间 ExternalUnknown 写入记录（路线 B 失败判定输入；诊断观测关闭时跳过）
+            LogExternalWrites();
 
             // 5s 汇总日志（§7.2：只在 5s 汇总/边沿/异常输出，禁每帧刷）
             _logTimer -= FormationControlLeaseManager.DecisionCadenceSeconds;
@@ -106,7 +124,7 @@ namespace CombatBrain.Ai
                             team.TeamIndex, candidate.Index, candidate.IsAIControlled ? 1 : 0));
                         continue;
                     }
-                    EvaluateFormation(mission, team, candidate, now, commitmentReader, armyReader);
+                    EvaluateFormation(mission, team, candidate, now, commitmentReader, armyReader, proposals);
                 }
             }
         }
@@ -124,8 +142,26 @@ namespace CombatBrain.Ai
             _loggedRelease.Clear();
         }
 
+        // §6.2.7：租约持有期间 ExternalUnknown 写入记录（SetOrderObserver 观测计数增量；
+        //   诊断关闭（Enabled=false）无法观测 → 跳过——cps3 运行期开启后生效，路线 B 失败判定输入）
+        private void LogExternalWrites()
+        {
+            if (!SetOrderObserver.Enabled) return;
+            long extNow = SetOrderObserver.CountFor(CommandDomain.Movement, CommandSource.ExternalUnknown)
+                + SetOrderObserver.CountFor(CommandDomain.Facing, CommandSource.ExternalUnknown)
+                + SetOrderObserver.CountFor(CommandDomain.Arrangement, CommandSource.ExternalUnknown);
+            if (extNow > _lastExternalWriteCount)
+            {
+                CombatLog.Log(string.Format(
+                    "[ControlLease] external write detected delta={0} total={1} (§6.2.7 路线 B 判定输入)",
+                    extNow - _lastExternalWriteCount, extNow));
+            }
+            _lastExternalWriteCount = extNow;
+        }
+
         private void EvaluateFormation(Mission mission, Team team, Formation f, float now,
-            CommitmentReader commitmentReader, System.Func<Team, ArmyContextSnapshot> armyReader)
+            CommitmentReader commitmentReader, System.Func<Team, ArmyContextSnapshot> armyReader,
+            List<FormationCommandProposal> proposals)
         {
             if (commitmentReader == null || armyReader == null) return;
             CommitmentDecision? decision = commitmentReader(team, f);
@@ -182,7 +218,7 @@ namespace CombatBrain.Ai
             LeaseDecision outD = _manager.Update(input);
             if (outD.AcquireNow)
             {
-                Acquire(mission, team, f, outD, army, distToMain, now);
+                Acquire(mission, team, f, outD, army, distToMain, now, proposals);
             }
             else if (outD.ReleaseNow)
             {
@@ -191,39 +227,38 @@ namespace CombatBrain.Ai
             // Renew 无需动作（TTL 已延长）；不刷日志
         }
 
-        // Acquire 边沿：SetControlledByAI(false) + 安全命令变化沿 SetOrder（防每帧刷）
+        // Acquire 边沿：SetControlledByAI(false) + fallback 提交提案（cps2-lease-integration：
+        // 命令写入迁移到唯一执行器——§6.2.1 Lease 只决定所有权边沿；§6.2.3 先验最终方案再关 AI，
+        // 随后由执行器落地三域；本层不再旁路 SetMovementOrder）
         private void Acquire(Mission mission, Team team, Formation f, LeaseDecision d, ArmyContextSnapshot army,
-            float distToMain, float now)
+            float distToMain, float now, List<FormationCommandProposal> proposals)
         {
             FormationControlLease lease = _manager.GetLease(team.TeamIndex, f.Index);
             if (lease == null || !lease.WasAIControlledBeforeAcquire) return; // 所有权安全：原本非 AI 控制不夺权
             f.SetControlledByAI(false); // v1.4.8 已核实签名 SetControlledByAI(bool, bool=false)
 
-            // 安全命令变化沿：仅当 fallback 目标变化时下发（防每帧高频 SetOrder）
+            // 安全命令变化沿：仅当 fallback 目标变化时提交提案（防每帧高频；执行器迟滞再兜底）
             long key = FormationControlLeaseManager.Key(team.TeamIndex, f.Index);
             string fb = d.Fallback.ToString();
             string last;
             if (!_lastFallback.TryGetValue(key, out last) || last != fb)
             {
                 _lastFallback[key] = fb;
+                int identity = RuntimeHelpers.GetHashCode(f);
                 if (d.Fallback == SafeFallbackKind.Rejoin && army.MainBodyStrength > 0)
                 {
-                    // Rejoin：向合法 MainBody 点 Move（§5.2：不用未知敌位置构造 Rejoin）
-                    WorldPosition wp = f.CachedMedianPosition;
-                    wp.SetVec2(new Vec2(army.MainBodyX, army.MainBodyY));
-                    if (wp.GetNavMesh() != UIntPtr.Zero && mission.IsPositionInsideBoundaries(wp.AsVec2))
-                    {
-                        CommandProvenance.Instance.Record(f.Index, CommandSource.FormationControlLease,
-                            CommandKind.Move, 0, -1, army.MainBodyX, army.MainBodyY); // §7 provenance
-                        f.SetMovementOrder(MovementOrder.MovementOrderMove(wp));
-                    }
+                    // Rejoin：向合法 MainBody 点 Move（§5.2：不用未知敌位置构造 Rejoin）；
+                    // P80 Emergency 层提案（安全降级语义，§3.2）——唯一执行器落地（目标=MainBody）
+                    proposals.Add(FormationCommandProposal.EmergencyProposal(team.TeamIndex, f.Index, identity, now,
+                        CommandSource.FormationControlLease, CommandKind.Move, CommandDomain.Movement,
+                        0, -1, army.MainBodyX, army.MainBodyY));
                 }
                 else if (d.Fallback == SafeFallbackKind.Hold)
                 {
                     // Hold：安全带内保持阵位（§5.2 允许；非「对所有 Denied 统一 Stop」——仅 Hold+安全带内）
-                    CommandProvenance.Instance.Record(f.Index, CommandSource.FormationControlLease,
-                        CommandKind.Hold, 0);
-                    f.SetMovementOrder(MovementOrder.MovementOrderStop);
+                    proposals.Add(FormationCommandProposal.EmergencyProposal(team.TeamIndex, f.Index, identity, now,
+                        CommandSource.FormationControlLease, CommandKind.Hold, CommandDomain.Movement,
+                        0, -1, 0f, 0f));
                 }
             }
 

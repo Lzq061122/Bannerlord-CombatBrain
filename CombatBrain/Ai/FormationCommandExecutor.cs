@@ -111,7 +111,14 @@ namespace CombatBrain.Ai
             if (!status.Valid) { if (skipLog != null) skipLog.Add(WriteSkipReason.FormationInvalid); return false; }
             if (status.PlayerOwned) { if (skipLog != null) skipLog.Add(WriteSkipReason.PlayerOwned); return false; }
             if (!status.FieldBattle) { if (skipLog != null) skipLog.Add(WriteSkipReason.NotFieldBattle); return false; }
-            if (!status.LeaseOk) { if (skipLog != null) skipLog.Add(WriteSkipReason.LeaseNotOk); return false; }
+            // cps2-lease-integration：租约域提案（Source=FormationControlLease，Acquire 后 fallback）需租约活跃
+            //   （status.LeaseOk=HasActiveLease 实际判定）；其它域提案不受租约约束——§6.2.4 租约期间所有 CB 提案
+            //   仍经仲裁（租约 fallback P80 通常胜出），普通编队防御/专业提案不得被 LeaseOk=false 误拒。
+            if (winner.Source == CommandSource.FormationControlLease && !status.LeaseOk)
+            {
+                if (skipLog != null) skipLog.Add(WriteSkipReason.LeaseNotOk);
+                return false;
+            }
             // §5.3.4 相同语义/迟滞
             WriteSkipReason reason;
             if (!ShouldWrite(last, winner, positionHysteresis, facingHysteresis, out reason))
@@ -141,7 +148,10 @@ namespace CombatBrain.Ai
         /// 每协调拍主流程（§5.3.1/§5.3.2）：调用方已收集本拍全部提案（producers 之后）→ 本方法
         /// 统一 Resolve → 再执行。无提案 → 近 O(1) 空转（零 SetOrder、零分配）。
         /// </summary>
-        public void Tick(Mission mission, float now, List<FormationCommandProposal> proposals)
+        /// <param name="leaseActiveReader">cps2-lease-integration：租约活跃判定（teamId, formationId → 是否持有活跃租约；
+        ///   null=无租约判定（LeaseOk 默认 true，t7 挂点兼容））。</param>
+        public void Tick(Mission mission, float now, List<FormationCommandProposal> proposals,
+            System.Func<int, int, bool> leaseActiveReader = null)
         {
             if (mission == null || proposals == null || proposals.Count == 0) return; // 近 O(1)
 
@@ -186,7 +196,7 @@ namespace CombatBrain.Ai
                 }
                 _identityHashes[key] = hash;
 
-                // 状态复核输入（§8.1 玩家所有权 / §8.2 任务类型）
+                // 状态复核输入（§8.1 玩家所有权 / §8.2 任务类型 / §6.2 租约状态）
                 var status = new FormationStatus
                 {
                     Valid = f.CountOfUnits > 0,
@@ -194,7 +204,8 @@ namespace CombatBrain.Ai
                         || f.IsPlayerTroopInFormation
                         || (CombatBrainSettings.PlayerTeamExemptionEnabled && team.IsPlayerTeam),
                     FieldBattle = mission.IsFieldBattle && !mission.IsSiegeBattle && !mission.IsSallyOutBattle,
-                    LeaseOk = true // 本卡挂点默认 true（无租约域提案；迁移卡接入真实租约判定）
+                    // cps2-lease-integration：租约活跃实际判定（t7 挂点默认 true 改为真实；null=兼容无判定）
+                    LeaseOk = leaseActiveReader == null || leaseActiveReader(teamId, formationId)
                 };
 
                 // 统一 Resolve（每域唯一胜者）

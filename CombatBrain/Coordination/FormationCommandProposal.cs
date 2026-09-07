@@ -92,6 +92,14 @@ namespace CombatBrain.Coordination
                 CommandPriority.Specialist, reasonCode, targetId, tx, ty);
         }
 
+        /// <summary>P80 Emergency/Survival/贴身脱困层提案（§3.2；cps2-lease-integration：租约 fallback 安全降级）。</summary>
+        public static FormationCommandProposal EmergencyProposal(int teamId, int formationId, int identity, float now,
+            CommandSource source, CommandKind kind, CommandDomain domain, int reasonCode, int targetId, float tx, float ty)
+        {
+            return Build(teamId, formationId, identity, now, source, kind, domain,
+                CommandPriority.Emergency, reasonCode, targetId, tx, ty);
+        }
+
         /// <summary>P40 表现修正层提案（FormationTactics/FacingCorrection，§3.2）。</summary>
         public static FormationCommandProposal PresentationProposal(int teamId, int formationId, int identity, float now,
             CommandSource source, CommandKind kind, CommandDomain domain, int reasonCode, int targetId, float tx, float ty)

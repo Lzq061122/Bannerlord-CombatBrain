@@ -383,7 +383,8 @@ namespace CombatBrain.Ai
                 {
                     TeamState st;
                     return _states.TryGetValue(team.TeamIndex, out st) ? st.Army : ArmyContextSnapshot.None;
-                });
+                },
+                _commandProposals); // cps2-lease-integration：租约 fallback 提案提交（唯一执行器落地）
             _bench.EndSection("lease");
 
             _bench.BeginSection("rangedpos");
@@ -448,9 +449,10 @@ namespace CombatBrain.Ai
             _bench.EndSection("block");
 
             // CPS-1 唯一执行器挂点（§5.3.2 执行器位于本拍所有 proposal producer 之后）：
-            // 先收集（_commandProposals，迁移卡填充）→ 统一 Resolve → 再执行；当前为空列表近 O(1) 空转。
+            // 先收集（_commandProposals，迁移卡填充）→ 统一 Resolve → 再执行；
+            // cps2-lease-integration：LeaseOk 接入真实租约状态（_leaseGlue.HasActiveLease）
             _bench.BeginSection("executor");
-            _commandExecutor.Tick(mission, _elapsed, _commandProposals);
+            _commandExecutor.Tick(mission, _elapsed, _commandProposals, _leaseGlue.HasActiveLease);
             _bench.EndSection("executor");
 
             _bench.EndFrame(dt, agentCount);
