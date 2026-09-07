@@ -85,6 +85,11 @@ namespace CombatBrain.Mcm
         //   无下拉可点）——改 MCMv5 正确类型 Dropdown<string>（MCM.Common，实证 BetterPikesSettings.cs:28），
         //   SelectedIndex（0..3）↔ Cps3RuntimeSettings.Mode（Cps3Mode A..D）双向转换（Cps3RuntimeSettings
         //   ModeFromSelectedIndex/SelectedIndexFromMode 纯逻辑）；默认 SelectedIndex=0=A 安全态；RequireRestart=false 热切。
+        // t32 repair（下拉切换失效）：MCMv5 对 Dropdown 引用类型可能直接改实例 SelectedIndex 而不调 setter
+        //   （实证 BetterPikes/TAOM 用自动属性）——旧 getter 每次强制实例=Mode 对应值导致选 B 后 UI 恒显示 A。
+        //   现 getter 改反向同步：读实例当前 SelectedIndex，与 Mode 不一致才写回 Mode（实例优先，覆盖直接改实例
+        //   路径；一致时不写防漂移）；setter 路径保留（value.SelectedIndex → ModeFromSelectedIndex → Mode）。
+        //   双路径（直接改实例 / 调 setter）都保证 Mode 最终正确。
         private static readonly string[] Cps3ModeNames =
             { "A: Native 全关", "B: Shadow", "C: 仲裁共存", "D: 单域排他" };
         private readonly Dropdown<string> _cps3ModeDropdown = new Dropdown<string>(Cps3ModeNames, 0);
@@ -96,14 +101,18 @@ namespace CombatBrain.Mcm
         {
             get
             {
-                // get 同步：外部集中 static 改动 Mode 也能在 UI 反映（SelectedIndex 跟随枚举）
-                _cps3ModeDropdown.SelectedIndex = CombatBrain.Settings.Cps3RuntimeSettings.SelectedIndexFromMode(
-                    CombatBrain.Settings.Cps3RuntimeSettings.Mode);
+                // get 反向同步（t32）：MCM 直接改实例 SelectedIndex（不调 setter）→ 不一致时写回 Mode（实例优先）；
+                //   一致时不写（防漂移/防外部 static Mode 被实例旧值覆盖）
+                if (CombatBrain.Settings.Cps3RuntimeSettings.NeedsModeSync(_cps3ModeDropdown.SelectedIndex))
+                {
+                    CombatBrain.Settings.Cps3RuntimeSettings.Mode =
+                        CombatBrain.Settings.Cps3RuntimeSettings.ModeFromSelectedIndex(_cps3ModeDropdown.SelectedIndex);
+                }
                 return _cps3ModeDropdown;
             }
             set
             {
-                // set 同步：SelectedIndex ↔ Cps3Mode（0..3 ↔ A..D；越界钳制安全态）
+                // set 路径（MCM 调 setter）：value.SelectedIndex → ModeFromSelectedIndex → Mode（越界钳制安全态）
                 CombatBrain.Settings.Cps3RuntimeSettings.Mode = CombatBrain.Settings.Cps3RuntimeSettings.ModeFromSelectedIndex(
                     value.SelectedIndex);
                 _cps3ModeDropdown.SelectedIndex = value.SelectedIndex;

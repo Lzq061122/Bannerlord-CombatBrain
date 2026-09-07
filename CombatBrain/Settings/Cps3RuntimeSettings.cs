@@ -63,5 +63,15 @@ namespace CombatBrain.Settings
             int i = (int)mode;
             return i >= 0 && i <= 3 ? i : 0;
         }
+
+        // t32 repair（cps3-mcm-switches 下拉切换失效）：MCMv5 对 Dropdown 引用类型可能直接改实例 SelectedIndex
+        //   而不调 setter（实证 BetterPikes/TAOM 用自动属性）——旧 getter 每次强制实例=Mode 对应值导致
+        //   选 B 后 UI 恒显示 A。修复：getter 反向同步（读实例 SelectedIndex，与 Mode 不一致才写回 Mode——
+        //   实例优先，覆盖 MCM 直接改实例路径；一致时不写防漂移）。
+        /// <summary>实例 SelectedIndex 与当前 Mode 是否不一致（不一致 → getter 需反向同步写回 Mode）。</summary>
+        public static bool NeedsModeSync(int instanceSelectedIndex)
+        {
+            return ModeFromSelectedIndex(instanceSelectedIndex) != Mode;
+        }
     }
 }

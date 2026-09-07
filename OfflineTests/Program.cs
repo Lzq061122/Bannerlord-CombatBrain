@@ -224,6 +224,9 @@ namespace OfflineTests
             Console.WriteLine("== CPS3 ObservationHotswap ==");
             TestCps3ObservationHotswap();
 
+            Console.WriteLine("== CPS3 ModeSync ==");
+            TestCps3ModeSync();
+
             Console.WriteLine("== ATC1 BattlePhaseFSM ==");
             TestBattlePhaseFSM();
 
@@ -3421,6 +3424,48 @@ namespace OfflineTests
             SetOrderObserver.Enabled = savedEnabled;
             Check(!SetOrderObserver.ShouldEnable(false) && !SetOrderObserver.ShouldDisable(false),
                 "cps3-obs restore safe state (不启用不 Disable)");
+        }
+
+        // t32 repair（cps3-mcm-switches 下拉切换失效）：MCMv5 可能直接改 Dropdown 实例 SelectedIndex 不调 setter——
+        // getter 反向同步判定（NeedsModeSync：实例与 Mode 不一致才写回 Mode；一致不写防漂移）+ setter 双路径
+        private static void TestCps3ModeSync()
+        {
+            // A) MCM 直接改实例 SelectedIndex=1（不调 setter）且 Mode=A → 需反向同步（选 B 后 Mode 应更新为 B）
+            CombatBrain.Settings.Cps3RuntimeSettings.Mode = CombatBrain.Settings.Cps3Mode.A_NativeBaseline;
+            Check(CombatBrain.Settings.Cps3RuntimeSettings.NeedsModeSync(1),
+                "cps3-mode-sync instance 1 vs mode A -> needs sync (MCM 直接改实例路径)");
+            // 模拟 getter 反向同步（实例优先）：Mode = ModeFromSelectedIndex(1) = B
+            CombatBrain.Settings.Cps3RuntimeSettings.Mode = CombatBrain.Settings.Cps3RuntimeSettings.ModeFromSelectedIndex(1);
+            Check(CombatBrain.Settings.Cps3RuntimeSettings.Mode == CombatBrain.Settings.Cps3Mode.B_ShadowOnly,
+                "cps3-mode-sync reverse sync writes mode B (选 B 生效)");
+            Check(!CombatBrain.Settings.Cps3RuntimeSettings.NeedsModeSync(1),
+                "cps3-mode-sync instance 1 == mode B -> no sync (防漂移)");
+
+            // B) 默认一致无写：实例 0 且 Mode=A → 不同步（UI 显示 A 正确）
+            CombatBrain.Settings.Cps3RuntimeSettings.Mode = CombatBrain.Settings.Cps3Mode.A_NativeBaseline;
+            Check(!CombatBrain.Settings.Cps3RuntimeSettings.NeedsModeSync(0),
+                "cps3-mode-sync default instance 0 == mode A -> no write");
+
+            // C) 其它一致组合：实例 2==Mode C / 实例 3==Mode D → 不写
+            CombatBrain.Settings.Cps3RuntimeSettings.Mode = CombatBrain.Settings.Cps3Mode.C_ArbiterCoexist;
+            Check(!CombatBrain.Settings.Cps3RuntimeSettings.NeedsModeSync(2), "cps3-mode-sync instance 2 == mode C");
+            CombatBrain.Settings.Cps3RuntimeSettings.Mode = CombatBrain.Settings.Cps3Mode.D_ExclusivePoc;
+            Check(!CombatBrain.Settings.Cps3RuntimeSettings.NeedsModeSync(3), "cps3-mode-sync instance 3 == mode D");
+
+            // D) 实例 3(D) 而 Mode=A → 需同步（MCM 选 D 生效路径）
+            CombatBrain.Settings.Cps3RuntimeSettings.Mode = CombatBrain.Settings.Cps3Mode.A_NativeBaseline;
+            Check(CombatBrain.Settings.Cps3RuntimeSettings.NeedsModeSync(3),
+                "cps3-mode-sync instance 3 vs mode A -> needs sync (选 D 生效)");
+
+            // E) 越界实例钳制一致：实例 9 → ModeFromSelectedIndex=A → 与 Mode=A 一致不写（安全态钳制保持）
+            Check(!CombatBrain.Settings.Cps3RuntimeSettings.NeedsModeSync(9),
+                "cps3-mode-sync out-of-range instance clamps to A -> no sync");
+
+            // F) setter 路径保持（t28 roundtrip 已覆盖）；复位安全态
+            CombatBrain.Settings.Cps3RuntimeSettings.Mode = CombatBrain.Settings.Cps3Mode.A_NativeBaseline;
+            Check(CombatBrain.Settings.Cps3RuntimeSettings.Mode == CombatBrain.Settings.Cps3Mode.A_NativeBaseline
+                && !CombatBrain.Settings.Cps3RuntimeSettings.NeedsModeSync(0),
+                "cps3-mode-sync reset restores safe state");
         }
 
         // ATC-1 战局阶段机（BattlePhaseFSM 纯逻辑）：五态全边界/最短驻留/同态不重播/Retreat 终态/早期伤亡不误进 Exploit
