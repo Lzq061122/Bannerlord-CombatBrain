@@ -136,5 +136,17 @@ namespace CombatBrain.Mcm
             get => CombatBrain.Settings.Cps3RuntimeSettings.ShadowWouldApplyLogEnabled;
             set => CombatBrain.Settings.Cps3RuntimeSettings.ShadowWouldApplyLogEnabled = value;
         }
+
+        // t44（cps3r-force-lease-candidate）：ForceLease 受控注入（D 组排他样本采集）——
+        // 仅 D_ExclusivePoc 模式生效；只稳定制造前置条件（注入 Denied+EmergencyOverride 决策），
+        // 走真实 Acquire/唯一执行器/TTL/Release/setter 观测全链路；默认关=零常态行为变化
+        [SettingPropertyBool("ForceLease 候选注入（D 组样本）", RequireRestart = false,
+            HintText = "D 模式下为单支非玩家 AI 编队注入许可决策稳定制造排他样本（走真实 Acquire 全链路）；默认关")]
+        [SettingPropertyGroup("CPS 验证")]
+        public bool Cps3ForceLeaseCandidateEnabled
+        {
+            get => CombatBrain.Settings.Cps3RuntimeSettings.ForceLeaseCandidateEnabled;
+            set => CombatBrain.Settings.Cps3RuntimeSettings.ForceLeaseCandidateEnabled = value;
+        }
     }
 }

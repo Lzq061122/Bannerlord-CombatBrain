@@ -43,6 +43,12 @@ namespace CombatBrain.Ai
         //   仅诊断观测开启时有数据——SetOrderObserver.Enabled=false 时跳过，运行期 cps3 开启）
         private long _lastExternalWriteCount;
 
+        // t44（cps3r-force-lease-candidate）：受控注入状态（默认关；每场限时触发一次；TTL 到期真实 Release）
+        private bool _forceArmed;          // 候选已武装（本场一次）
+        private Formation _forceCandidate; // 候选编队（单支非玩家 AI 编队）
+        private float _forceArmedAt;       // 武装时刻（限时）
+        private bool _forceTriggered;      // 已触发（本场不再重复武装）
+
         /// <summary>读 ATC-4 per-formation CommitmentDecision（null=无有效决策）。</summary>
         public delegate CommitmentDecision? CommitmentReader(Team team, Formation formation);
 
@@ -88,6 +94,17 @@ namespace CombatBrain.Ai
 
             // §6.2.7：租约期间 ExternalUnknown 写入记录（路线 B 失败判定输入；诊断观测关闭时跳过）
             LogExternalWrites();
+
+            // t44（cps3r-force-lease-candidate）：受控注入取 D 组排他样本——仅 D 模式 + 开关开启 + 无活跃租约；
+            // 只稳定制造前置条件（注入 Denied+EmergencyOverride 决策），仍走真实 Acquire/唯一执行器/TTL/Release/
+            // setter 观测全链路，不伪造最终结果（NoSafeFallback 时真实不 Acquire）
+            if (CombatBrain.Settings.Cps3RuntimeSettings.ForceLeaseCandidateEnabled
+                && CombatBrain.Settings.Cps3RuntimeSettings.Enabled
+                && CombatBrain.Settings.Cps3RuntimeSettings.ForceLeaseActive(CombatBrain.Settings.Cps3RuntimeSettings.Mode)
+                && _manager.ActiveCount == 0)
+            {
+                TickForceCandidate(mission, now, armyReader, proposals);
+            }
 
             // 5s 汇总日志（§7.2：只在 5s 汇总/边沿/异常输出，禁每帧刷）
             _logTimer -= FormationControlLeaseManager.DecisionCadenceSeconds;
@@ -140,6 +157,10 @@ namespace CombatBrain.Ai
             _lastFallback.Clear();
             _loggedAcquire.Clear();
             _loggedRelease.Clear();
+            // t44：ForceLease 状态跨 Mission 重置（防残留）
+            _forceArmed = false;
+            _forceTriggered = false;
+            _forceCandidate = null;
         }
 
         // §6.2.7：租约持有期间 ExternalUnknown 写入记录（SetOrderObserver 观测计数增量；
@@ -157,6 +178,75 @@ namespace CombatBrain.Ai
                     extNow - _lastExternalWriteCount, extNow));
             }
             _lastExternalWriteCount = extNow;
+        }
+
+        // t44（cps3r-force-lease-candidate）：受控注入状态机——武装（选单支非玩家 AI 编队）→ 下一拍触发
+        // （注入 Denied+EmergencyOverride 决策，走真实 ResolveFallback/Update/Acquire 全链路）→ 超时放弃
+        private void TickForceCandidate(Mission mission, float now,
+            System.Func<Team, ArmyContextSnapshot> armyReader, List<FormationCommandProposal> proposals)
+        {
+            if (!_forceArmed)
+            {
+                // 武装：选单支不含玩家兵员的 AI Formation（非玩家队/PlayerOwner/HasPlayerControlledTroop/IsPlayerTroopInFormation 全排除）
+                foreach (Team team in mission.Teams)
+                {
+                    if (team == null || !team.MBTeam.IsValid) continue;
+                    if (CombatBrainSettings.PlayerTeamExemptionEnabled && team.IsPlayerTeam) continue; // 非玩家队
+                    Formation chosen = null;
+                    float chosenDist = float.MaxValue;
+                    ArmyContextSnapshot army = armyReader != null ? armyReader(team) : ArmyContextSnapshot.None;
+                    foreach (Formation f in team.FormationsIncludingEmpty)
+                    {
+                        if (f == null || f.CountOfUnits == 0 || f.QuerySystem == null) continue;
+                        bool playerOwned = f.PlayerOwner != null || f.HasPlayerControlledTroop || f.IsPlayerTroopInFormation;
+                        if (!CombatBrain.Settings.Cps3RuntimeSettings.IsForceLeaseCandidate(false, playerOwned, f.IsAIControlled)) continue;
+                        // 优先远离 MainBody（>30m，Denied→Rejoin 可 Acquire）；否则第一支合格
+                        Vec2 fc = TeamGeometry.GetFormationPosition(f, TeamPosKind.CachedMedian);
+                        float d = VecMath.Dist(fc.x, fc.y, army.MainBodyX, army.MainBodyY);
+                        if (d > FormationControlLeaseManager.SafeFallbackMeters) { chosen = f; break; } // 直接选可 Acquire 的
+                        if (chosen == null) { chosen = f; chosenDist = d; }
+                    }
+                    if (chosen != null)
+                    {
+                        _forceCandidate = chosen;
+                        _forceArmed = true;
+                        _forceArmedAt = now;
+                        _forceTriggered = false;
+                        CombatLog.Log(string.Format(
+                            "[ControlLease] force-candidate armed team={0} f={1}（限时触发，D 组排他样本）",
+                            team.TeamIndex, chosen.Index));
+                        return;
+                    }
+                }
+                return; // 无候选本拍
+            }
+            if (_forceTriggered) return; // 本场已触发一次
+            if (now - _forceArmedAt > CombatBrain.Settings.Cps3RuntimeSettings.ForceArmTimeoutSeconds)
+            {
+                _forceArmed = false; // 超时未 Acquire（真实失败），放弃武装
+                CombatLog.Log("[ControlLease] force-candidate abort（限时内未 Acquire，NoSafeFallback/安全校验不过）");
+                return;
+            }
+            if (_forceCandidate == null || _forceCandidate.Team == null) { _forceArmed = false; return; }
+            // 触发：注入 ForceLease 决策（Denied+EmergencyOverride）→ 真实 EvaluateFormation 全链路（真实 army 含 MainBody）
+            TriggerForceCandidate(mission, _forceCandidate.Team, _forceCandidate, now, armyReader, proposals);
+            _forceTriggered = true;
+        }
+
+        // ForceLease 决策注入：Denied+EmergencyOverride——只稳定制造「许可决策」前置条件，
+        // ResolveFallback/Update/Acquire/提案/执行器/TTL/Release/setter 观测全走真实路径
+        private void TriggerForceCandidate(Mission mission, Team team, Formation f, float now,
+            System.Func<Team, ArmyContextSnapshot> armyReader, List<FormationCommandProposal> proposals)
+        {
+            var forced = new CommitmentDecision
+            {
+                Permission = CommitmentPermission.Denied,
+                Reasons = CommitmentReason.EmergencyOverride
+            };
+            CombatLog.Log(string.Format(
+                "[ControlLease] force-candidate trigger team={0} f={1}（注入 Denied+EmergencyOverride，走真实 Acquire 链路）",
+                team.TeamIndex, f.Index));
+            EvaluateFormation(mission, team, f, now, (t, fo) => forced, armyReader, proposals);
         }
 
         private void EvaluateFormation(Mission mission, Team team, Formation f, float now,

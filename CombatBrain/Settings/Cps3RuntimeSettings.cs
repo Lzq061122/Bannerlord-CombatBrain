@@ -28,6 +28,27 @@ namespace CombatBrain.Settings
         // B Shadow only 的 WouldApply 决策日志门控（默认关；开启后每次胜者决策输出 [Cps3Shadow] 行）
         public static bool ShadowWouldApplyLogEnabled = false;
 
+        // t44（cps3r-force-lease-candidate）：ForceLeaseCandidate 受控注入（P1，D 组排他样本采集）——
+        // 仅诊断注入工具，默认关=零常态行为变化；仅 D_ExclusivePoc 模式生效（ForceLeaseActive）；
+        // 只稳定制造前置条件（注入 Denied+EmergencyOverride 决策），仍走真实 Acquire/唯一执行器/TTL/Release/
+        // setter 观测全链路，不伪造最终结果（NoSafeFallback 时真实不 Acquire）。
+        public static bool ForceLeaseCandidateEnabled = false;
+
+        /// <summary>ForceLease 武装/触发超时（秒；超时未 Acquire 放弃武装）。</summary>
+        public const float ForceArmTimeoutSeconds = 30f;
+
+        /// <summary>t44：ForceLease 候选资格（纯逻辑）：非玩家队 + 不含玩家兵员 + AI 控制。</summary>
+        public static bool IsForceLeaseCandidate(bool isPlayerTeam, bool playerOwned, bool aiControlled)
+        {
+            return !isPlayerTeam && !playerOwned && aiControlled;
+        }
+
+        /// <summary>t44：ForceLease 仅 D_ExclusivePoc 模式生效（组合矩阵：D 模式启用时 ForceLease 才允许）。</summary>
+        public static bool ForceLeaseActive(Cps3Mode mode)
+        {
+            return mode == Cps3Mode.D_ExclusivePoc;
+        }
+
         /// <summary>
         /// 组合矩阵校验（C/D 与既有 ATC-5R PoC 开关 + Cps2PoCSettings.RouteAEnabled 语义不冲突，§7.1）：
         ///   C ArbiterCoexist：租约 PoC 关（原版仍控）+ 路线 A 关（避免同层对刷）

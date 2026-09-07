@@ -242,6 +242,9 @@ namespace OfflineTests
             Console.WriteLine("== CPS3r RepairPrefixStage ==");
             TestCps3rRepairPrefixStage();
 
+            Console.WriteLine("== CPS3r ForceLeaseCandidate ==");
+            TestCps3rForceLeaseCandidate();
+
             Console.WriteLine("== ATC1 BattlePhaseFSM ==");
             TestBattlePhaseFSM();
 
@@ -3722,6 +3725,61 @@ namespace OfflineTests
                 "cps3r-stage no baseline -> no replace (误标不写基准)");
 
             SetOrderObserver.Enabled = false;
+        }
+
+        // t44（cps3r-force-lease-candidate）：ForceLease 受控注入——开关默认关、候选资格（单支非玩家 AI 编队）、
+        // 仅 D 模式生效（组合矩阵）、走真实 Acquire 全链路（ResolveFallback 真实判定不伪造最终结果）
+        private static void TestCps3rForceLeaseCandidate()
+        {
+            // A) 开关默认关（零常态行为变化）+ 限时超时常量
+            Check(!CombatBrain.Settings.Cps3RuntimeSettings.ForceLeaseCandidateEnabled,
+                "cps3r-force default off (零常态行为)");
+            Check(CombatBrain.Settings.Cps3RuntimeSettings.ForceArmTimeoutSeconds == 30f,
+                "cps3r-force arm timeout 30s (限时)");
+
+            // B) 候选资格（单支非玩家 AI 编队：非玩家队 + 无玩家兵员 + AI 控制）
+            Check(CombatBrain.Settings.Cps3RuntimeSettings.IsForceLeaseCandidate(false, false, true),
+                "cps3r-force eligible (非玩家队/无玩家兵员/AI)");
+            Check(!CombatBrain.Settings.Cps3RuntimeSettings.IsForceLeaseCandidate(true, false, true),
+                "cps3r-force player team excluded");
+            Check(!CombatBrain.Settings.Cps3RuntimeSettings.IsForceLeaseCandidate(false, true, true),
+                "cps3r-force player-owned formation excluded");
+            Check(!CombatBrain.Settings.Cps3RuntimeSettings.IsForceLeaseCandidate(false, false, false),
+                "cps3r-force non-AI excluded");
+
+            // C) 组合矩阵：仅 D_ExclusivePoc 生效
+            Check(CombatBrain.Settings.Cps3RuntimeSettings.ForceLeaseActive(
+                CombatBrain.Settings.Cps3Mode.D_ExclusivePoc),
+                "cps3r-force active only in D mode");
+            Check(!CombatBrain.Settings.Cps3RuntimeSettings.ForceLeaseActive(
+                CombatBrain.Settings.Cps3Mode.C_ArbiterCoexist)
+                && !CombatBrain.Settings.Cps3RuntimeSettings.ForceLeaseActive(
+                    CombatBrain.Settings.Cps3Mode.A_NativeBaseline)
+                && !CombatBrain.Settings.Cps3RuntimeSettings.ForceLeaseActive(
+                    CombatBrain.Settings.Cps3Mode.B_ShadowOnly),
+                "cps3r-force inactive outside D mode");
+
+            // D) 真实 Acquire 路径复用：ForceLease 决策（Denied+EmergencyOverride）→ ResolveFallback 真实判定
+            //    （不伪造：MainBodyStrength=0 → NoSafeFallback 不 Acquire；dist>30 且 MainBody 有效 → Rejoin）
+            var armyNoMain = new ArmyContextSnapshot(); // MainBodyStrength=0（default）
+            Check(FormationControlLeaseManager.ResolveFallback(CommitmentPermission.Denied, armyNoMain, 50f)
+                == SafeFallbackKind.NoSafeFallback,
+                "cps3r-force no mainbody -> NoSafeFallback (真实不 Acquire)");
+            var armyMain = new ArmyContextSnapshot { MainBodyStrength = 100, MainBodyX = 0f, MainBodyY = 0f };
+            Check(FormationControlLeaseManager.ResolveFallback(CommitmentPermission.Denied, armyMain, 50f)
+                == SafeFallbackKind.Rejoin,
+                "cps3r-force denied+far -> Rejoin (真实 Acquire 前置)");
+            Check(FormationControlLeaseManager.ResolveFallback(CommitmentPermission.Denied, armyMain, 10f)
+                == SafeFallbackKind.NoSafeFallback,
+                "cps3r-force denied+safe zone -> NoSafeFallback (不伪造)");
+
+            // E) MCM 开关目标默认关 + roundtrip（Cps3ForceLeaseCandidateEnabled 薄转发）
+            Check(!CombatBrain.Settings.Cps3RuntimeSettings.ForceLeaseCandidateEnabled,
+                "cps3r-force mcm target default off");
+            CombatBrain.Settings.Cps3RuntimeSettings.ForceLeaseCandidateEnabled = true;
+            Check(CombatBrain.Settings.Cps3RuntimeSettings.ForceLeaseCandidateEnabled,
+                "cps3r-force mcm target roundtrip");
+            CombatBrain.Settings.Cps3RuntimeSettings.ForceLeaseCandidateEnabled = false;
         }
 
         // ATC-1 战局阶段机（BattlePhaseFSM 纯逻辑）：五态全边界/最短驻留/同态不重播/Retreat 终态/早期伤亡不误进 Exploit
