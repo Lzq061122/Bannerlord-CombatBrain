@@ -94,4 +94,88 @@ namespace CombatBrain.Coordination
             return false;
         }
     }
+
+    // CPS-2 路线 A PoC（cps2-ownership-poc，§6.1/t20 研究）——纯逻辑判定，零 TaleWorlds 依赖可离线测。
+    // 结论（t20）：Movement 域 Hold/Advance/Rejoin/Retreat 可用自定义 BehaviorComponent + per-Formation
+    //   权重表达（FormationAI.AddAiBehavior/SetBehaviorWeight 公开 API）；Facing/Arrangement 不经 Behavior；
+    //   冲突行为降权而非删除（FindBestBehavior 按 GetAIWeight()×WeightFactor 取 max，FormationAI.cs:179）；
+    //   玩家接管天然恢复（FormationAI.cs:245/286 !IsAIControlled 不写）；拆分/增援会 ResetBehaviorWeights
+    //   （TacticComponent.cs:455-456）→ 权重重设路径=每拍幂等 Apply（GetBehavior<T> 查重 + SetBehaviorWeight）。
+    /// <summary>路线 A 意图（Movement 域表达目标）。</summary>
+    public enum Cps2RouteAIntent
+    {
+        None = 0,
+        Hold = 1,     // 站定（MovementOrderStop）
+        Advance = 2,  // 推进（MovementOrderAdvance）
+        Rejoin = 3,   // 回主力（MovementOrderMove 向 MainBody）
+        Retreat = 4   // 撤退（MovementOrderRetreat）
+    }
+
+    public static class Cps2RouteAPolicy
+    {
+        /// <summary>意图 → 命令语义（Behavior.CalculateCurrentOrder 产出对应 MovementOrder）。</summary>
+        public static CommandKind ToCommandKind(Cps2RouteAIntent intent)
+        {
+            switch (intent)
+            {
+                case Cps2RouteAIntent.Hold: return CommandKind.Hold;
+                case Cps2RouteAIntent.Advance: return CommandKind.Advance;
+                case Cps2RouteAIntent.Rejoin: return CommandKind.Move;
+                case Cps2RouteAIntent.Retreat: return CommandKind.Retreat;
+                default: return CommandKind.None;
+            }
+        }
+
+        /// <summary>F2 意图 → 路线 A 意图（PoC 映射；Attack/Flank/Harass/Pursue→Advance、Reform/Defend→Hold、
+        ///   Retreat→Retreat、ProtectArcher/BraceFormation→Advance——仅 Movement 域表达，Facing/Arrangement 不经 Behavior）。</summary>
+        public static Cps2RouteAIntent MapIntent(IntentType intent)
+        {
+            switch (intent)
+            {
+                case IntentType.Retreat: return Cps2RouteAIntent.Retreat;
+                case IntentType.Reform:
+                case IntentType.Defend: return Cps2RouteAIntent.Hold;
+                default: return Cps2RouteAIntent.Advance; // Attack/Flank/Harass/Pursue/ProtectArcher/BraceFormation
+            }
+        }
+
+        /// <summary>冲突降权表（t20 Q2：降权而非删除）：返回与目标意图冲突的 CB 意图集（CB 域内互斥——
+        ///   当前意图 Behavior 权重 10、其余 CB Behavior 权重 0；原版冲突行为降权由运行期按表 SetBehaviorWeight(0f)）。</summary>
+        public static Cps2RouteAIntent[] ConflictingIntents(Cps2RouteAIntent intent)
+        {
+            switch (intent)
+            {
+                case Cps2RouteAIntent.Hold:
+                    return new[] { Cps2RouteAIntent.Advance, Cps2RouteAIntent.Rejoin, Cps2RouteAIntent.Retreat };
+                case Cps2RouteAIntent.Advance:
+                    return new[] { Cps2RouteAIntent.Hold, Cps2RouteAIntent.Retreat };
+                case Cps2RouteAIntent.Rejoin:
+                    return new[] { Cps2RouteAIntent.Advance, Cps2RouteAIntent.Retreat };
+                case Cps2RouteAIntent.Retreat:
+                    return new[] { Cps2RouteAIntent.Advance, Cps2RouteAIntent.Hold };
+                default:
+                    return new Cps2RouteAIntent[0];
+            }
+        }
+
+        /// <summary>玩家接管天然恢复（FormationAI.cs:245/286：!IsAIControlled → 不 tick 不写）；false 时不设权重。</summary>
+        public static bool ShouldApplyWeights(bool isAiControlled)
+        {
+            return isAiControlled;
+        }
+
+        /// <summary>拆分/增援后权重重设路径（TacticComponent.cs:455-456 拆分会 ResetBehaviorWeights）：
+        ///   人数变化=编队结构变化信号 → 下拍幂等 Apply 重设（生命周期钩子存在，PoC 用每拍幂等覆盖）。</summary>
+        public static bool ShouldReapplyAfterReset(int prevCount, int newCount)
+        {
+            return prevCount > 0 && newCount > 0 && newCount != prevCount;
+        }
+
+        /// <summary>AddAiBehavior 幂等判定（FormationAI.cs:133 直接 Add 非幂等；GetBehavior&lt;T&gt; 查重后
+        ///   已注册则不重复 Add——FormationAI.cs:138 GetBehavior 存在）。</summary>
+        public static bool NeedsAddBehavior(bool alreadyRegistered)
+        {
+            return !alreadyRegistered;
+        }
+    }
 }

@@ -395,4 +395,143 @@ namespace CombatBrain.Ai
             }
         }
     }
+
+    // CPS-2 路线 A PoC 胶水（cps2-ownership-poc，§6.1/t20 研究）——默认关闭安全态。
+    // 机制：自定义 BehaviorComponent 表达 Movement 域 Hold/Advance/Rejoin/Retreat，经公开 API
+    //   FormationAI.AddAiBehavior（FormationAI.cs:133）/SetBehaviorWeight<T>（FormationAI.cs:120）挂载；
+    //   权重法竞争（FindBestBehavior max(GetAIWeight()×WeightFactor)，FormationAI.cs:179）——
+    //   CB 权重 10 > 原版默认 0.2~1.0，意图胜出无需全量降权；冲突降权表（Cps2RouteAPolicy.ConflictingIntents）
+    //   供运行期对具体原版类型 SetBehaviorWeight(0f)（降权而非删除，§6.1）。
+    // 约束（§6.1 禁止项）：不 ClearTacticOptions 重建、不替换 TeamAI、不复制第三方实现（RBM/OF 仅借鉴架构）。
+    // 仅 Movement 域（Behavior 只写 MovementOrder；Facing/Arrangement 不经 Behavior——t20 结论）。
+    // 安全：玩家接管天然恢复（FormationAI.cs:245/286 !IsAIControlled 停写）；每拍幂等 Apply
+    //   （GetBehavior<T> 查重 + AddAiBehavior + SetBehaviorWeight）覆盖拆分/增援重置。
+    // PoC 开关默认关闭（Cps2PoCSettings.RouteAEnabled=false）→ Apply 零 AddAiBehavior/SetBehaviorWeight 调用。
+    public static class CbRouteAPoC
+    {
+        /// <summary>
+        /// 每拍/每 0.5s 幂等 Apply：对候选编队按意图挂载/更新 CB Behavior 权重。
+        /// 默认关闭零调用（安全态）；CPS-3 运行期验证开启。
+        /// </summary>
+        public static void Apply(Mission mission, System.Func<Team, Cps2RouteAIntent> intentReader,
+            System.Func<Team, Vec2> mainBodyReader)
+        {
+            if (!CombatBrain.Settings.Cps2PoCSettings.RouteAEnabled) return; // 安全态：零调用
+            if (mission == null || intentReader == null) return;
+            foreach (Team team in mission.Teams)
+            {
+                if (team == null || !team.MBTeam.IsValid) continue;
+                Cps2RouteAIntent intent = intentReader(team);
+                Vec2 mainBody = mainBodyReader != null ? mainBodyReader(team) : Vec2.Zero;
+                foreach (Formation f in team.FormationsIncludingEmpty)
+                {
+                    if (f == null || f.CountOfUnits == 0 || f.QuerySystem == null) continue;
+                    ApplyFormation(f, intent, mainBody);
+                }
+            }
+        }
+
+        // 单编队：玩家接管检查 → 目标 Behavior 挂载（幂等）→ 权重设 CB 值 → 其余 CB Behavior 权重 0（域内互斥）
+        private static void ApplyFormation(Formation f, Cps2RouteAIntent intent, Vec2 mainBody)
+        {
+            if (!Cps2RouteAPolicy.ShouldApplyWeights(f.IsAIControlled)) return; // 玩家接管天然恢复（FormationAI.cs:245/286）
+            switch (intent)
+            {
+                case Cps2RouteAIntent.Hold:
+                    EnsureBehavior(f, new CbHoldBehavior(f));
+                    f.AI.SetBehaviorWeight<CbHoldBehavior>(CombatBrain.Settings.Cps2PoCSettings.CbBehaviorWeight);
+                    break;
+                case Cps2RouteAIntent.Rejoin:
+                    CbRejoinBehavior rj = f.AI.GetBehavior<CbRejoinBehavior>();
+                    if (rj == null)
+                    {
+                        rj = new CbRejoinBehavior(f);
+                        f.AI.AddAiBehavior(rj);
+                    }
+                    rj.SetTarget(mainBody); // Rejoin 目标=MainBody（调用方注入；§5.2 不用未知敌位置构造）
+                    f.AI.SetBehaviorWeight<CbRejoinBehavior>(CombatBrain.Settings.Cps2PoCSettings.CbBehaviorWeight);
+                    break;
+                case Cps2RouteAIntent.Advance:
+                    EnsureBehavior(f, new CbAdvanceBehavior(f));
+                    f.AI.SetBehaviorWeight<CbAdvanceBehavior>(CombatBrain.Settings.Cps2PoCSettings.CbBehaviorWeight);
+                    break;
+                case Cps2RouteAIntent.Retreat:
+                    EnsureBehavior(f, new CbRetreatBehavior(f));
+                    f.AI.SetBehaviorWeight<CbRetreatBehavior>(CombatBrain.Settings.Cps2PoCSettings.CbBehaviorWeight);
+                    break;
+                default:
+                    return; // None：不动
+            }
+            // CB 域内互斥：其余 3 个 CB Behavior 权重 0（当前意图胜出；原版冲突行为降权由运行期按 ConflictingIntents 表执行）
+            DowngradeOthers(f, intent);
+        }
+
+        // 幂等挂载：GetBehavior<T> 已存在则不重复 Add（FormationAI.cs:133 Add 非幂等，:138 GetBehavior 查重）
+        private static void EnsureBehavior<T>(Formation f, T behavior) where T : BehaviorComponent
+        {
+            if (f.AI.GetBehavior<T>() == null) f.AI.AddAiBehavior(behavior);
+        }
+
+        private static void DowngradeOthers(Formation f, Cps2RouteAIntent intent)
+        {
+            Cps2RouteAIntent[] conflicts = Cps2RouteAPolicy.ConflictingIntents(intent);
+            for (int i = 0; i < conflicts.Length; i++)
+            {
+                switch (conflicts[i])
+                {
+                    case Cps2RouteAIntent.Hold:
+                        if (f.AI.GetBehavior<CbHoldBehavior>() != null) f.AI.SetBehaviorWeight<CbHoldBehavior>(0f);
+                        break;
+                    case Cps2RouteAIntent.Advance:
+                        if (f.AI.GetBehavior<CbAdvanceBehavior>() != null) f.AI.SetBehaviorWeight<CbAdvanceBehavior>(0f);
+                        break;
+                    case Cps2RouteAIntent.Rejoin:
+                        if (f.AI.GetBehavior<CbRejoinBehavior>() != null) f.AI.SetBehaviorWeight<CbRejoinBehavior>(0f);
+                        break;
+                    case Cps2RouteAIntent.Retreat:
+                        if (f.AI.GetBehavior<CbRetreatBehavior>() != null) f.AI.SetBehaviorWeight<CbRetreatBehavior>(0f);
+                        break;
+                }
+            }
+        }
+    }
+
+    // ---- 路线 A 自定义 BehaviorComponent 子类（Movement 域；继承 TaleWorlds.MountAndBlade.BehaviorComponent，
+    //     构造 base(formation)（BehaviorComponent.cs:76），override protected abstract GetAiWeight（:154）
+    //     + protected virtual CalculateCurrentOrder（:172）设 CurrentOrder（protected set，:65）） ----
+
+    internal sealed class CbHoldBehavior : BehaviorComponent
+    {
+        public CbHoldBehavior(Formation formation) : base(formation) { }
+        protected override float GetAiWeight() { return CombatBrain.Settings.Cps2PoCSettings.CbBehaviorWeight; }
+        protected override void CalculateCurrentOrder() { CurrentOrder = MovementOrder.MovementOrderStop; }
+    }
+
+    internal sealed class CbAdvanceBehavior : BehaviorComponent
+    {
+        public CbAdvanceBehavior(Formation formation) : base(formation) { }
+        protected override float GetAiWeight() { return CombatBrain.Settings.Cps2PoCSettings.CbBehaviorWeight; }
+        protected override void CalculateCurrentOrder() { CurrentOrder = MovementOrder.MovementOrderAdvance; }
+    }
+
+    internal sealed class CbRejoinBehavior : BehaviorComponent
+    {
+        private Vec2 _target;
+        public CbRejoinBehavior(Formation formation) : base(formation) { }
+        public void SetTarget(Vec2 target) { _target = target; }
+        protected override float GetAiWeight() { return CombatBrain.Settings.Cps2PoCSettings.CbBehaviorWeight; }
+        protected override void CalculateCurrentOrder()
+        {
+            WorldPosition wp = Formation.CachedMedianPosition;
+            wp.SetVec2(_target);
+            CurrentOrder = MovementOrder.MovementOrderMove(wp); // Rejoin：向 MainBody 移动（§5.2）
+        }
+    }
+
+    internal sealed class CbRetreatBehavior : BehaviorComponent
+    {
+        public CbRetreatBehavior(Formation formation) : base(formation) { }
+        protected override float GetAiWeight() { return CombatBrain.Settings.Cps2PoCSettings.CbBehaviorWeight; }
+        protected override void CalculateCurrentOrder() { CurrentOrder = MovementOrder.MovementOrderRetreat; }
+    }
 }

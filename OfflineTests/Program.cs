@@ -212,6 +212,9 @@ namespace OfflineTests
             Console.WriteLine("== CPS2 LeaseIntegration ==");
             TestCps2LeaseIntegration();
 
+            Console.WriteLine("== CPS2 OwnershipPoc ==");
+            TestCps2OwnershipPoc();
+
             Console.WriteLine("== ATC1 BattlePhaseFSM ==");
             TestBattlePhaseFSM();
 
@@ -3168,6 +3171,86 @@ namespace OfflineTests
                 FormationCommandExecutor.PositionHysteresisMeters, FormationCommandExecutor.FacingHysteresisRadians,
                 p => { leaseSink++; }, null);
             Check(wroteLease && leaseSink == 1, "cps2-lease lease proposal executes with active lease (LeaseOk=true)");
+        }
+
+        // CPS-2 所有权 PoC（cps2-ownership-poc）：路线 A Behavior PoC 纯逻辑判定（权重表达/降权/生命周期/
+        // 玩家接管/幂等，§6.1/t20）+ 路线 B 观测（Acquire/Release/Expired/ExternalOwner + ExternalUnknown 三域，§7.1 D 模式）
+        private static void TestCps2OwnershipPoc()
+        {
+            // A) 开关默认关闭安全态（Cps2PoCSettings：RouteA 零 AddAiBehavior/SetBehaviorWeight；RouteB 无观测日志）
+            Check(!CombatBrain.Settings.Cps2PoCSettings.RouteAEnabled,
+                "cps2-poc route A default off (安全态零调用)");
+            Check(!CombatBrain.Settings.Cps2PoCSettings.RouteBObservationEnabled,
+                "cps2-poc route B observation default off");
+            Check(CombatBrain.Settings.Cps2PoCSettings.CbBehaviorWeight > 1f,
+                "cps2-poc CB behavior weight > 原版默认 (FindBestBehavior 竞争胜出)");
+
+            // B) 意图 → 命令语义（Movement 域；Facing/Arrangement 不经 Behavior——t20 结论）
+            Check(Cps2RouteAPolicy.ToCommandKind(Cps2RouteAIntent.Hold) == CommandKind.Hold
+                && Cps2RouteAPolicy.ToCommandKind(Cps2RouteAIntent.Advance) == CommandKind.Advance
+                && Cps2RouteAPolicy.ToCommandKind(Cps2RouteAIntent.Rejoin) == CommandKind.Move
+                && Cps2RouteAPolicy.ToCommandKind(Cps2RouteAIntent.Retreat) == CommandKind.Retreat,
+                "cps2-poc intent -> command kind mapping (仅 Movement 域)");
+
+            // C) F2 意图映射（Attack/Flank/Harass/Pursue→Advance、Reform/Defend→Hold、Retreat→Retreat）
+            Check(Cps2RouteAPolicy.MapIntent(IntentType.Attack) == Cps2RouteAIntent.Advance
+                && Cps2RouteAPolicy.MapIntent(IntentType.Flank) == Cps2RouteAIntent.Advance
+                && Cps2RouteAPolicy.MapIntent(IntentType.Harass) == Cps2RouteAIntent.Advance
+                && Cps2RouteAPolicy.MapIntent(IntentType.Pursue) == Cps2RouteAIntent.Advance,
+                "cps2-poc attack-family intent -> advance");
+            Check(Cps2RouteAPolicy.MapIntent(IntentType.Reform) == Cps2RouteAIntent.Hold
+                && Cps2RouteAPolicy.MapIntent(IntentType.Defend) == Cps2RouteAIntent.Hold,
+                "cps2-poc reform/defend intent -> hold");
+            Check(Cps2RouteAPolicy.MapIntent(IntentType.Retreat) == Cps2RouteAIntent.Retreat,
+                "cps2-poc retreat intent -> retreat");
+
+            // D) 冲突降权表（§6.1 Q2：降权而非删除；CB 域内互斥 + 原版冲突按表 SetBehaviorWeight(0f)）
+            Check(Cps2RouteAPolicy.ConflictingIntents(Cps2RouteAIntent.Hold).Length == 3,
+                "cps2-poc hold conflicts downgrade 3 others");
+            Check(Cps2RouteAPolicy.ConflictingIntents(Cps2RouteAIntent.Retreat).Length == 2
+                && Cps2RouteAPolicy.ConflictingIntents(Cps2RouteAIntent.Retreat)[0] == Cps2RouteAIntent.Advance,
+                "cps2-poc retreat conflicts advance (降权而非删除)");
+
+            // E) 玩家接管天然恢复（FormationAI.cs:245/286：!IsAIControlled → 不设权重不写）
+            Check(Cps2RouteAPolicy.ShouldApplyWeights(true), "cps2-poc AI controlled -> apply weights");
+            Check(!Cps2RouteAPolicy.ShouldApplyWeights(false), "cps2-poc player takeover -> no weights (天然恢复)");
+
+            // F) 拆分/增援后权重重设路径（TacticComponent.cs:455-456 ResetBehaviorWeights → 每拍幂等 Apply 重设）
+            Check(Cps2RouteAPolicy.ShouldReapplyAfterReset(10, 12), "cps2-poc reinforcement count change -> reapply");
+            Check(Cps2RouteAPolicy.ShouldReapplyAfterReset(10, 6), "cps2-poc split count change -> reapply");
+            Check(!Cps2RouteAPolicy.ShouldReapplyAfterReset(10, 10), "cps2-poc stable count -> no reapply");
+
+            // G) AddAiBehavior 幂等（FormationAI.cs:133 Add 非幂等；GetBehavior<T> 查重）
+            Check(Cps2RouteAPolicy.NeedsAddBehavior(false), "cps2-poc unregistered -> needs add");
+            Check(!Cps2RouteAPolicy.NeedsAddBehavior(true), "cps2-poc registered -> no duplicate add (幂等)");
+
+            // H) 路线 B 观测：Acquire/Release/Expired/ExternalOwner 计数（Cps2LeaseObserver，供 CPS-3 A/B）
+            Cps2LeaseObserver.Reset();
+            Check(Cps2LeaseObserver.AcquireCount == 0 && Cps2LeaseObserver.ReleaseCount == 0
+                && Cps2LeaseObserver.ExpiredCount == 0 && Cps2LeaseObserver.ExternalOwnerCount == 0,
+                "cps2-poc observer reset clears counts");
+            Cps2LeaseObserver.RecordAcquire();
+            Cps2LeaseObserver.RecordAcquire();
+            Cps2LeaseObserver.RecordRelease();
+            Cps2LeaseObserver.RecordExpired();
+            Cps2LeaseObserver.RecordExternalOwner();
+            Check(Cps2LeaseObserver.AcquireCount == 2 && Cps2LeaseObserver.ReleaseCount == 1
+                && Cps2LeaseObserver.ExpiredCount == 1 && Cps2LeaseObserver.ExternalOwnerCount == 1,
+                "cps2-poc acquire/release/expired/external-owner counts");
+            string summary = Cps2LeaseObserver.BuildSummary();
+            Check(summary.Contains("Acquire=2") && summary.Contains("Release=1") && summary.Contains("Expired=1")
+                && summary.Contains("ExternalOwner=1") && summary.Contains("ExternalUnknownTotal="),
+                "cps2-poc build summary format (供 5s 日志/战斗结束)");
+
+            // I) ExternalUnknown 三域覆盖数可量化（复用 t3 SetOrderObserver；诊断开时观测计数）
+            SetOrderObserver.Enabled = true;
+            SetOrderObserver.Clear();
+            SetOrderObserver.Observe(1, CommandDomain.Movement, CommandKind.Move, 0, 0);
+            SetOrderObserver.Observe(2, CommandDomain.Facing, CommandKind.Facing, 1, 0);
+            SetOrderObserver.Observe(3, CommandDomain.Arrangement, CommandKind.Arrangement, 2, 0);
+            Check(Cps2LeaseObserver.ExternalUnknownTotal() == 3,
+                "cps2-poc external-unknown 3-domain total quantifiable");
+            SetOrderObserver.Enabled = false;
         }
 
         // ATC-1 战局阶段机（BattlePhaseFSM 纯逻辑）：五态全边界/最短驻留/同态不重播/Retreat 终态/早期伤亡不误进 Exploit

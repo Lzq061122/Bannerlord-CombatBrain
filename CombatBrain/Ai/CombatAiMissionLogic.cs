@@ -227,6 +227,8 @@ namespace CombatBrain.Ai
         private readonly FormationCommandExecutor _commandExecutor = new FormationCommandExecutor();
         // 本拍提案收集（迁移卡填充；当前恒空——静态空列表零分配）
         private readonly List<FormationCommandProposal> _commandProposals = new List<FormationCommandProposal>();
+        // CPS-2 路线 B 观测：5s 汇总计时（Cps2LeaseObserver 输出 [Cps2Observation]，默认关闭）
+        private float _cps2ObservationTimer;
 
         // P1-① 真实地形预缓存：开战一次性采样为只读查表，战中 O(1) 查询（禁实时射线/逐兵采样）。
         // TerrainStub 合成正弦假地形已删除（review-findings-2026-09-01 #7「假数据比没数据更糟」）。
@@ -454,6 +456,25 @@ namespace CombatBrain.Ai
             _bench.BeginSection("executor");
             _commandExecutor.Tick(mission, _elapsed, _commandProposals, _leaseGlue.HasActiveLease);
             _bench.EndSection("executor");
+
+            // CPS-2 路线 A PoC 挂点（§6.1，默认关闭零 AddAiBehavior/SetBehaviorWeight 调用安全态；
+            //   CPS-3 运行期验证开启）：自定义 BehaviorComponent 权重表达 Movement 域意图
+            if (CombatBrain.Settings.Cps2PoCSettings.RouteAEnabled)
+            {
+                CbRouteAPoC.Apply(mission, team => Cps2RouteAPolicy.MapIntent(GetTeamIntent(team)),
+                    team => GetTeamCenter(team)); // Rejoin 目标=队中心（MainBody 近似，§5.2）
+            }
+            // CPS-2 路线 B 观测：5s 汇总（Cps2LeaseObserver Acquire/Release/Expired/ExternalOwner +
+            //   ExternalUnknown 三域覆盖数，供 CPS-3 A/B；默认关闭无日志；喂数据点属运行期验证钩子）
+            _cps2ObservationTimer -= dt;
+            if (_cps2ObservationTimer <= 0f)
+            {
+                _cps2ObservationTimer = 5f;
+                if (CombatBrain.Settings.Cps2PoCSettings.RouteBObservationEnabled)
+                {
+                    CombatLog.Log("[Cps2Observation] " + Cps2LeaseObserver.BuildSummary());
+                }
+            }
 
             _bench.EndFrame(dt, agentCount);
         }

@@ -132,4 +132,46 @@ namespace CombatBrain.Coordination
         Column = 2,   // 骑兵纵队（重整待命）
         ShieldWall = 3 // 盾墙（FormationTactics 全面接管）
     }
+
+    // CPS-2 路线 B 运行期观测（cps2-ownership-poc，§7.1 D 模式 Exclusive PoC 数据准备）：
+    // 租约 Acquire/Release/Expired/ExternalOwner 计数 + ExternalUnknown 三域覆盖数（复用 t3 SetOrderObserver），
+    // 供 CPS-3 A/B 读取。计数由运行期钩子喂入（本卡建立机制与汇总；喂数据点属 CPS-3 运行期验证——
+    // 租约事件边沿经 [ControlLease] 日志已可观测，t19 LogExternalWrites 已记录 ExternalUnknown 增量）。
+    /// <summary>路线 B 单域排他运行期观测（纯计数，可离线测）。</summary>
+    public static class Cps2LeaseObserver
+    {
+        public static long AcquireCount;
+        public static long ReleaseCount;
+        public static long ExpiredCount;
+        public static long ExternalOwnerCount;
+
+        public static void RecordAcquire() { AcquireCount++; }
+        public static void RecordRelease() { ReleaseCount++; }
+        public static void RecordExpired() { ExpiredCount++; }
+        public static void RecordExternalOwner() { ExternalOwnerCount++; }
+
+        /// <summary>外部/原版/第三方写入总数（t3 SetOrderObserver 三域 ExternalUnknown 聚合；诊断观测关闭时=0）。</summary>
+        public static long ExternalUnknownTotal()
+        {
+            return SetOrderObserver.CountFor(CommandDomain.Movement, CommandSource.ExternalUnknown)
+                + SetOrderObserver.CountFor(CommandDomain.Facing, CommandSource.ExternalUnknown)
+                + SetOrderObserver.CountFor(CommandDomain.Arrangement, CommandSource.ExternalUnknown);
+        }
+
+        /// <summary>观测汇总串（供 5s 日志/战斗结束输出；CPS-3 A/B 读取）。</summary>
+        public static string BuildSummary()
+        {
+            return "Acquire=" + AcquireCount + ";Release=" + ReleaseCount + ";Expired=" + ExpiredCount
+                + ";ExternalOwner=" + ExternalOwnerCount + ";ExternalUnknownTotal=" + ExternalUnknownTotal();
+        }
+
+        /// <summary>战斗重置（Mission 结束幂等）。</summary>
+        public static void Reset()
+        {
+            AcquireCount = 0;
+            ReleaseCount = 0;
+            ExpiredCount = 0;
+            ExternalOwnerCount = 0;
+        }
+    }
 }
