@@ -245,6 +245,9 @@ namespace OfflineTests
             Console.WriteLine("== CPS3r ForceLeaseCandidate ==");
             TestCps3rForceLeaseCandidate();
 
+            Console.WriteLine("== CPS3r ForceArmTriggerSplit ==");
+            TestCps3rForceArmTriggerSplit();
+
             Console.WriteLine("== ATC1 BattlePhaseFSM ==");
             TestBattlePhaseFSM();
 
@@ -3805,6 +3808,44 @@ namespace OfflineTests
             Check(FormationControlLeaseManager.ResolveFallback(forced.Permission, armyMain2, 10f)
                 == SafeFallbackKind.NoSafeFallback,
                 "cps3r-force-r2 plain denied + safe zone -> NoSafeFallback (不伪造)");
+        }
+
+        // t48（cps3r-force-lease-arm-trigger-split）：武装/触发分离——战前武装、中段等合格候选即触发
+        // （合格判定 IsForceTriggerReady 纯逻辑：MainBody 有效+远离>30m+无活跃租约；不降 30m 安全条件不绕过 NoSafeFallback）
+        private static void TestCps3rForceArmTriggerSplit()
+        {
+            // A) 合格触发判定（纯逻辑）：MainBody 有效 + 远离>30m + 无活跃租约 → 合格
+            Check(CombatBrain.Settings.Cps3RuntimeSettings.IsForceTriggerReady(100, 50f, false),
+                "cps3r-split ready (mainbody + far>30m + no lease)");
+            Check(!CombatBrain.Settings.Cps3RuntimeSettings.IsForceTriggerReady(0, 50f, false),
+                "cps3r-split not ready without mainbody (等待)");
+            Check(!CombatBrain.Settings.Cps3RuntimeSettings.IsForceTriggerReady(100, 10f, false),
+                "cps3r-split not ready in safe zone (不降 30m 安全条件)");
+            Check(!CombatBrain.Settings.Cps3RuntimeSettings.IsForceTriggerReady(100, 50f, true),
+                "cps3r-split not ready with active lease (等待释放)");
+            // 边界：恰 30m 不算远离（ResolveFallback 同口径 >30）
+            Check(!CombatBrain.Settings.Cps3RuntimeSettings.IsForceTriggerReady(100, 30f, false),
+                "cps3r-split boundary 30m not ready (严格 >30m)");
+
+            // B) 不降安全条件：SafeFallbackMeters=30 保持（外部验证明确禁止降）
+            Check(FormationControlLeaseManager.SafeFallbackMeters == 30f,
+                "cps3r-split safe fallback meters kept 30 (不降安全条件)");
+
+            // C) 超时语义：ForceArmTimeoutSeconds=30s（超时未取到样本 abort 保留）
+            Check(CombatBrain.Settings.Cps3RuntimeSettings.ForceArmTimeoutSeconds == 30f,
+                "cps3r-split arm timeout 30s (超时未取到样本 abort)");
+
+            // D) 真实链路保持：合格（远离+MainBody 有效）→ 普通 Denied → Rejoin（Acquire 前置）；不伪造
+            var forced = new CommitmentDecision
+            {
+                Permission = CommitmentPermission.Denied,
+                Reasons = CommitmentReason.None
+            };
+            var armyMain = new ArmyContextSnapshot { MainBodyStrength = 100, MainBodyX = 0f, MainBodyY = 0f };
+            Check(CombatBrain.Settings.Cps3RuntimeSettings.IsForceTriggerReady(armyMain.MainBodyStrength, 50f, false)
+                && FormationControlLeaseManager.ResolveFallback(forced.Permission, armyMain, 50f)
+                    == SafeFallbackKind.Rejoin,
+                "cps3r-split ready + plain denied + far -> Rejoin (真实 Acquire 前置)");
         }
 
         // ATC-1 战局阶段机（BattlePhaseFSM 纯逻辑）：五态全边界/最短驻留/同态不重播/Retreat 终态/早期伤亡不误进 Exploit

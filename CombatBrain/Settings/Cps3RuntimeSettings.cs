@@ -1,5 +1,7 @@
 namespace CombatBrain.Settings
 {
+    using CombatBrain.Coordination; // IsForceTriggerReady 引用 FormationControlLeaseManager.SafeFallbackMeters
+
     // CPS-3 运行期 A/B 验证配置（cps3-runtime-prep，2026-09-07）——四组模式开关（§7.1）+ 观测 Enable 门控。
     // 安全态：Enabled=false（默认）→ 执行器按现状落地（仲裁共存=当前生产行为），零行为变化；
     //   ObserverEnabled=false（默认）→ SetOrderObserver.Enable 不接线（t3 近零开销），无观测日志。
@@ -47,6 +49,17 @@ namespace CombatBrain.Settings
         public static bool ForceLeaseActive(Cps3Mode mode)
         {
             return mode == Cps3Mode.D_ExclusivePoc;
+        }
+
+        // t48（cps3r-force-lease-arm-trigger-split）：武装/触发分离——战前武装、中段持续等待真实合格候选
+        //   （合格即触发，Acquire 落在战斗中段满足条件 5 样本要求）。
+        /// <summary>候选合格触发判定（纯逻辑，可离线测）：MainBody 有效 + 远离 MainBody&gt;30m（不降 30m 安全条件，
+        ///   外部验证明确禁止）+ 无活跃租约。导航校验/NoSafeFallback 由真实 EvaluateFormation 判定（不绕过）。</summary>
+        public static bool IsForceTriggerReady(int mainBodyStrength, float distToMain, bool leaseActive)
+        {
+            return mainBodyStrength > 0
+                && distToMain > FormationControlLeaseManager.SafeFallbackMeters
+                && !leaseActive;
         }
 
         /// <summary>

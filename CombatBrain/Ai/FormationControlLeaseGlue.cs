@@ -43,11 +43,12 @@ namespace CombatBrain.Ai
         //   仅诊断观测开启时有数据——SetOrderObserver.Enabled=false 时跳过，运行期 cps3 开启）
         private long _lastExternalWriteCount;
 
-        // t44（cps3r-force-lease-candidate）：受控注入状态（默认关；每场限时触发一次；TTL 到期真实 Release）
+        // t44/t48（cps3r-force-lease）：受控注入状态（默认关；战前武装/中段等合格触发一次；TTL 到期真实 Release）
         private bool _forceArmed;          // 候选已武装（本场一次）
         private Formation _forceCandidate; // 候选编队（单支非玩家 AI 编队）
         private float _forceArmedAt;       // 武装时刻（限时）
         private bool _forceTriggered;      // 已触发（本场不再重复武装）
+        private bool _forceWaitingLogged;  // t48：waiting 日志边沿（中段等待已记录）
 
         /// <summary>读 ATC-4 per-formation CommitmentDecision（null=无有效决策）。</summary>
         public delegate CommitmentDecision? CommitmentReader(Team team, Formation formation);
@@ -160,6 +161,7 @@ namespace CombatBrain.Ai
             // t44：ForceLease 状态跨 Mission 重置（防残留）
             _forceArmed = false;
             _forceTriggered = false;
+            _forceWaitingLogged = false;
             _forceCandidate = null;
         }
 
@@ -180,14 +182,17 @@ namespace CombatBrain.Ai
             _lastExternalWriteCount = extNow;
         }
 
-        // t44（cps3r-force-lease-candidate）：受控注入状态机——武装（选单支非玩家 AI 编队）→ 下一拍触发
-        // （注入 Denied+EmergencyOverride 决策，走真实 ResolveFallback/Update/Acquire 全链路）→ 超时放弃
+        // t44/t48（cps3r-force-lease）：受控注入状态机——武装/触发分离：
+        //   战前（开局早期）武装（选单支非玩家 AI 编队）→ 中段持续等待真实合格候选（远离 MainBody>30m +
+        //   玩家豁免/IsAIControlled/无活跃租约复核，不降 30m 安全条件、不绕过 NoSafeFallback）→ 合格即触发
+        //   （注入普通 Denied 走真实 Acquire 全链路）→ 超时（30s）未取到样本 abort。
         private void TickForceCandidate(Mission mission, float now,
             System.Func<Team, ArmyContextSnapshot> armyReader, List<FormationCommandProposal> proposals)
         {
             if (!_forceArmed)
             {
-                // 武装：选单支不含玩家兵员的 AI Formation（非玩家队/PlayerOwner/HasPlayerControlledTroop/IsPlayerTroopInFormation 全排除）
+                // 武装（战前/开局早期）：选单支不含玩家兵员的 AI Formation（非玩家队/PlayerOwner/
+                //   HasPlayerControlledTroop/IsPlayerTroopInFormation 全排除）；触发等中段候选合格
                 foreach (Team team in mission.Teams)
                 {
                     if (team == null || !team.MBTeam.IsValid) continue;
@@ -200,10 +205,10 @@ namespace CombatBrain.Ai
                         if (f == null || f.CountOfUnits == 0 || f.QuerySystem == null) continue;
                         bool playerOwned = f.PlayerOwner != null || f.HasPlayerControlledTroop || f.IsPlayerTroopInFormation;
                         if (!CombatBrain.Settings.Cps3RuntimeSettings.IsForceLeaseCandidate(false, playerOwned, f.IsAIControlled)) continue;
-                        // 优先远离 MainBody（>30m，Denied→Rejoin 可 Acquire）；否则第一支合格
+                        // 优先远离 MainBody（>30m，Rejoin 可 Acquire）；否则第一支合格（武装后等中段拉开）
                         Vec2 fc = TeamGeometry.GetFormationPosition(f, TeamPosKind.CachedMedian);
                         float d = VecMath.Dist(fc.x, fc.y, army.MainBodyX, army.MainBodyY);
-                        if (d > FormationControlLeaseManager.SafeFallbackMeters) { chosen = f; break; } // 直接选可 Acquire 的
+                        if (d > FormationControlLeaseManager.SafeFallbackMeters) { chosen = f; break; }
                         if (chosen == null) { chosen = f; chosenDist = d; }
                     }
                     if (chosen != null)
@@ -212,8 +217,9 @@ namespace CombatBrain.Ai
                         _forceArmed = true;
                         _forceArmedAt = now;
                         _forceTriggered = false;
+                        _forceWaitingLogged = false;
                         CombatLog.Log(string.Format(
-                            "[ControlLease] force-candidate armed team={0} f={1}（限时触发，D 组排他样本）",
+                            "[ControlLease] force-candidate armed team={0} f={1}（战前武装，中段等合格触发）",
                             team.TeamIndex, chosen.Index));
                         return;
                     }
@@ -223,13 +229,50 @@ namespace CombatBrain.Ai
             if (_forceTriggered) return; // 本场已触发一次
             if (now - _forceArmedAt > CombatBrain.Settings.Cps3RuntimeSettings.ForceArmTimeoutSeconds)
             {
-                _forceArmed = false; // 超时未 Acquire（真实失败），放弃武装
-                CombatLog.Log("[ControlLease] force-candidate abort（限时内未 Acquire，NoSafeFallback/安全校验不过）");
+                _forceArmed = false; // 超时未取到合格样本（不降 30m/不绕过 NoSafeFallback）
+                CombatLog.Log("[ControlLease] force-candidate abort（超时未取到合格样本）");
                 return;
             }
-            if (_forceCandidate == null || _forceCandidate.Team == null) { _forceArmed = false; return; }
-            // 触发：注入 ForceLease 决策（Denied+EmergencyOverride）→ 真实 EvaluateFormation 全链路（真实 army 含 MainBody）
-            TriggerForceCandidate(mission, _forceCandidate.Team, _forceCandidate, now, armyReader, proposals);
+            // 中段等待：候选复核（编队有效/玩家豁免/IsAIControlled）
+            Formation c = _forceCandidate;
+            Team ct = c != null ? c.Team : null;
+            if (ct == null || !ct.MBTeam.IsValid || c == null || c.CountOfUnits == 0 || c.QuerySystem == null)
+            {
+                _forceArmed = false; // 候选编队失效（解散/清场）→ 未取到样本
+                CombatLog.Log("[ControlLease] force-candidate abort（候选编队失效，未取到样本）");
+                return;
+            }
+            bool candidateOwned = c.PlayerOwner != null || c.HasPlayerControlledTroop || c.IsPlayerTroopInFormation;
+            if (candidateOwned || !c.IsAIControlled
+                || (CombatBrainSettings.PlayerTeamExemptionEnabled && ct.IsPlayerTeam))
+            {
+                _forceArmed = false; // 玩家接管/非 AI → 放弃（安全守卫，未取到样本）
+                CombatLog.Log("[ControlLease] force-candidate abort（玩家接管/非 AI，未取到样本）");
+                return;
+            }
+            if (_manager.ActiveCount != 0) return; // 已有租约：继续等待（本候选不重复武装）
+            if (_manager.GetLease(ct.TeamIndex, c.Index) != null) return; // 该编队已有租约：等待其释放
+
+            // waiting 日志（边沿一次）
+            if (!_forceWaitingLogged)
+            {
+                _forceWaitingLogged = true;
+                CombatLog.Log(string.Format(
+                    "[ControlLease] force-candidate waiting team={0} f={1}（中段等待合格：远离 MainBody>30m + 安全检查）",
+                    ct.TeamIndex, c.Index));
+            }
+
+            // 合格判定（t48 分离）：远离 MainBody>30m + MainBody 有效 + 无活跃租约（不降 30m 安全条件）
+            ArmyContextSnapshot waitArmy = armyReader != null ? armyReader(ct) : ArmyContextSnapshot.None;
+            Vec2 fc2 = TeamGeometry.GetFormationPosition(c, TeamPosKind.CachedMedian);
+            float distToMain = VecMath.Dist(fc2.x, fc2.y, waitArmy.MainBodyX, waitArmy.MainBodyY);
+            if (!CombatBrain.Settings.Cps3RuntimeSettings.IsForceTriggerReady(
+                waitArmy.MainBodyStrength, distToMain, _manager.ActiveCount != 0))
+            {
+                return; // 未合格：继续等待（Acquire 落在战斗中段，非尾声）
+            }
+            // 合格即触发：注入普通 Denied → 真实 EvaluateFormation 全链路（导航校验/NoSafeFallback 真实判定）
+            TriggerForceCandidate(mission, ct, c, now, armyReader, proposals);
             _forceTriggered = true;
         }
 
