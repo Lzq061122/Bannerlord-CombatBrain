@@ -3945,9 +3945,19 @@ namespace OfflineTests
             SetOrderObserver.Enabled = false;
             SetOrderObserver.Clear();
 
-            // ②有效权重==10：CbBehaviorWeight==10 且 GetAiWeight 直接返回该常量（单点应用，非仅常量可改而无实际权重）
+            // ②有效权重==10（t52 repair MEDIUM ⑤单维降权）：GetAiWeight 返 BaseBehaviorWeight=1f（基权重归一），
+            //   SetBehaviorWeight 应用 CbBehaviorWeight=10 → FindBestBehavior 有效权重=1×10=10
+            //   （消除 t20 GetAiWeight=10×SetBehaviorWeight=10=100 放大——EffectiveWeight 纯逻辑断言有效值非仅常量）
             Check(CombatBrain.Settings.Cps2PoCSettings.CbBehaviorWeight == 10f,
-                "cps3r-routeA-r2 effective weight 10 (单点应用)");
+                "cps3r-routeA-r2 set-weight 10 (单点应用)");
+            Check(CbRouteAPoC.BaseBehaviorWeight == 1f,
+                "cps3r-routeA-r2 get-weight base 1 (单维归一)");
+            Check(CbRouteAPoC.EffectiveWeight(CbRouteAPoC.BaseBehaviorWeight,
+                CombatBrain.Settings.Cps2PoCSettings.CbBehaviorWeight) == 10f,
+                "cps3r-routeA-r2 effective weight 1x10=10 (无 100 放大)");
+            Check(CbRouteAPoC.EffectiveWeight(10f, 10f) == 100f
+                && CbRouteAPoC.EffectiveWeight(1f, 10f) == 10f,
+                "cps3r-routeA-r2 effective weight formula (FindBestBehavior 语义)");
             Check(Cps2RouteAPolicy.ToCommandKind(Cps2RouteAIntent.Hold) == CommandKind.Hold
                 && Cps2RouteAPolicy.ToCommandKind(Cps2RouteAIntent.Advance) == CommandKind.Advance
                 && Cps2RouteAPolicy.ToCommandKind(Cps2RouteAIntent.Rejoin) == CommandKind.Move

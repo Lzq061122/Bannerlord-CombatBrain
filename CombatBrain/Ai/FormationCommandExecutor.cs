@@ -450,6 +450,17 @@ namespace CombatBrain.Ai
         // t50 硬门⑥：Behavior 实例缓存（key=identity；按需创建，命中复用不每拍 new）；与 _armed 同生命周期
         private static readonly Dictionary<int, object> _cache = new Dictionary<int, object>();
 
+        // t52 repair（MEDIUM ⑤单维降权）：Behavior 基权重（GetAiWeight 返此值=1f 归一；有效权重=
+        //   GetAiWeight×WeightFactor=1×SetBehaviorWeight(CbBehaviorWeight=10)=10——FindBestBehavior 语义，
+        //   消除 t20 GetAiWeight=10×SetBehaviorWeight=10=100 放大）
+        public const float BaseBehaviorWeight = 1f;
+
+        /// <summary>FindBestBehavior 有效权重（纯逻辑可离线测）：GetAiWeight×WeightFactor（FormationAI.cs:179）。</summary>
+        public static float EffectiveWeight(float getAiWeight, float setBehaviorWeight)
+        {
+            return getAiWeight * setBehaviorWeight;
+        }
+
         // t50 硬门②：已接管编队登记（key=identity → Formation 引用；恢复时幂等还原）
         private static readonly HashSet<int> _armed = new HashSet<int>();
 
@@ -650,7 +661,9 @@ namespace CombatBrain.Ai
     internal sealed class CbHoldBehavior : BehaviorComponent
     {
         public CbHoldBehavior(Formation formation) : base(formation) { }
-        protected override float GetAiWeight() { return CombatBrain.Settings.Cps2PoCSettings.CbBehaviorWeight; }
+        // t52 repair（MEDIUM ⑤单维降权）：GetAiWeight 返 1f（基权重归一），SetBehaviorWeight 应用 CbBehaviorWeight=10
+        //   → 有效权重=1×10=10（消除 t20 GetAiWeight=10×SetBehaviorWeight=10=100 放大；FindBestBehavior 语义 GetAiWeight×WeightFactor）
+        protected override float GetAiWeight() { return CbRouteAPoC.BaseBehaviorWeight; }
         protected override void CalculateCurrentOrder()
         {
             CurrentOrder = MovementOrder.MovementOrderStop;
@@ -662,7 +675,7 @@ namespace CombatBrain.Ai
     internal sealed class CbAdvanceBehavior : BehaviorComponent
     {
         public CbAdvanceBehavior(Formation formation) : base(formation) { }
-        protected override float GetAiWeight() { return CombatBrain.Settings.Cps2PoCSettings.CbBehaviorWeight; }
+        protected override float GetAiWeight() { return CbRouteAPoC.BaseBehaviorWeight; }
         protected override void CalculateCurrentOrder()
         {
             CurrentOrder = MovementOrder.MovementOrderAdvance;
@@ -676,7 +689,7 @@ namespace CombatBrain.Ai
         private float _targetX, _targetY;
         public CbRejoinBehavior(Formation formation) : base(formation) { }
         public void SetTarget(float x, float y) { _targetX = x; _targetY = y; }
-        protected override float GetAiWeight() { return CombatBrain.Settings.Cps2PoCSettings.CbBehaviorWeight; }
+        protected override float GetAiWeight() { return CbRouteAPoC.BaseBehaviorWeight; }
         protected override void CalculateCurrentOrder()
         {
             WorldPosition wp = Formation.CachedMedianPosition;
@@ -690,7 +703,7 @@ namespace CombatBrain.Ai
     internal sealed class CbRetreatBehavior : BehaviorComponent
     {
         public CbRetreatBehavior(Formation formation) : base(formation) { }
-        protected override float GetAiWeight() { return CombatBrain.Settings.Cps2PoCSettings.CbBehaviorWeight; }
+        protected override float GetAiWeight() { return CbRouteAPoC.BaseBehaviorWeight; }
         protected override void CalculateCurrentOrder()
         {
             CurrentOrder = MovementOrder.MovementOrderRetreat;
