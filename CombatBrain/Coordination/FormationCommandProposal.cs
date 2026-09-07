@@ -158,11 +158,15 @@ namespace CombatBrain.Coordination
                 + SetOrderObserver.CountFor(CommandDomain.Arrangement, CommandSource.ExternalUnknown);
         }
 
-        /// <summary>观测汇总串（供 5s 日志/战斗结束输出；CPS-3 A/B 读取）。</summary>
+        /// <summary>观测汇总串（供 5s 日志/战斗结束输出；CPS-3 A/B 读取）。
+        /// t40（cps3r-evidence-chain）：追加真实覆盖判定计数（ExternalReplaced 及其 SameTick/CrossTick 分列）。</summary>
         public static string BuildSummary()
         {
             return "Acquire=" + AcquireCount + ";Release=" + ReleaseCount + ";Expired=" + ExpiredCount
-                + ";ExternalOwner=" + ExternalOwnerCount + ";ExternalUnknownTotal=" + ExternalUnknownTotal();
+                + ";ExternalOwner=" + ExternalOwnerCount + ";ExternalUnknownTotal=" + ExternalUnknownTotal()
+                + ";ExternalReplaced=" + SetOrderObserver.ExternalReplacedCount
+                + ";SameTickReplace=" + SetOrderObserver.SameTickExternalReplace
+                + ";CrossTickReplace=" + SetOrderObserver.CrossTickExternalReplace;
         }
 
         /// <summary>战斗重置（Mission 结束幂等）。</summary>

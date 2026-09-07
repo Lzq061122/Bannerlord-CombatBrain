@@ -102,10 +102,13 @@ namespace CombatBrain.Ai
         /// <summary>
         /// 执行单域胜者（§5.3 第 3/5/6/7 条）：复核 → 迟滞决策 → scope+provenance+实际写入（sink 注入，可离线测）。
         /// 返回 true=实际写入。执行失败 fail-open：不关 AI（本执行器从不 SetControlledByAI），本拍跳过。
+        /// t40（cps3r-evidence-chain）：recordTrace=false 时不写 CommandProvenance.Record（B Shadow only 只记
+        ///   WouldApply 决策，不产生 Applied/OrderTrace——消除拟执行决策记录混淆）。
         /// </summary>
         public static bool ExecuteWinner(FormationCommandProposal winner, FormationStatus status,
             LastDomainWrite last, float positionHysteresis, float facingHysteresis,
-            System.Action<FormationCommandProposal> applyWrite, List<WriteSkipReason> skipLog)
+            System.Action<FormationCommandProposal> applyWrite, List<WriteSkipReason> skipLog,
+            bool recordTrace = true)
         {
             // §5.3.5 执行前复核：identity/存活/玩家所有权/任务类型/租约
             if (!status.Valid) { if (skipLog != null) skipLog.Add(WriteSkipReason.FormationInvalid); return false; }
@@ -131,8 +134,11 @@ namespace CombatBrain.Ai
             {
                 using (CommandSourceScope.Enter(winner.Source))
                 {
-                    CommandProvenance.Instance.Record(winner.FormationId, winner.Source, winner.Kind,
-                        winner.ReasonCode, winner.TargetId, winner.TargetX, winner.TargetY);
+                    if (recordTrace)
+                    {
+                        CommandProvenance.Instance.Record(winner.FormationId, winner.Source, winner.Kind,
+                            winner.ReasonCode, winner.TargetId, winner.TargetX, winner.TargetY);
+                    }
                     if (applyWrite != null) applyWrite(winner);
                 }
             }
@@ -236,10 +242,11 @@ namespace CombatBrain.Ai
                     LastDomainWrite last = GetLastWrite(key, r.Domain);
                     if (shadowOnly)
                     {
-                        // B Shadow only：applyWrite=null → ExecuteWinner 仅 Record 决策不落地（§7.1 B）；
-                        // WouldApply 日志（门控，供决策 vs 落地对比）
+                        // B Shadow only：applyWrite=null + recordTrace=false → 决策判定但不落地、不写
+                        //   CommandProvenance.Record（t40：B 组 OrderTraceAgg 不得有拟执行决策记录）；
+                        //   WouldApply 日志（门控，供决策 vs 落地对比）
                         bool decided = ExecuteWinner(r.Winner, status, last,
-                            PositionHysteresisMeters, FacingHysteresisRadians, null, null);
+                            PositionHysteresisMeters, FacingHysteresisRadians, null, null, false);
                         if (decided && CombatBrain.Settings.Cps3RuntimeSettings.ShadowWouldApplyLogEnabled)
                         {
                             CombatLog.Log(string.Format(

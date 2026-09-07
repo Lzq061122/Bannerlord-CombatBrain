@@ -236,6 +236,9 @@ namespace OfflineTests
             Console.WriteLine("== CPS3 HarmonyParamNames ==");
             TestCps3HarmonyParamNames();
 
+            Console.WriteLine("== CPS3r EvidenceChain ==");
+            TestCps3rEvidenceChain();
+
             Console.WriteLine("== ATC1 BattlePhaseFSM ==");
             TestBattlePhaseFSM();
 
@@ -3557,6 +3560,96 @@ namespace OfflineTests
             // C) 失败路径保持：参数名不匹配 → 抛 → Enable catch fail-open（t3 §4.2.8；修复后不再触发）
             Check(SetOrderObserver.BuildMountLog(0).StartsWith("[SetOrderObserver] 观测已挂载"),
                 "cps3-paramnames mount log success-only template (失败走异常分支)");
+        }
+
+        // t40（cps3r-evidence-chain）：权威 setter 事件流（Team/对象身份/域/OrderType/序号/阶段）+ 真实覆盖判定
+        // （Applied 后同 identity 同域窗口内 ExternalUnknown → ExternalReplaced，SameTick/CrossTick 分列）
+        // + Shadow 不写 Applied + owner 核验（防其它 mod patch 假阳性）
+        private static void TestCps3rEvidenceChain()
+        {
+            // A) 事件阶段枚举契约
+            Check((int)SetOrderStage.Proposed == 1 && (int)SetOrderStage.Won == 2
+                && (int)SetOrderStage.Applied == 3 && (int)SetOrderStage.ExternalReplaced == 4,
+                "cps3r stage enum Proposed/Won/Applied/ExternalReplaced");
+
+            // B) 权威事件流字段契约（全参 Observe：Team/对象身份/域/OrderType/序号/阶段）
+            SetOrderObserver.Enabled = true;
+            SetOrderObserver.Clear();
+            SetOrderObserver.NotifyTick(10f);
+            SetOrderObserver.Observe(1, 2, 555, CommandDomain.Movement, CommandKind.Move, 7,
+                (int)SetOrderStage.Applied);
+            var e0 = SetOrderObserver.At(0);
+            Check(e0.TeamId == 1 && e0.FormationId == 2 && e0.Identity == 555
+                && e0.Domain == CommandDomain.Movement && e0.OrderType == 7
+                && e0.Seq == 0 && e0.Stage == SetOrderStage.Applied,
+                "cps3r event stream fields (Team/identity/domain/orderType/seq/stage)");
+
+            // C) Seq 严格递增
+            SetOrderObserver.Observe(1, 3, 556, CommandDomain.Facing, CommandKind.Facing, 3, (int)SetOrderStage.Applied);
+            SetOrderObserver.Observe(1, 4, 557, CommandDomain.Arrangement, CommandKind.Arrangement, 5, (int)SetOrderStage.Applied);
+            Check(SetOrderObserver.At(1).Seq == 1 && SetOrderObserver.At(2).Seq == 2,
+                "cps3r event seq strictly increasing");
+
+            // D) 覆盖判定：Applied 后同 identity 同域窗口内 External（0.3s 跨拍）→ ExternalReplaced（CrossTick）
+            SetOrderObserver.Clear();
+            SetOrderObserver.NotifyTick(10f);
+            SetOrderObserver.Observe(1, 2, 555, CommandDomain.Movement, CommandKind.Move, 7, (int)SetOrderStage.Applied);
+            SetOrderObserver.NotifyTick(10.3f);
+            SetOrderObserver.Observe(1, 2, 555, CommandDomain.Movement, CommandKind.Move, 9, 0); // 无 scope → External
+            Check(SetOrderObserver.ExternalReplacedCount == 1 && SetOrderObserver.CrossTickExternalReplace == 1
+                && SetOrderObserver.SameTickExternalReplace == 0,
+                "cps3r external replaced in window (cross-tick)");
+            Check(SetOrderObserver.At(1).Stage == SetOrderStage.ExternalReplaced,
+                "cps3r replaced event stage marked");
+
+            // E) 覆盖判定：同拍 External（<0.01s）→ SameTick 分列
+            SetOrderObserver.Clear();
+            SetOrderObserver.NotifyTick(20f);
+            SetOrderObserver.Observe(1, 2, 555, CommandDomain.Movement, CommandKind.Move, 7, (int)SetOrderStage.Applied);
+            SetOrderObserver.Observe(1, 2, 555, CommandDomain.Movement, CommandKind.Move, 9, 0);
+            Check(SetOrderObserver.SameTickExternalReplace == 1 && SetOrderObserver.ExternalReplacedCount == 1
+                && SetOrderObserver.CrossTickExternalReplace == 0,
+                "cps3r external replaced same-tick (分列)");
+
+            // F) 窗口外 External（2s > 1s 窗口）→ 不计数
+            SetOrderObserver.Clear();
+            SetOrderObserver.NotifyTick(30f);
+            SetOrderObserver.Observe(1, 2, 555, CommandDomain.Movement, CommandKind.Move, 7, (int)SetOrderStage.Applied);
+            SetOrderObserver.NotifyTick(32f);
+            SetOrderObserver.Observe(1, 2, 555, CommandDomain.Movement, CommandKind.Move, 9, 0);
+            Check(SetOrderObserver.ExternalReplacedCount == 0,
+                "cps3r external outside window not replaced");
+
+            // G) 不同 identity/域不误判（隔离）
+            SetOrderObserver.Clear();
+            SetOrderObserver.NotifyTick(40f);
+            SetOrderObserver.Observe(1, 2, 555, CommandDomain.Movement, CommandKind.Move, 7, (int)SetOrderStage.Applied);
+            SetOrderObserver.Observe(1, 2, 556, CommandDomain.Movement, CommandKind.Move, 9, 0); // 不同对象身份
+            Check(SetOrderObserver.ExternalReplacedCount == 0, "cps3r different identity not replaced (隔离)");
+            SetOrderObserver.Observe(1, 2, 555, CommandDomain.Facing, CommandKind.Facing, 9, 0); // 不同域
+            Check(SetOrderObserver.ExternalReplacedCount == 0, "cps3r different domain not replaced (隔离)");
+
+            // H) Shadow 不写 Applied：ExecuteWinner recordTrace=false → CommandProvenance.Instance 不增
+            long before = CommandProvenance.Instance.Count;
+            var okStatus = new FormationCommandExecutor.FormationStatus
+            { Valid = true, PlayerOwned = false, FieldBattle = true, LeaseOk = true };
+            var wS = FormationCommandProposal.SpecialistProposal(1, 2, 2, 10f, CommandSource.Cavalry,
+                CommandKind.Move, CommandDomain.Movement, 0, -1, 10f, 10f);
+            FormationCommandExecutor.ExecuteWinner(wS, okStatus,
+                default(FormationCommandExecutor.LastDomainWrite),
+                FormationCommandExecutor.PositionHysteresisMeters, FormationCommandExecutor.FacingHysteresisRadians,
+                null, null, false); // recordTrace=false（Shadow：只记 WouldApply 不写 Applied/OrderTrace）
+            Check(CommandProvenance.Instance.Count == before,
+                "cps3r shadow recordTrace=false no Applied/OrderTrace 写入");
+
+            // I) owner 核验纯逻辑（0Harmony Patches.Owners 为 owner id 列表；防其它 mod patch 假阳性）
+            Check(SetOrderObserver.HasOwnPatch(new[] { "com.combatbrain.setorderobserver" }),
+                "cps3r own patch owner detected");
+            Check(!SetOrderObserver.HasOwnPatch(new[] { "rbm.mod.patch", "other.mod" }),
+                "cps3r foreign patch owner not counted (防假阳性)");
+            Check(!SetOrderObserver.HasOwnPatch(null), "cps3r null owners not counted");
+
+            SetOrderObserver.Enabled = false;
         }
 
         // ATC-1 战局阶段机（BattlePhaseFSM 纯逻辑）：五态全边界/最短驻留/同态不重播/Retreat 终态/早期伤亡不误进 Exploit

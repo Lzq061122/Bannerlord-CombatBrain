@@ -310,16 +310,33 @@ namespace CombatBrain.Coordination
         }
     }
 
-    // CPS-0 §4.2.5：setter 级真实调用观测记录（与声明式 FormationDecisionTrace 分离；ring 固定容量）
+    // CPS-0 §4.2.5：setter 级真实调用观测记录（与声明式 FormationDecisionTrace 分离；ring 固定容量）。
+    // t40（cps3r-evidence-chain）：权威 setter 事件流扩展——Formation 对象身份（对象引用哈希，防 Index 复用）、
+    //   TeamId、实际 OrderType、严格递增序号（Seq）、事件阶段（SetOrderStage）；覆盖判定基于真实 setter 顺序。
     public struct SetOrderObservation
     {
+        public int TeamId;             // t40：所属 Team.TeamIndex
         public int FormationId;        // Formation.Index
+        public int Identity;           // t40：Formation 对象引用哈希（对象身份，非仅 Index——Index 复用不串）
         public float Time;             // 逻辑拍时间（BeginLogicalTick 同步基准）
         public CommandDomain Domain;   // Movement / Facing / Arrangement
         public CommandSource Source;   // 真实来源：CB scope 模块 / PlayerOrManual / ExternalUnknown（无 scope）
         public CommandKind Kind;       // 命令种类（第一版为域级近似：Move/Facing/Arrangement）
-        public int PreState;           // 调用前命令 Type（int；0=未知）
+        public int OrderType;          // t40：实际 OrderType（int；0=未知）——原 PreState 语义
+        public long Seq;               // t40：严格递增序号（事件流排序/覆盖判定依据）
+        public SetOrderStage Stage;    // t40：事件阶段（Applied/External/Proposed/Won/ExternalReplaced）
+        public int PreState;           // 调用前命令 Type（int；0=未知）——保留兼容
         public int PostState;          // 调用后命令 Type（int；0=未知；第一版 Prefix 观测填 0）
+    }
+
+    /// <summary>t40：权威 setter 事件流阶段（CPS-3R 覆盖判定/Shadow 口径）。</summary>
+    public enum SetOrderStage
+    {
+        None = 0,
+        Proposed = 1,       // 提案产生（未仲裁；Shadow 决策流）
+        Won = 2,            // 仲裁胜出（未落地；Shadow 决策流）
+        Applied = 3,        // setter 实际落地（Harmony Prefix，CB scope 内）
+        ExternalReplaced = 4 // Applied 后同 identity 同域窗口内被 ExternalUnknown setter 替换（真实覆盖判定）
     }
 
     /// <summary>
@@ -392,11 +409,35 @@ namespace CombatBrain.Coordination
                 + "；0Harmony 加载=" + location + "（csproj 引用 Bannerlord.Harmony 模块 0Harmony.dll）";
         }
 
+        /// <summary>
+        /// t40（cps3r-evidence-chain）：owner 核验纯逻辑——0Harmony 该版本 GetPatchInfo(original).Owners 为
+        ///   ReadOnlyCollection&lt;string&gt;（owner id 列表，反射核实）；含本 mod 的 HarmonyId 即挂载成功，
+        ///   防其它 mod（RBM 等）patch 同一 setter 造成假阳性。Patches.HasOwnPrefix 调用本方法。
+        /// </summary>
+        public static bool HasOwnPatch(System.Collections.Generic.IList<string> owners)
+        {
+            if (owners == null) return false;
+            for (int i = 0; i < owners.Count; i++)
+            {
+                if (owners[i] == HarmonyId) return true;
+            }
+            return false;
+        }
+
         private static readonly SetOrderObservation[] _ring = new SetOrderObservation[Capacity];
         private static int _head;
         private static int _count;
         // 聚合计数：key = domain*16 + source → 次数（固定小表，无逐帧分配）
         private static readonly Dictionary<int, long> _counts = new Dictionary<int, long>();
+
+        // t40（cps3r-evidence-chain）：严格递增序号 + 真实覆盖判定（CB Applied 后同 identity 同域窗口内
+        //   ExternalUnknown setter → ExternalReplaced；SameTick/CrossTick 分列）
+        private static long _seq;
+        private static readonly Dictionary<int, float> _lastApplied = new Dictionary<int, float>(); // key=identity*16+domain → Applied 拍
+        public const float ReplacementWindowSeconds = 1f; // 覆盖判定窗口（规格 0.5-1s 取 1s）
+        public static long ExternalReplacedCount;
+        public static long SameTickExternalReplace;
+        public static long CrossTickExternalReplace;
 
         public static int Count { get { return _count; } }
 
@@ -423,23 +464,73 @@ namespace CombatBrain.Coordination
             _head = 0;
             _count = 0;
             _counts.Clear();
+            _seq = 0;
+            _lastApplied.Clear();
+            ExternalReplacedCount = 0;
+            SameTickExternalReplace = 0;
+            CrossTickExternalReplace = 0;
         }
 
-        /// <summary>纯数据观测入口（Harmony Prefix 与离线测试共用；诊断关闭不记录；无 scope → ExternalUnknown）。</summary>
+        /// <summary>纯数据观测入口（离线测试/兼容旧调用；无 identity/team 信息时传 0）。</summary>
         public static void Observe(int formationId, CommandDomain domain, CommandKind kind,
             int preState, int postState)
         {
+            Observe(0, formationId, 0, domain, kind, preState, 0);
+        }
+
+        /// <summary>
+        /// t40 权威 setter 事件流入口（Harmony Prefix 全参调用；诊断关闭不记录；无 scope → ExternalUnknown）。
+        /// stage：CB scope setter 落地传 Applied(3)；执行器 WouldApply（Shadow）传 Won(2)；无 scope 传 0
+        ///   （内部按来源推断，External 且命中 Applied 后窗口 → ExternalReplaced）。
+        /// </summary>
+        public static void Observe(int teamId, int formationId, int identity, CommandDomain domain,
+            CommandKind kind, int orderType, int stage)
+        {
             if (!Enabled) return; // §4.2.7：诊断关闭不记录（近零开销）
+            float now = LastTick;
+            CommandSource source = CommandSourceScope.Current; // ThreadStatic：无 scope → ExternalUnknown（§4.2.4）
+            SetOrderStage st = stage != 0
+                ? (SetOrderStage)stage
+                : (source == CommandSource.ExternalUnknown ? SetOrderStage.None : SetOrderStage.Applied);
             var obs = new SetOrderObservation
             {
+                TeamId = teamId,
                 FormationId = formationId,
-                Time = LastTick,
+                Identity = identity,
+                Time = now,
                 Domain = domain,
-                Source = CommandSourceScope.Current, // ThreadStatic：无 scope → ExternalUnknown（§4.2.4）
+                Source = source,
                 Kind = kind,
-                PreState = preState,
-                PostState = postState
+                OrderType = orderType,
+                Seq = _seq++,
+                Stage = st,
+                PreState = orderType,
+                PostState = 0
             };
+
+            // t40：真实覆盖判定——先记录 CB Applied 基准（stage=Applied 事件；Harmony Prefix 在 CB scope 内落地）；
+            //   无 scope 且非 Applied 标记的 ExternalUnknown setter 出现在同 identity 同域 Applied 后窗口内 → ExternalReplaced
+            int akey = identity * 16 + (int)domain;
+            if (obs.Stage == SetOrderStage.Applied && identity != 0)
+            {
+                _lastApplied[akey] = now; // CB setter 落地基准（供后续 External 覆盖判定）
+            }
+            else if (obs.Source == CommandSource.ExternalUnknown && identity != 0)
+            {
+                float appliedAt;
+                if (_lastApplied.TryGetValue(akey, out appliedAt))
+                {
+                    float dt = now - appliedAt;
+                    if (dt >= 0f && dt <= ReplacementWindowSeconds)
+                    {
+                        obs.Stage = SetOrderStage.ExternalReplaced;
+                        if (dt < CommandProvenance.SameTickEpsilon) SameTickExternalReplace++; // 同逻辑拍（t3 容差）
+                        else CrossTickExternalReplace++;                                       // 跨拍（窗口内）
+                        ExternalReplacedCount++;
+                    }
+                }
+            }
+
             _ring[_head] = obs;
             _head = (_head + 1) % Capacity;
             if (_count < Capacity) _count++;
@@ -569,23 +660,25 @@ namespace CombatBrain.Coordination
                 return new HarmonyLib.HarmonyMethod(m);
             }
 
-            // 核验三 setter 各至少 1 个 patch（HarmonyLib.Harmony.GetPatchInfo 只读；公开方法反射非私有，反作弊闸守）
+            // 核验三 setter 各至少 1 个本 mod（owner=CombatBrain HarmonyId）的 patch（t40：防其它 mod patch 假阳性）
             private static int CountVerifiedPrefixes()
             {
                 int n = 0;
-                if (HasAnyPrefix(typeof(Formation).GetMethod(nameof(Formation.SetMovementOrder)))) n++;
-                if (HasAnyPrefix(typeof(Formation).GetMethod(nameof(Formation.SetFacingOrder)))) n++;
-                if (HasAnyPrefix(typeof(Formation).GetMethod(nameof(Formation.SetArrangementOrder)))) n++;
+                if (HasOwnPrefix(typeof(Formation).GetMethod(nameof(Formation.SetMovementOrder)))) n++;
+                if (HasOwnPrefix(typeof(Formation).GetMethod(nameof(Formation.SetFacingOrder)))) n++;
+                if (HasOwnPrefix(typeof(Formation).GetMethod(nameof(Formation.SetArrangementOrder)))) n++;
                 return n;
             }
 
-            private static bool HasAnyPrefix(System.Reflection.MethodBase original)
+            // t40：owner 核验——patch 的 owner 必须是 CombatBrain 自己的 HarmonyId（0Harmony 该版本
+            //   GetPatchInfo(original).Owners 为 ReadOnlyCollection<string>（owner id 列表，反射核实）——
+            //   含本 mod id 即挂载成功，防其它 mod（RBM 等）patch 同一 setter 造成假阳性
+            private static bool HasOwnPrefix(System.Reflection.MethodBase original)
             {
                 if (original == null) return false;
-                // 0Harmony 版本核实：GetPatchInfo 返回 HarmonyLib.Patches（属性 Owners: ReadOnlyCollection<Patch>）——
-                // 任一 patch 挂载即视为该 target 已观测（只读查询，非私有字段反射，反作弊闸守）
                 HarmonyLib.Patches patches = HarmonyLib.Harmony.GetPatchInfo(original);
-                return patches != null && patches.Owners != null && patches.Owners.Count > 0;
+                if (patches == null || patches.Owners == null) return false;
+                return SetOrderObserver.HasOwnPatch(patches.Owners);
             }
 
             // t36：显式 Patch 目标（三 setter；诊断/测试共用方法名清单）
@@ -602,21 +695,31 @@ namespace CombatBrain.Coordination
             {
                 // 只读观测：不修改参数、不跳过原方法、不改变返回结果（§4.2 第1条）；
                 // 命令种类用统一 OrderType（v1.4.8：MovementOrder.OrderType 公开属性），不读私有字段（反作弊闸）；
-                // t38：参数名 input 与原方法 SetMovementOrder(MovementOrder input) 一致（Harmony 按参数名绑定）
-                SetOrderObserver.Observe(__instance.Index, CommandDomain.Movement, CommandKind.Move,
-                    (int)input.OrderType, 0);
+                // t38：参数名 input 与原方法 SetMovementOrder(MovementOrder input) 一致（Harmony 按参数名绑定）；
+                // t40：全参事件流（Team/对象身份/OrderType/Stage=Applied）
+                SetOrderObserver.Observe(
+                    __instance.Team != null ? __instance.Team.TeamIndex : 0, __instance.Index,
+                    System.Runtime.CompilerServices.RuntimeHelpers.GetHashCode(__instance),
+                    CommandDomain.Movement, CommandKind.Move, (int)input.OrderType,
+                    (int)SetOrderStage.Applied);
             }
 
             private static void FacingPrefix(Formation __instance, FacingOrder order)
             {
-                SetOrderObserver.Observe(__instance.Index, CommandDomain.Facing, CommandKind.Facing,
-                    (int)order.OrderType, 0);
+                SetOrderObserver.Observe(
+                    __instance.Team != null ? __instance.Team.TeamIndex : 0, __instance.Index,
+                    System.Runtime.CompilerServices.RuntimeHelpers.GetHashCode(__instance),
+                    CommandDomain.Facing, CommandKind.Facing, (int)order.OrderType,
+                    (int)SetOrderStage.Applied);
             }
 
             private static void ArrangementPrefix(Formation __instance, ArrangementOrder order)
             {
-                SetOrderObserver.Observe(__instance.Index, CommandDomain.Arrangement, CommandKind.Arrangement,
-                    (int)order.OrderType, 0);
+                SetOrderObserver.Observe(
+                    __instance.Team != null ? __instance.Team.TeamIndex : 0, __instance.Index,
+                    System.Runtime.CompilerServices.RuntimeHelpers.GetHashCode(__instance),
+                    CommandDomain.Arrangement, CommandKind.Arrangement, (int)order.OrderType,
+                    (int)SetOrderStage.Applied);
             }
         }
     }
