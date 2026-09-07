@@ -215,6 +215,9 @@ namespace OfflineTests
             Console.WriteLine("== CPS2 OwnershipPoc ==");
             TestCps2OwnershipPoc();
 
+            Console.WriteLine("== CPS3 RuntimePrep ==");
+            TestCps3RuntimePrep();
+
             Console.WriteLine("== ATC1 BattlePhaseFSM ==");
             TestBattlePhaseFSM();
 
@@ -3251,6 +3254,74 @@ namespace OfflineTests
             Check(Cps2LeaseObserver.ExternalUnknownTotal() == 3,
                 "cps2-poc external-unknown 3-domain total quantifiable");
             SetOrderObserver.Enabled = false;
+        }
+
+        // CPS-3 运行期 A/B 准备（cps3-runtime-prep，§7.1 四组模式）：模式开关语义（A/B/C/D 各至少 1 条）+
+        // 默认安全态（Enabled=false=现状零变化）+ 组合矩阵（C/D 与 ATC-5R PoC/Cps2PoCSettings 不冲突）+
+        // B Shadow only 决策不落地语义（§7.1 B）
+        private static void TestCps3RuntimePrep()
+        {
+            // A) 默认安全态：验证总开关关（执行器按现状落地=当前生产行为零变化）；观测/Shadow 日志全关
+            Check(!CombatBrain.Settings.Cps3RuntimeSettings.Enabled,
+                "cps3-runtime validation disabled by default (安全态零行为变化)");
+            Check(CombatBrain.Settings.Cps3RuntimeSettings.Mode == CombatBrain.Settings.Cps3Mode.A_NativeBaseline,
+                "cps3-runtime mode default A (未启用时字段不影响生产)");
+            Check(!CombatBrain.Settings.Cps3RuntimeSettings.ObserverEnabled
+                && !CombatBrain.Settings.Cps3RuntimeSettings.ShadowWouldApplyLogEnabled,
+                "cps3-runtime observer/shadow logs default off");
+
+            // B) 四组模式枚举契约（§7.1：A/B/C/D 必须分别采样）
+            Check((int)CombatBrain.Settings.Cps3Mode.A_NativeBaseline == 0
+                && (int)CombatBrain.Settings.Cps3Mode.B_ShadowOnly == 1
+                && (int)CombatBrain.Settings.Cps3Mode.C_ArbiterCoexist == 2
+                && (int)CombatBrain.Settings.Cps3Mode.D_ExclusivePoc == 3,
+                "cps3-runtime four modes A/B/C/D locked");
+
+            // C) 组合矩阵：C ArbiterCoexist=租约 PoC 关+RouteA 关（原版仍控，避免同层对刷）
+            Check(CombatBrain.Settings.Cps3RuntimeSettings.IsValidCombination(
+                CombatBrain.Settings.Cps3Mode.C_ArbiterCoexist, false, false),
+                "cps3-runtime C valid (lease off + routeA off)");
+            Check(!CombatBrain.Settings.Cps3RuntimeSettings.IsValidCombination(
+                CombatBrain.Settings.Cps3Mode.C_ArbiterCoexist, true, false),
+                "cps3-runtime C invalid with lease poc on (原版仍控语义)");
+            Check(!CombatBrain.Settings.Cps3RuntimeSettings.IsValidCombination(
+                CombatBrain.Settings.Cps3Mode.C_ArbiterCoexist, false, true),
+                "cps3-runtime C invalid with routeA on (避免同层对刷)");
+
+            // D) 组合矩阵：D ExclusivePoc=租约 PoC 开+RouteA 关（路线 B 硬排他，两执行路线互斥）
+            Check(CombatBrain.Settings.Cps3RuntimeSettings.IsValidCombination(
+                CombatBrain.Settings.Cps3Mode.D_ExclusivePoc, true, false),
+                "cps3-runtime D valid (lease poc on + routeA off)");
+            Check(!CombatBrain.Settings.Cps3RuntimeSettings.IsValidCombination(
+                CombatBrain.Settings.Cps3Mode.D_ExclusivePoc, false, false),
+                "cps3-runtime D invalid without lease (单域排他需租约)");
+            Check(!CombatBrain.Settings.Cps3RuntimeSettings.IsValidCombination(
+                CombatBrain.Settings.Cps3Mode.D_ExclusivePoc, true, true),
+                "cps3-runtime D invalid with routeA on (执行路线互斥)");
+
+            // E) A/B 对照/观测模式：任意组合合法（A 全关 CB 命令；B 决策不落地）
+            Check(CombatBrain.Settings.Cps3RuntimeSettings.IsValidCombination(
+                CombatBrain.Settings.Cps3Mode.A_NativeBaseline, true, true),
+                "cps3-runtime A valid any combination (对照基线)");
+            Check(CombatBrain.Settings.Cps3RuntimeSettings.IsValidCombination(
+                CombatBrain.Settings.Cps3Mode.B_ShadowOnly, true, false),
+                "cps3-runtime B valid any combination (观测模式)");
+
+            // F) B Shadow only 语义：决策运行不落地（applyWrite=null → ExecuteWinner 返回 true 仅 Record 决策）
+            var okStatus = new FormationCommandExecutor.FormationStatus
+            { Valid = true, PlayerOwned = false, FieldBattle = true, LeaseOk = true };
+            var wShadow = FormationCommandProposal.SpecialistProposal(1, 2, 2, 10f, CommandSource.Cavalry,
+                CommandKind.Move, CommandDomain.Movement, 0, -1, 30f, 40f);
+            long beforeShadow = CommandProvenance.Instance.Count;
+            int shadowSink = 0;
+            bool decidedShadow = FormationCommandExecutor.ExecuteWinner(wShadow, okStatus,
+                default(FormationCommandExecutor.LastDomainWrite),
+                FormationCommandExecutor.PositionHysteresisMeters, FormationCommandExecutor.FacingHysteresisRadians,
+                null, null); // shadow：applyWrite=null → 不落地
+            Check(decidedShadow && shadowSink == 0,
+                "cps3-runtime shadow decision runs without applying (决策不落地)");
+            Check(CommandProvenance.Instance.Count == beforeShadow + 1,
+                "cps3-runtime shadow decision recorded (供 WouldApply 对比)");
         }
 
         // ATC-1 战局阶段机（BattlePhaseFSM 纯逻辑）：五态全边界/最短驻留/同态不重播/Retreat 终态/早期伤亡不误进 Exploit

@@ -154,6 +154,16 @@ namespace CombatBrain.Ai
             System.Func<int, int, bool> leaseActiveReader = null)
         {
             if (mission == null || proposals == null || proposals.Count == 0) return; // 近 O(1)
+            // CPS-3 模式（cps3-runtime-prep，§7.1）：A Native baseline=三域 CB 命令全关——
+            // 执行器短路零落地（proposals 收集照旧，供与 A/B/C/D 对比；默认未启用时走现状）
+            if (CombatBrain.Settings.Cps3RuntimeSettings.Enabled
+                && CombatBrain.Settings.Cps3RuntimeSettings.Mode == CombatBrain.Settings.Cps3Mode.A_NativeBaseline)
+            {
+                return;
+            }
+            // B Shadow only：决策运行（Resolve+ExecuteWinner 决策）但执行器不落地（WouldApply 日志对比）
+            bool shadowOnly = CombatBrain.Settings.Cps3RuntimeSettings.Enabled
+                && CombatBrain.Settings.Cps3RuntimeSettings.Mode == CombatBrain.Settings.Cps3Mode.B_ShadowOnly;
 
             // 1) 收集分组（复用缓冲，零逐拍分配）
             _batch.Clear();
@@ -223,8 +233,22 @@ namespace CombatBrain.Ai
                 {
                     FormationArbitrationResult r = results[d];
                     if (!r.HasWinner) continue;
-                    // 执行（sink=真实 SetOrder；写入成功 → 更新快照）
                     LastDomainWrite last = GetLastWrite(key, r.Domain);
+                    if (shadowOnly)
+                    {
+                        // B Shadow only：applyWrite=null → ExecuteWinner 仅 Record 决策不落地（§7.1 B）；
+                        // WouldApply 日志（门控，供决策 vs 落地对比）
+                        bool decided = ExecuteWinner(r.Winner, status, last,
+                            PositionHysteresisMeters, FacingHysteresisRadians, null, null);
+                        if (decided && CombatBrain.Settings.Cps3RuntimeSettings.ShadowWouldApplyLogEnabled)
+                        {
+                            CombatLog.Log(string.Format(
+                                "[Cps3Shadow] WouldApply team={0} f={1} src={2} kind={3} domain={4}",
+                                teamId, formationId, r.Winner.Source, r.Winner.Kind, r.Domain));
+                        }
+                        continue; // shadow 不更新 _lastWrites（不落地）
+                    }
+                    // 正常落地（C ArbiterCoexist / D ExclusivePoc / 未启用=现状）：唯一 SetOrder 出口
                     bool wrote = ExecuteWinner(r.Winner, status, last,
                         PositionHysteresisMeters, FacingHysteresisRadians,
                         w => ApplySetOrder(mission, f, w), null);

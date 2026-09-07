@@ -12,6 +12,12 @@ namespace CombatBrain
         {
             base.OnSubModuleLoad();
             TryAttachMcm(); // t73：MCM 可选集成（无 MCM 静默用默认豁免）
+            // cps3-runtime-prep：CPS-0 观测 Enable 启动接线（t3 遗留调用点；gated by 集中开关，默认关=近零开销；
+            //   patch 失败 fail-open 并写「观测不可用」日志——Enable 内部 §4.2.8）
+            if (CombatBrain.Settings.Cps3RuntimeSettings.ObserverEnabled)
+            {
+                Coordination.SetOrderObserver.Enable();
+            }
             CombatLog.Log("CombatBrain 子模块已加载");
         }
 

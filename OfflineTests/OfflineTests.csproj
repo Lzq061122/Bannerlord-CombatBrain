@@ -79,6 +79,8 @@
     <Compile Include="..\CombatBrain\Ai\FormationCommandExecutor.cs" Link="Ai\FormationCommandExecutor.cs" />
     <!-- CPS-2：路线 A/B PoC 配置（纯 static，可离线测） -->
     <Compile Include="..\CombatBrain\Settings\Cps2PoCSettings.cs" Link="Settings\Cps2PoCSettings.cs" />
+    <!-- CPS-3：运行期 A/B 模式配置（纯 static 可离线测） -->
+    <Compile Include="..\CombatBrain\Settings\Cps3RuntimeSettings.cs" Link="Settings\Cps3RuntimeSettings.cs" />
     <!-- CPS-0：CommandProvenance.cs 的 Enable() fail-open 日志用 CombatLog（纯 System 依赖，可安全 link） -->
     <Compile Include="..\CombatBrain\CombatLog.cs" Link="CombatLog.cs" />
   </ItemGroup>
