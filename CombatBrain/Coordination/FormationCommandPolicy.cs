@@ -1,5 +1,6 @@
 namespace CombatBrain.Coordination
 {
+    using CombatBrain.Battle;
     // CPS-1 命令策略（FormationCommandPolicy）—— 纯逻辑，零 TaleWorlds 依赖，可离线测。
     // 规格 §3.2（初始优先级契约）/§5.1（纯逻辑模型）/§8.1（玩家与外部所有权）。
     // 职责：优先级集中定义（禁 magic number 散落）+ 来源→优先级映射 + P70 域内冲突矩阵
@@ -136,6 +137,83 @@ namespace CombatBrain.Coordination
                 case IntentType.Reform:
                 case IntentType.Defend: return Cps2RouteAIntent.Hold;
                 default: return Cps2RouteAIntent.Advance; // Attack/Flank/Harass/Pursue/ProtectArcher/BraceFormation
+            }
+        }
+
+        // t50（cps3r-route-a-hardgates）硬门③：per-Formation Mission → 路线 A 意图（弃 Team 级意图驱动；
+        //   Retreat 直接撤退；其余按编队任务/阶段映射——Advance 语义含接触/推进，支撑任务走 Hold/Rejoin）
+        /// <summary>FormationMission + 撤退标志 → 路线 A 意图（纯逻辑可离线测）。</summary>
+        public static Cps2RouteAIntent MapFormationToIntent(bool inRetreat, int formationMission, BattlePhase phase)
+        {
+            if (inRetreat) return Cps2RouteAIntent.Retreat;
+            switch ((FormationMission)formationMission)
+            {
+                case FormationMission.SupportMainEffort:
+                case FormationMission.Flank:
+                case FormationMission.Intercept:
+                case FormationMission.Pursuit:
+                    // 接触/推进任务推进；开局（部署阶段）SupportMainEffort 先 Rejoin 保持阵位
+                    if ((FormationMission)formationMission == FormationMission.SupportMainEffort && phase == BattlePhase.Deployment)
+                        return Cps2RouteAIntent.Rejoin;
+                    return Cps2RouteAIntent.Advance;
+                case FormationMission.Screen:
+                case FormationMission.Occupy:
+                case FormationMission.Reserve:
+                    return Cps2RouteAIntent.Hold;
+                case FormationMission.Retreat:
+                    return Cps2RouteAIntent.Retreat;
+                default:
+                    return Cps2RouteAIntent.None;
+            }
+        }
+
+        // t50 硬门③：Rejoin 导航有效性判定（纯逻辑：不接敌时 MainBody 点已知才算有效路由——
+        //   防止无目的/无人负责的移动；navmesh 实际校验在胶水层经 Mission）。
+        /// <summary>Rejoin 前导航校验：MainBody 点有效（Fog 契约——未知不可构造）+ 非贴身接敌
+        ///   （贴敌时 Rejoin 会被原版接触行为覆盖；用 IsInContact 纯逻辑，enemySnaps 已知敌编队）。
+        ///   Vec2 为 TaleWorlds 类型不可入纯逻辑——MainBody 用 (mainBodyX, mainBodyY) 标量。</summary>
+        public static bool IsRejoinRouteValid(float mainBodyX, float mainBodyY, float fmx, float fmy,
+            System.Collections.Generic.IList<FormationCoordSnapshot> enemySnaps,
+            float contactMeters)
+        {
+            if (mainBodyX == 0f && mainBodyY == 0f) return false; // 无效 MainBody
+            if (enemySnaps != null && enemySnaps.Count > 0
+                && CommitmentContact.IsInContact(fmx, fmy, enemySnaps, contactMeters)) return false; // 贴敌不 Rejoin
+            return true;
+        }
+
+        // t50 硬门①：普通野战隔离判定（纯逻辑；胶水层 IsFieldBattle 实查 + 本判定过滤围城/突围）
+        /// <summary>路线 A 作用范围：仅普通野战（非围城/非突围/非救出战）。</summary>
+        public static bool IsEligibleFieldBattle(bool isFieldBattle, bool isSiege, bool isSallyOut)
+        {
+            return isFieldBattle && !isSiege && !isSallyOut;
+        }
+
+        // t50 硬门②：可逆恢复判定（纯逻辑）——开关关/玩家接管/身份变化/编队失效任一 → 需恢复
+        /// <summary>是否需要恢复（停止 CB 加权）：开关关 || 玩家接管 || 编队失效/identity 变化。</summary>
+        public static bool ShouldRestoreRouteA(bool enabled, bool isAiControlled, bool formationValid)
+        {
+            return !enabled || !isAiControlled || !formationValid;
+        }
+
+        // t50 硬门⑤：冲突降权单维（消除 GetAiWeight=10×SetBehaviorWeight=10 的 100 放大——统一单值权重，
+        //   GetAiWeight 直接返回 CbBehaviorWeight 单常量，SetBehaviorWeight 仅设同样单值；不再乘出 100）。
+        //   原版冲突行为降权：SetBehaviorWeight(0f)（降权而非删除/清空，§6.1 禁止 ClearTacticOptions）。
+        /// <summary>CB 域内互斥 + 原版冲突降权表（t20 Q2）。</summary>
+        public static Cps2RouteAIntent[] ConflictingOwn(Cps2RouteAIntent intent)
+        {
+            switch (intent)
+            {
+                case Cps2RouteAIntent.Hold:
+                    return new[] { Cps2RouteAIntent.Advance, Cps2RouteAIntent.Rejoin, Cps2RouteAIntent.Retreat };
+                case Cps2RouteAIntent.Advance:
+                    return new[] { Cps2RouteAIntent.Hold, Cps2RouteAIntent.Retreat };
+                case Cps2RouteAIntent.Rejoin:
+                    return new[] { Cps2RouteAIntent.Advance, Cps2RouteAIntent.Retreat };
+                case Cps2RouteAIntent.Retreat:
+                    return new[] { Cps2RouteAIntent.Advance, Cps2RouteAIntent.Hold };
+                default:
+                    return new Cps2RouteAIntent[0];
             }
         }
 

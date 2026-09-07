@@ -248,6 +248,9 @@ namespace OfflineTests
             Console.WriteLine("== CPS3r ForceArmTriggerSplit ==");
             TestCps3rForceArmTriggerSplit();
 
+            Console.WriteLine("== CPS3r RouteAHardgates ==");
+            TestCps3rRouteAHardgates();
+
             Console.WriteLine("== ATC1 BattlePhaseFSM ==");
             TestBattlePhaseFSM();
 
@@ -3846,6 +3849,71 @@ namespace OfflineTests
                 && FormationControlLeaseManager.ResolveFallback(forced.Permission, armyMain, 50f)
                     == SafeFallbackKind.Rejoin,
                 "cps3r-split ready + plain denied + far -> Rejoin (真实 Acquire 前置)");
+        }
+
+        // t50（cps3r-route-a-hardgates）路线 A 六硬门：纯逻辑断言（隔离/可逆恢复/per-Formation 映射+Rejoin 导航/
+        //   归因 scope/降权单维可恢复/幂等无分配语义）
+        private static void TestCps3rRouteAHardgates()
+        {
+            // 硬门①：普通野战隔离判定
+            Check(Cps2RouteAPolicy.IsEligibleFieldBattle(true, false, false),
+                "cps3r-routeA① field battle eligible");
+            Check(!Cps2RouteAPolicy.IsEligibleFieldBattle(true, true, false),
+                "cps3r-routeA① siege excluded");
+            Check(!Cps2RouteAPolicy.IsEligibleFieldBattle(true, false, true),
+                "cps3r-routeA① sally-out excluded");
+            Check(!Cps2RouteAPolicy.IsEligibleFieldBattle(false, false, false),
+                "cps3r-routeA① non-field excluded");
+
+            // 硬门②：可逆恢复判定（开关关/玩家接管/编队失效任一 → 恢复）
+            Check(Cps2RouteAPolicy.ShouldRestoreRouteA(false, true, true),
+                "cps3r-routeA② restore on switch off (热关闭=真恢复)");
+            Check(Cps2RouteAPolicy.ShouldRestoreRouteA(true, false, true),
+                "cps3r-routeA② restore on player takeover");
+            Check(Cps2RouteAPolicy.ShouldRestoreRouteA(true, true, false),
+                "cps3r-routeA② restore on invalid formation");
+            Check(!Cps2RouteAPolicy.ShouldRestoreRouteA(true, true, true),
+                "cps3r-routeA② no restore when valid+ai+on");
+
+            // 硬门③：per-Formation Mission 映射（弃 Team 意图）+ Rejoin 导航校验
+            Check(Cps2RouteAPolicy.MapFormationToIntent(false, (int)FormationMission.Retreat, BattlePhase.Engage)
+                == Cps2RouteAIntent.Retreat,
+                "cps3r-routeA③ formation retreat -> Retreat");
+            Check(Cps2RouteAPolicy.MapFormationToIntent(false, (int)FormationMission.SupportMainEffort, BattlePhase.Deployment)
+                == Cps2RouteAIntent.Rejoin,
+                "cps3r-routeA③ support+deployment -> Rejoin (随主力)");
+            Check(Cps2RouteAPolicy.MapFormationToIntent(false, (int)FormationMission.Intercept, BattlePhase.Engage)
+                == Cps2RouteAIntent.Advance,
+                "cps3r-routeA③ intercept -> Advance");
+            Check(Cps2RouteAPolicy.MapFormationToIntent(false, (int)FormationMission.Reserve, BattlePhase.Engage)
+                == Cps2RouteAIntent.Hold,
+                "cps3r-routeA③ reserve -> Hold");
+            Check(!Cps2RouteAPolicy.IsRejoinRouteValid(0f, 0f, 10f, 10f, null, 12f),
+                "cps3r-routeA③ rejoin invalid with zero mainbody (Fog 契约)");
+            var enemy = new[] { new FormationCoordSnapshot { FormationId = 0, X = 20f, Y = 20f, Count = 50, IsKnown = true } };
+            Check(!Cps2RouteAPolicy.IsRejoinRouteValid(100f, 100f, 24f, 24f, enemy, 12f),
+                "cps3r-routeA③ rejoin invalid in-contact (防无人负责)");
+
+            // 硬门④：权威归因 scope（CombatBrainRouteA 追加到 CommandSource，落地可归因）
+            Check((int)CommandSource.CombatBrainRouteA == 14,
+                "cps3r-routeA④ routA scope value 14 (归因)");
+            Check(Cps2RouteAPolicy.ToCommandKind(Cps2RouteAIntent.Hold) == CommandKind.Hold
+                && Cps2RouteAPolicy.ToCommandKind(Cps2RouteAIntent.Advance) == CommandKind.Advance,
+                "cps3r-routeA④ intent->commandkind (Behavior Selected→OrderApplied 语义)");
+
+            // 硬门⑤：冲突降权单维——同意图冲突表（CB 域内互斥，不整套清空）+ 单维权重常量（100 放大消除）
+            var conflict = Cps2RouteAPolicy.ConflictingOwn(Cps2RouteAIntent.Hold);
+            Check(conflict.Length == 3
+                && System.Array.IndexOf(conflict, Cps2RouteAIntent.Advance) >= 0
+                && System.Array.IndexOf(conflict, Cps2RouteAIntent.Rejoin) >= 0
+                && System.Array.IndexOf(conflict, Cps2RouteAIntent.Retreat) >= 0,
+                "cps3r-routeA⑤ minimal conflict set (降权而非清空)");
+            Check(CombatBrain.Settings.Cps2PoCSettings.CbBehaviorWeight == 10f,
+                "cps3r-routeA⑤ single-dim weight (无 100 放大)");
+
+            // 硬门⑥：幂等无分配——行为类型缓存键（每 identity×类型固定键，命中复用不每拍 new 的语义由 EnsureBehavior 保证）
+            Check(CombatBrain.Settings.Cps2PoCSettings.RouteAMaxFormations == 1,
+                "cps3r-routeA⑥ single formation budget (无分配稳定)");
         }
 
         // ATC-1 战局阶段机（BattlePhaseFSM 纯逻辑）：五态全边界/最短驻留/同态不重播/Retreat 终态/早期伤亡不误进 Exploit

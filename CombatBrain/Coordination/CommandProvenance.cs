@@ -37,6 +37,7 @@ namespace CombatBrain.Coordination
         FormationTactics = 10, // 编队阵型修正（t89 全面接管，FormationTactics 自行 SetArrangementOrder）
         FacingCorrection = 11, // 编队朝向修正（X3，FacingCorrection 自行 SetFacingOrder）
         PlayerOrManual = 12,   // 观测来源：玩家/手动命令（仅可靠公开信号可标，§4.2.4）
+        CombatBrainRouteA = 14,// t50：CPS-2 路线 A CbRouteAPoC（Behavior 权重着陆 MovementOrder 的 scope 归因）
         ExternalUnknown = 13   // 观测来源：无 CB scope 的外部/原版/第三方写入（禁止命名为 NativeTeamAI，§4.1）
     }
 

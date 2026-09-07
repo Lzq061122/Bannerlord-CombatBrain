@@ -470,11 +470,16 @@ namespace CombatBrain.Ai
             _bench.EndSection("executor");
 
             // CPS-2 路线 A PoC 挂点（§6.1，默认关闭零 AddAiBehavior/SetBehaviorWeight 调用安全态；
-            //   CPS-3 运行期验证开启）：自定义 BehaviorComponent 权重表达 Movement 域意图
-            if (CombatBrain.Settings.Cps2PoCSettings.RouteAEnabled)
+            //   CPS-3 运行期验证开启）：自定义 BehaviorComponent 权重表达 Movement 域意图。
+            // t50（cps3r-route-a-hardgates）：①单编队单 Movement 域隔离（弃 Teams×Formations 遍历——
+            //   每拍至多 RouteAMaxFormations=1 支非玩家 AI 编队）；②完整可逆（ApplySingle 内恢复）；
+            //   ③per-Formation Mission + Rejoin 导航；④RouteA scope 归因
             {
-                CbRouteAPoC.Apply(mission, team => Cps2RouteAPolicy.MapIntent(GetTeamIntent(team)),
-                    team => GetTeamCenter(team)); // Rejoin 目标=队中心（MainBody 近似，§5.2）
+                bool routeOn = CombatBrain.Settings.Cps2PoCSettings.RouteAEnabled;
+                if (routeOn || CbRouteAPoC.HasArmed())
+                {
+                    ApplyRouteASingle(mission, routeOn);
+                }
             }
             // CPS-2 路线 B 观测：5s 汇总（Cps2LeaseObserver Acquire/Release/Expired/ExternalOwner +
             //   ExternalUnknown 三域覆盖数，供 CPS-3 A/B；默认关闭无日志；喂数据点属运行期验证钩子）
@@ -2338,6 +2343,77 @@ namespace CombatBrain.Ai
             if (_states.TryGetValue(team.TeamIndex, out st))
                 st.Center = result;
             return result;
+        }
+
+        // t50（cps3r-route-a-hardgates）硬门①②③④：路线 A 单编队应用——每拍至多接管 RouteAMaxFormations 支
+        //   非玩家 AI 编队（弃 Team 意图遍历）；普通野战隔离；per-Formation Mission 意图；Rejoin 导航校验；
+        //   RouteA scope 归因（落地 SetMovementOrder 经 ApplySingle→Behavior 在 scope 内）；
+        //   热关闭（RouteAEnabled=false）仍调以恢复已接管编队（真恢复非仅停加权）
+        private void ApplyRouteASingle(Mission mission, bool routeOn)
+        {
+            if (mission == null) return;
+            bool eligibleField = Cps2RouteAPolicy.IsEligibleFieldBattle(
+                mission.IsFieldBattle, mission.IsSiegeBattle, mission.IsSallyOutBattle);
+            int budget = CombatBrain.Settings.Cps2PoCSettings.RouteAMaxFormations;
+            if (budget < 1) budget = 1;
+            int applied = 0;
+            // 敌编队快照（Rejoin 导航校验：不贴敌；只收集已知敌编队）
+            var enemySnaps = new List<FormationCoordSnapshot>();
+            foreach (Team t in mission.Teams)
+                if (t != null && t.IsEnemyOf(mission.PlayerTeam))
+                    foreach (Formation ef in t.FormationsIncludingEmpty)
+                        if (ef != null && ef.CountOfUnits > 0 && ef.QuerySystem != null)
+                            enemySnaps.Add(new FormationCoordSnapshot
+                            {
+                                FormationId = ef.Index,
+                                Count = ef.CountOfUnits,
+                                X = ef.CachedMedianPosition.AsVec2.x,
+                                Y = ef.CachedMedianPosition.AsVec2.y
+                            });
+            foreach (Team team in mission.Teams)
+            {
+                if (team == null || !team.MBTeam.IsValid) continue;
+                if (team.IsPlayerTeam) continue; // 硬门①：非玩家队
+                foreach (Formation f in team.FormationsIncludingEmpty)
+                {
+                    if (f == null || f.CountOfUnits == 0 || f.QuerySystem == null) continue;
+                    bool playerOwned = f.PlayerOwner != null || f.HasPlayerControlledTroop || f.IsPlayerTroopInFormation;
+                    // 硬门①②：非玩家 AI 编队才接管；玩家接管/identity 无效 → 恢复
+                    bool formationValid = !playerOwned && f.IsAIControlled && f.FormationIndex >= 0;
+                    if (!formationValid)
+                    {
+                        CbRouteAPoC.ApplySingle(f, routeOn, eligibleField, f.IsAIControlled, false,
+                            -1, false, 0f, 0f, enemySnaps);
+                        continue;
+                    }
+                    if (applied >= budget) { CbRouteAPoC.ApplySingle(f, false, eligibleField, f.IsAIControlled, true, -1, false, 0f, 0f, enemySnaps); continue; }
+                    // per-Formation Mission → 意图（弃 Team 级 GetTeamIntent）
+                    FormationMission fm = GetFormationMissionOrDefault(f);
+                    bool inRetreat = IsFormationInRetreat(f);
+                    Vec2 mainBody = GetTeamCenter(team); // Rejoin 目标≈队中心（MainBody 近似，§5.2）
+                    CbRouteAPoC.ApplySingle(f, routeOn, eligibleField, f.IsAIControlled, true,
+                        (int)fm, inRetreat, mainBody.x, mainBody.y, enemySnaps);
+                    applied++;
+                }
+            }
+        }
+
+        // t50：读编队 Mission（TeamState.Missions 字典——ATC-3 TickFormationMissions 每帧写入，键=Formation.Index）
+        private FormationMission GetFormationMissionOrDefault(Formation f)
+        {
+            TeamState st;
+            if (_states.TryGetValue(f.Team.TeamIndex, out st))
+            {
+                FormationMission m;
+                if (st.Missions.TryGetValue(f.Index, out m)) return m;
+            }
+            return FormationMission.SupportMainEffort; // 默认：随主力（开场 Rejoin 保持阵位）
+        }
+
+        // t50：该编队当前是否撤退（FormationMission.Retreat 语义；无则 false）
+        private bool IsFormationInRetreat(Formation f)
+        {
+            return f != null && FormationMission.Retreat == GetFormationMissionOrDefault(f);
         }
 
         private float FormationSpread(Team team)

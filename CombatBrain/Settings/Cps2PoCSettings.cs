@@ -10,10 +10,17 @@ namespace CombatBrain.Settings
         // 路线 A Behavior PoC 开关：默认 false（关闭时零 AddAiBehavior/SetBehaviorWeight 调用，安全态）
         public static bool RouteAEnabled = false;
 
-        // CB 自定义 Behavior 权重（FindBestBehavior 按 GetAIWeight()×WeightFactor 取 max，FormationAI.cs:179）：
-        // 原版 Behavior GetAiWeight 通常 0.2~1.0，CB 权重 10 保证意图竞争胜出（无需全量降权即可 PoC；
-        // 冲突行为降权表见 Cps2RouteAPolicy.ConflictingIntents，运行期按表对具体类型 SetBehaviorWeight(0f)）。
+        // 路线 A Behavior 权重（t50 硬门⑤单维化：GetAiWeight 直接返回此常量，SetBehaviorWeight 也设此值——
+        //   消除 t20 旧模型 GetAiWeight=10 × SetBehaviorWeight=10=100 的权重放大；单值竞争即可胜原版 0.2~1.0）。
+        // 冲突行为降权表见 Cps2RouteAPolicy.ConflictingIntents（降权 SetBehaviorWeight(0f) 而非删除/清空）。
         public const float CbBehaviorWeight = 10f;
+
+        // t50 硬门①⑧：RouteA 作用单编队数（每拍至多接管一支非玩家 AI 编队的单 Movement 域）——
+        //   仅诊断/运行期验证，防多队并控
+        public static int RouteAMaxFormations = 1;
+
+        // t50 硬门③：Rejoin 贴身接敌判定阈值（米；IsInContact 距离）
+        public const float RouteARejoinContactMeters = 12f;
 
         // 路线 B 观测输出开关：默认 false（无 5s [Cps2Observation] 日志；CPS-3 运行期开启）
         public static bool RouteBObservationEnabled = false;

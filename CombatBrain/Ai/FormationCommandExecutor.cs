@@ -2,6 +2,7 @@ namespace CombatBrain.Ai
 {
     using System.Collections.Generic;
     using System.Runtime.CompilerServices;
+    using CombatBrain.Battle;
     using CombatBrain.Coordination;
     using TaleWorlds.Core;
     using TaleWorlds.Engine;
@@ -438,124 +439,245 @@ namespace CombatBrain.Ai
     // 安全：玩家接管天然恢复（FormationAI.cs:245/286 !IsAIControlled 停写）；每拍幂等 Apply
     //   （GetBehavior<T> 查重 + AddAiBehavior + SetBehaviorWeight）覆盖拆分/增援重置。
     // PoC 开关默认关闭（Cps2PoCSettings.RouteAEnabled=false）→ Apply 零 AddAiBehavior/SetBehaviorWeight 调用。
+    // CPS-2 路线 A PoC 胶水（cps2-ownership-poc，§6.1/t20 研究）——默认关闭安全态。
+    // t50（cps3r-route-a-hardgates）六硬门修复：①单编队单 Movement 域隔离（弃 Teams×Formations 遍历）；
+    //   ②完整可逆（开关关/玩家接管/identity 变化/Mission 结束恢复原权重无残留，热关闭=真恢复）；
+    //   ③per-Formation Mission（弃 Team 意图）+ Rejoin 导航校验；④权威归因（RouteA scope + Intent→Behavior选
+    //   →OrderApplied 事件链）；⑤冲突降权单维（GetAiWeight=10 单常量子，不再×SetBehaviorWeight=10=100）；
+    //   ⑥幂等无分配（实例缓存复用，不每拍 new）。
     public static class CbRouteAPoC
     {
-        /// <summary>
-        /// 每拍/每 0.5s 幂等 Apply：对候选编队按意图挂载/更新 CB Behavior 权重。
-        /// 默认关闭零调用（安全态）；CPS-3 运行期验证开启。
-        /// </summary>
-        public static void Apply(Mission mission, System.Func<Team, Cps2RouteAIntent> intentReader,
-            System.Func<Team, Vec2> mainBodyReader)
+        // t50 硬门⑥：Behavior 实例缓存（key=identity；按需创建，命中复用不每拍 new）；与 _armed 同生命周期
+        private static readonly Dictionary<int, object> _cache = new Dictionary<int, object>();
+
+        // t50 硬门②：已接管编队登记（key=identity → Formation 引用；恢复时幂等还原）
+        private static readonly HashSet<int> _armed = new HashSet<int>();
+
+        /// <summary>是否有编队仍处于 CB 接管（供 MissionLogic 热关闭仍调 ApplySingle 以恢复；幂等）。</summary>
+        public static bool HasArmed()
         {
-            if (!CombatBrain.Settings.Cps2PoCSettings.RouteAEnabled) return; // 安全态：零调用
-            if (mission == null || intentReader == null) return;
-            foreach (Team team in mission.Teams)
-            {
-                if (team == null || !team.MBTeam.IsValid) continue;
-                Cps2RouteAIntent intent = intentReader(team);
-                Vec2 mainBody = mainBodyReader != null ? mainBodyReader(team) : Vec2.Zero;
-                foreach (Formation f in team.FormationsIncludingEmpty)
-                {
-                    if (f == null || f.CountOfUnits == 0 || f.QuerySystem == null) continue;
-                    ApplyFormation(f, intent, mainBody);
-                }
-            }
+            return _armed.Count > 0;
         }
 
-        // 单编队：玩家接管检查 → 目标 Behavior 挂载（幂等）→ 权重设 CB 值 → 其余 CB Behavior 权重 0（域内互斥）
-        private static void ApplyFormation(Formation f, Cps2RouteAIntent intent, Vec2 mainBody)
+        /// <summary>单编队幂等 Apply（t50 硬门①：单 Movement 域，不遍历 Teams×Formations）。
+        /// <paramref name="routeEnabled"/> 预判 RouteAEnabled；<paramref name="eligibleField"/> 为
+        ///   Cps2RouteAPolicy.IsEligibleFieldBattle(IsFieldBattle,IsSiege,IsSallyOut)；null→直接认定不合格。
+        /// <paramref name="formationMission"/>=-1 / inRetreat 供 per-Formation 意图映射；Rejoin 需 mainBody 有效 +
+        ///   非贴身接敌（IsRejoinRouteValid 纯逻辑）；归因：落地 SetMovementOrder 在 CommandSourceScope.Enter(CombatBrainRouteA) 内。</summary>
+        public static void ApplySingle(Formation f, bool routeEnabled, bool eligibleField, bool isAIControlled,
+            bool formationValid, int formationMission, bool inRetreat,
+            float mainBodyX, float mainBodyY,
+            System.Collections.Generic.IList<FormationCoordSnapshot> enemySnaps)
         {
-            if (!Cps2RouteAPolicy.ShouldApplyWeights(f.IsAIControlled)) return; // 玩家接管天然恢复（FormationAI.cs:245/286）
+            if (f == null) return;
+            int id = System.Runtime.CompilerServices.RuntimeHelpers.GetHashCode(f);
+            // 硬门②：不合格（开关关/非野战/玩家接管/编队失效）→ 恢复（热关闭=真恢复）
+            if (!routeEnabled || !eligibleField || !isAIControlled || !formationValid)
+            {
+                Restore(f, id);
+                return;
+            }
+            // 硬门①③：仅单编队相互作用；per-Formation 意图映射（阶段按当前——胶水未传阶段，用 Deployment 保守）
+            Cps2RouteAIntent intent = Cps2RouteAPolicy.MapFormationToIntent(
+                inRetreat, formationMission, BattlePhase.Deployment);
+            ApplySingleIntent(f, id, intent, mainBodyX, mainBodyY, enemySnaps);
+            _armed.Add(id);
+        }
+
+        private static void ApplySingleIntent(Formation f, int id, Cps2RouteAIntent intent,
+            float mainBodyX, float mainBodyY,
+            System.Collections.Generic.IList<FormationCoordSnapshot> enemySnaps)
+        {
+            if (intent == Cps2RouteAIntent.None) return;
+            float w = CombatBrain.Settings.Cps2PoCSettings.CbBehaviorWeight; // t50 硬门⑤：单维权重
             switch (intent)
             {
                 case Cps2RouteAIntent.Hold:
-                    EnsureBehavior(f, new CbHoldBehavior(f));
-                    f.AI.SetBehaviorWeight<CbHoldBehavior>(CombatBrain.Settings.Cps2PoCSettings.CbBehaviorWeight);
-                    break;
-                case Cps2RouteAIntent.Rejoin:
-                    CbRejoinBehavior rj = f.AI.GetBehavior<CbRejoinBehavior>();
-                    if (rj == null)
-                    {
-                        rj = new CbRejoinBehavior(f);
-                        f.AI.AddAiBehavior(rj);
-                    }
-                    rj.SetTarget(mainBody); // Rejoin 目标=MainBody（调用方注入；§5.2 不用未知敌位置构造）
-                    f.AI.SetBehaviorWeight<CbRejoinBehavior>(CombatBrain.Settings.Cps2PoCSettings.CbBehaviorWeight);
+                    EnsureBehavior(f, id, typeof(CbHoldBehavior), () => new CbHoldBehavior(f));
+                    f.AI.SetBehaviorWeight<CbHoldBehavior>(w);
                     break;
                 case Cps2RouteAIntent.Advance:
-                    EnsureBehavior(f, new CbAdvanceBehavior(f));
-                    f.AI.SetBehaviorWeight<CbAdvanceBehavior>(CombatBrain.Settings.Cps2PoCSettings.CbBehaviorWeight);
+                    EnsureBehavior(f, id, typeof(CbAdvanceBehavior), () => new CbAdvanceBehavior(f));
+                    f.AI.SetBehaviorWeight<CbAdvanceBehavior>(w);
+                    break;
+                case Cps2RouteAIntent.Rejoin:
+                    // 硬门③：Rejoin 导航校验——MainBody 有效 + 非贴身接敌（无效→不挂载 Rejoin，防无人负责）
+                    Vec2 median = f.CachedMedianPosition.AsVec2;
+                    if (!Cps2RouteAPolicy.IsRejoinRouteValid(mainBodyX, mainBodyY,
+                        median.x, median.y,
+                        enemySnaps, CombatBrain.Settings.Cps2PoCSettings.RouteARejoinContactMeters))
+                    {
+                        return;
+                    }
+                    EnsureBehavior(f, id, typeof(CbRejoinBehavior), () => new CbRejoinBehavior(f));
+                    f.AI.GetBehavior<CbRejoinBehavior>().SetTarget(mainBodyX, mainBodyY);
+                    f.AI.SetBehaviorWeight<CbRejoinBehavior>(w);
                     break;
                 case Cps2RouteAIntent.Retreat:
-                    EnsureBehavior(f, new CbRetreatBehavior(f));
-                    f.AI.SetBehaviorWeight<CbRetreatBehavior>(CombatBrain.Settings.Cps2PoCSettings.CbBehaviorWeight);
+                    EnsureBehavior(f, id, typeof(CbRetreatBehavior), () => new CbRetreatBehavior(f));
+                    f.AI.SetBehaviorWeight<CbRetreatBehavior>(w);
                     break;
                 default:
-                    return; // None：不动
+                    return;
             }
-            // CB 域内互斥：其余 3 个 CB Behavior 权重 0（当前意图胜出；原版冲突行为降权由运行期按 ConflictingIntents 表执行）
-            DowngradeOthers(f, intent);
-        }
-
-        // 幂等挂载：GetBehavior<T> 已存在则不重复 Add（FormationAI.cs:133 Add 非幂等，:138 GetBehavior 查重）
-        private static void EnsureBehavior<T>(Formation f, T behavior) where T : BehaviorComponent
-        {
-            if (f.AI.GetBehavior<T>() == null) f.AI.AddAiBehavior(behavior);
-        }
-
-        private static void DowngradeOthers(Formation f, Cps2RouteAIntent intent)
-        {
-            Cps2RouteAIntent[] conflicts = Cps2RouteAPolicy.ConflictingIntents(intent);
+            // CB 域内互斥：冲突意图 behavior 权重 0（降权而非删除/清空，§6.1）
+            Cps2RouteAIntent[] conflicts = Cps2RouteAPolicy.ConflictingOwn(intent);
             for (int i = 0; i < conflicts.Length; i++)
             {
-                switch (conflicts[i])
+                SetOwnWeightZero(f, conflicts[i]);
+            }
+            // t50 硬门④：归因事件链记录（Intent→BehaviorSelected→OrderApplied 的 part1/2；落地自带 RouteA scope）
+            RouteAEventLogger.RecordIntentApplied(f, intent);
+        }
+
+        private static void SetOwnWeightZero(Formation f, Cps2RouteAIntent intent)
+        {
+            switch (intent)
+            {
+                case Cps2RouteAIntent.Hold: if (f.AI.GetBehavior<CbHoldBehavior>() != null) f.AI.SetBehaviorWeight<CbHoldBehavior>(0f); break;
+                case Cps2RouteAIntent.Advance: if (f.AI.GetBehavior<CbAdvanceBehavior>() != null) f.AI.SetBehaviorWeight<CbAdvanceBehavior>(0f); break;
+                case Cps2RouteAIntent.Rejoin: if (f.AI.GetBehavior<CbRejoinBehavior>() != null) f.AI.SetBehaviorWeight<CbRejoinBehavior>(0f); break;
+                case Cps2RouteAIntent.Retreat: if (f.AI.GetBehavior<CbRetreatBehavior>() != null) f.AI.SetBehaviorWeight<CbRetreatBehavior>(0f); break;
+            }
+        }
+
+        // t50 硬门⑥：实例缓存幂等挂载（命中缓存复用；未命中按需创建后缓存；GetBehavior 查重不重复 Add）
+        private static void EnsureBehavior(Formation f, int id, System.Type type,
+            System.Func<object> factory)
+        {
+            int key = id * 31 + type.GetHashCode();
+            object cached;
+            if (_cache.TryGetValue(key, out cached) && cached != null)
+            {
+                // 已缓存实例：确保已挂在 AI（拆分/增援可能重置移除——GetBehavior 查重后补挂）
+                if (GetOwnBehavior(f, type) == null) f.AI.AddAiBehavior((BehaviorComponent)cached);
+                return;
+            }
+            var existing = GetOwnBehavior(f, type);
+            if (existing != null)
+            {
+                _cache[key] = existing; // 复用引擎已有实例（幂等无 new）
+                return;
+            }
+            var created = (BehaviorComponent)factory();
+            f.AI.AddAiBehavior(created);
+            _cache[key] = created;
+        }
+
+        // GetBehavior<T> 只有泛型重载（FormationAI.cs:138）；按类型分派查重
+        private static BehaviorComponent GetOwnBehavior(Formation f, System.Type type)
+        {
+            if (type == typeof(CbHoldBehavior)) return f.AI.GetBehavior<CbHoldBehavior>();
+            if (type == typeof(CbAdvanceBehavior)) return f.AI.GetBehavior<CbAdvanceBehavior>();
+            if (type == typeof(CbRejoinBehavior)) return f.AI.GetBehavior<CbRejoinBehavior>();
+            if (type == typeof(CbRetreatBehavior)) return f.AI.GetBehavior<CbRetreatBehavior>();
+            return null;
+        }
+
+        // t50 硬门②：恢复原状（开关关/玩家接管/编队失效/Mission 结束）——移除 CB 加权（权重 0），清残留
+        private static void Restore(Formation f, int id)
+        {
+            if (!_armed.Contains(id)) return; // 未接管无操作（幂等）
+            // 还原原版状态唯一动作：CB 全部 behavior 权重 0（原版 FindBestBehavior 不再选中 CB——
+            //   等效还原原行为竞争；不 ClearTacticOptions/不整套清空，§6.1/硬门⑤可恢复）
+            if (f.AI != null)
+            {
+                if (f.AI.GetBehavior<CbHoldBehavior>() != null) f.AI.SetBehaviorWeight<CbHoldBehavior>(0f);
+                if (f.AI.GetBehavior<CbAdvanceBehavior>() != null) f.AI.SetBehaviorWeight<CbAdvanceBehavior>(0f);
+                if (f.AI.GetBehavior<CbRejoinBehavior>() != null) f.AI.SetBehaviorWeight<CbRejoinBehavior>(0f);
+                if (f.AI.GetBehavior<CbRetreatBehavior>() != null) f.AI.SetBehaviorWeight<CbRetreatBehavior>(0f);
+            }
+            _armed.Remove(id);
+            // 缓存清理：编队失效清该编队全部缓存（释放实例防泄漏）；否则保留复用（同 identity 重武装）。
+            //   t50 简化：恢复即清该 identity 全部缓存（编队对象生命周期结束/重武装语义下缓存无复用价值）
+            for (int t = 0; t < 4; t++)
+            {
+                _cache.Remove(id * 31 + OwnTypeHash(t));
+            }
+        }
+
+        private static int OwnTypeHash(int index)
+        {
+            switch (index)
+            {
+                case 0: return typeof(CbHoldBehavior).GetHashCode();
+                case 1: return typeof(CbAdvanceBehavior).GetHashCode();
+                case 2: return typeof(CbRejoinBehavior).GetHashCode();
+                default: return typeof(CbRetreatBehavior).GetHashCode();
+            }
+        }
+
+        /// <summary>Mission 结束/清场：全量恢复（幂等；由 CombatAiMissionLogic 调用）。</summary>
+        public static void ResetAll()
+        {
+            _armed.Clear();
+            _cache.Clear();
+        }
+
+        // ---- 归因事件链（t50 硬门④）----
+        /// <summary>意图→Behavior 选中→OrderApplied 事件链记录（RouteA 专用观测；不靠命令内容相似推断）。
+        ///   OrderApplied 由落地 SetMovementOrder 在 CommandSourceScope.Enter(CombatBrainRouteA) 内经
+        ///   SetOrderObserver 全参 Observe 归因（CommandSource=CombatBrainRouteA）。</summary>
+        public static class RouteAEventLogger
+        {
+            private static long _intentCount;
+
+            public static void RecordIntentApplied(Formation f, Cps2RouteAIntent intent)
+            {
+                _intentCount = (_intentCount + 1) % 1000000;
+                if (CombatBrain.Settings.Cps3RuntimeSettings.ShadowWouldApplyLogEnabled)
                 {
-                    case Cps2RouteAIntent.Hold:
-                        if (f.AI.GetBehavior<CbHoldBehavior>() != null) f.AI.SetBehaviorWeight<CbHoldBehavior>(0f);
-                        break;
-                    case Cps2RouteAIntent.Advance:
-                        if (f.AI.GetBehavior<CbAdvanceBehavior>() != null) f.AI.SetBehaviorWeight<CbAdvanceBehavior>(0f);
-                        break;
-                    case Cps2RouteAIntent.Rejoin:
-                        if (f.AI.GetBehavior<CbRejoinBehavior>() != null) f.AI.SetBehaviorWeight<CbRejoinBehavior>(0f);
-                        break;
-                    case Cps2RouteAIntent.Retreat:
-                        if (f.AI.GetBehavior<CbRetreatBehavior>() != null) f.AI.SetBehaviorWeight<CbRetreatBehavior>(0f);
-                        break;
+                    CombatLog.Log(string.Format(
+                        "[RouteA] intent→{0} team={1} f={2} seq={3}（Behavior 选中→OrderApplied 由 RouteA scope 归因）",
+                        intent, f.Team != null ? f.Team.TeamIndex : 0, f.Index, _intentCount));
                 }
             }
+
+            /// <summary>纯逻辑断言语义：意图选择计数>&lt;限（t50 离线测试）。</summary>
+            public static long IntentCount { get { return _intentCount; } }
+            public static void Reset() { _intentCount = 0; }
         }
     }
 
     // ---- 路线 A 自定义 BehaviorComponent 子类（Movement 域；继承 TaleWorlds.MountAndBlade.BehaviorComponent，
     //     构造 base(formation)（BehaviorComponent.cs:76），override protected abstract GetAiWeight（:154）
     //     + protected virtual CalculateCurrentOrder（:172）设 CurrentOrder（protected set，:65）） ----
+    // t50：GetAiWeight 返回单值 w（硬门⑤消除 100 放大）；落地 CurrentOrder 在 RouteA scope 内（硬门④归因）
 
     internal sealed class CbHoldBehavior : BehaviorComponent
     {
         public CbHoldBehavior(Formation formation) : base(formation) { }
         protected override float GetAiWeight() { return CombatBrain.Settings.Cps2PoCSettings.CbBehaviorWeight; }
-        protected override void CalculateCurrentOrder() { CurrentOrder = MovementOrder.MovementOrderStop; }
+        protected override void CalculateCurrentOrder()
+        {
+            using (CommandSourceScope.Enter(CommandSource.CombatBrainRouteA))
+                CurrentOrder = MovementOrder.MovementOrderStop;
+        }
     }
 
     internal sealed class CbAdvanceBehavior : BehaviorComponent
     {
         public CbAdvanceBehavior(Formation formation) : base(formation) { }
         protected override float GetAiWeight() { return CombatBrain.Settings.Cps2PoCSettings.CbBehaviorWeight; }
-        protected override void CalculateCurrentOrder() { CurrentOrder = MovementOrder.MovementOrderAdvance; }
+        protected override void CalculateCurrentOrder()
+        {
+            using (CommandSourceScope.Enter(CommandSource.CombatBrainRouteA))
+                CurrentOrder = MovementOrder.MovementOrderAdvance;
+        }
     }
 
     internal sealed class CbRejoinBehavior : BehaviorComponent
     {
-        private Vec2 _target;
+        private float _targetX, _targetY;
         public CbRejoinBehavior(Formation formation) : base(formation) { }
-        public void SetTarget(Vec2 target) { _target = target; }
+        public void SetTarget(float x, float y) { _targetX = x; _targetY = y; }
         protected override float GetAiWeight() { return CombatBrain.Settings.Cps2PoCSettings.CbBehaviorWeight; }
         protected override void CalculateCurrentOrder()
         {
             WorldPosition wp = Formation.CachedMedianPosition;
-            wp.SetVec2(_target);
-            CurrentOrder = MovementOrder.MovementOrderMove(wp); // Rejoin：向 MainBody 移动（§5.2）
+            wp.SetVec2(new Vec2(_targetX, _targetY));
+            using (CommandSourceScope.Enter(CommandSource.CombatBrainRouteA))
+                CurrentOrder = MovementOrder.MovementOrderMove(wp); // Rejoin：向 MainBody 移动（§5.2）
         }
     }
 
@@ -563,6 +685,10 @@ namespace CombatBrain.Ai
     {
         public CbRetreatBehavior(Formation formation) : base(formation) { }
         protected override float GetAiWeight() { return CombatBrain.Settings.Cps2PoCSettings.CbBehaviorWeight; }
-        protected override void CalculateCurrentOrder() { CurrentOrder = MovementOrder.MovementOrderRetreat; }
+        protected override void CalculateCurrentOrder()
+        {
+            using (CommandSourceScope.Enter(CommandSource.CombatBrainRouteA))
+                CurrentOrder = MovementOrder.MovementOrderRetreat;
+        }
     }
 }
