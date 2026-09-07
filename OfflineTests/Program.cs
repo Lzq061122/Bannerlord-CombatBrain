@@ -206,6 +206,9 @@ namespace OfflineTests
             Console.WriteLine("== CPS1 RemoveDirectWriters ==");
             TestCps1RemoveDirectWriters();
 
+            Console.WriteLine("== CPS1 RepairChargeTarget ==");
+            TestCps1RepairChargeTarget();
+
             Console.WriteLine("== ATC1 BattlePhaseFSM ==");
             TestBattlePhaseFSM();
 
@@ -3070,6 +3073,31 @@ namespace OfflineTests
             //    Limited/InContact 不被 Denied 锁死（atc4 defensive override/in contact -> Limited + atc5r Limited 不夺权）、
             //    合法 Flank/Intercept 不召回（cps1-spec flank/intercept charge not recalled）
             Check(true, "cps1-scan §10.5 回归项核对完成 (Retreat 不被覆盖/Limited 不锁死/Flank 不召回 既有断言覆盖)");
+        }
+
+        // t16 repair（QC BLOCKER：骑兵 Charge 目标丢失）：执行器 Charge+TargetId 映射——
+        // 旧 CavalryGlue 语义 target!=null?ChargeToTarget(target):Charge；迁移后提案 TargetId 必须被执行器
+        // 消费（定向冲锋），无目标退回 MovementOrderCharge（fail-open）
+        private static void TestCps1RepairChargeTarget()
+        {
+            // A) ShouldUseChargeToTarget 纯逻辑判定（执行器消费决策）
+            var chT = FormationCommandProposal.SpecialistProposal(1, 2, 2, 10f, CommandSource.Cavalry,
+                CommandKind.Charge, CommandDomain.Movement, 0, 9, 0f, 0f); // targetId=9=目标编队 Index
+            Check(FormationCommandExecutor.ShouldUseChargeToTarget(chT),
+                "cps1-repair-charge should use ChargeToTarget (TargetId>=0 消费)");
+            var chN = FormationCommandProposal.SpecialistProposal(1, 2, 2, 10f, CommandSource.Cavalry,
+                CommandKind.Charge, CommandDomain.Movement, 0, -1, 0f, 0f); // 无目标
+            Check(!FormationCommandExecutor.ShouldUseChargeToTarget(chN),
+                "cps1-repair-charge no target -> MovementOrderCharge (TargetId=-1)");
+
+            // B) 端到端：执行器消费路径——胜者保留 TargetId 且判定成立（定向冲锋语义保持）
+            var psCh = new List<FormationCommandProposal>();
+            psCh.Add(chT);
+            var rCh = Arb(1, 2, psCh, ExternalOwnerKind.None, 10f);
+            var wCh = R(rCh, CommandDomain.Movement).Winner;
+            Check(wCh.Kind == CommandKind.Charge && wCh.TargetId == 9
+                && FormationCommandExecutor.ShouldUseChargeToTarget(wCh),
+                "cps1-repair-charge executor consumes TargetId (定向冲锋端到端)");
         }
 
         // ATC-1 战局阶段机（BattlePhaseFSM 纯逻辑）：五态全边界/最短驻留/同态不重播/Retreat 终态/早期伤亡不误进 Exploit

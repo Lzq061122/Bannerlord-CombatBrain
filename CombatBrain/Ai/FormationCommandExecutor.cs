@@ -216,7 +216,7 @@ namespace CombatBrain.Ai
                     LastDomainWrite last = GetLastWrite(key, r.Domain);
                     bool wrote = ExecuteWinner(r.Winner, status, last,
                         PositionHysteresisMeters, FacingHysteresisRadians,
-                        w => ApplySetOrder(f, w), null);
+                        w => ApplySetOrder(mission, f, w), null);
                     if (wrote) SetLastWrite(key, r.Domain, r.Winner);
                 }
             }
@@ -294,12 +294,12 @@ namespace CombatBrain.Ai
         }
 
         // 唯一 SetOrder 出口（§3.1；执行器是批准的写入点）
-        private static void ApplySetOrder(Formation f, FormationCommandProposal winner)
+        private static void ApplySetOrder(Mission mission, Formation f, FormationCommandProposal winner)
         {
             switch (winner.Domain)
             {
                 case CommandDomain.Movement:
-                    f.SetMovementOrder(MapMovementOrder(f, winner));
+                    f.SetMovementOrder(MapMovementOrder(mission, f, winner));
                     break;
                 case CommandDomain.Facing:
                     // Facing 目标为方向向量（FacingCorrection 输出归一化方向）
@@ -311,7 +311,18 @@ namespace CombatBrain.Ai
             }
         }
 
-        private static MovementOrder MapMovementOrder(Formation f, FormationCommandProposal p)
+        /// <summary>
+        /// t16 repair（QC BLOCKER）：Charge 提案是否应使用定向冲锋（MovementOrderChargeToTarget）。
+        /// 旧 CavalryGlue.IssueChargeOrder 语义 target!=null ? ChargeToTarget(target) : Charge——
+        /// 迁移后提案携带 TargetId=目标编队 Index；本判定=TargetId 可消费（≥0）。
+        /// 纯逻辑可离线测；实际目标 Formation 解析在 MapMovementOrder 胶水（敌队查找，fail-open）。
+        /// </summary>
+        public static bool ShouldUseChargeToTarget(FormationCommandProposal p)
+        {
+            return p.Kind == CommandKind.Charge && p.TargetId >= 0;
+        }
+
+        private static MovementOrder MapMovementOrder(Mission mission, Formation f, FormationCommandProposal p)
         {
             switch (p.Kind)
             {
@@ -320,6 +331,13 @@ namespace CombatBrain.Ai
                 case CommandKind.Advance:
                     return MovementOrder.MovementOrderAdvance;
                 case CommandKind.Charge:
+                    // t16 repair：定向冲锋（旧语义）——TargetId 消费：敌队编队解析 → ChargeToTarget(target)；
+                    // 无 TargetId 或目标消失/找不到 → 无目标 Charge（fail-open，不误冲友军）
+                    if (ShouldUseChargeToTarget(p))
+                    {
+                        Formation target = FindChargeTarget(mission, f, p.TargetId);
+                        if (target != null) return MovementOrder.MovementOrderChargeToTarget(target);
+                    }
                     return MovementOrder.MovementOrderCharge;
                 case CommandKind.Retreat:
                     return MovementOrder.MovementOrderRetreat;
@@ -330,6 +348,23 @@ namespace CombatBrain.Ai
                     wp.SetVec2(new Vec2(p.TargetX, p.TargetY));
                     return MovementOrder.MovementOrderMove(wp);
             }
+        }
+
+        // 冲锋目标解析（v1.4.8 已核实：MovementOrder.MovementOrderChargeToTarget(Formation targetFormation)，参数为 Formation）。
+        // Cavalry 冲锋目标是敌编队（GetKnownEnemy → 敌队），按 formation.Index 在敌队内查找；
+        // 目标消失/找不到 → null → 调用方退回无目标 Charge（fail-open，不误冲友军/不崩）。
+        private static Formation FindChargeTarget(Mission mission, Formation self, int targetId)
+        {
+            if (mission == null || self == null || self.Team == null) return null;
+            foreach (Team t in mission.Teams)
+            {
+                if (t == null || t == self.Team || !t.IsEnemyOf(self.Team)) continue;
+                foreach (Formation ef in t.FormationsIncludingEmpty)
+                {
+                    if (ef != null && ef.Index == targetId && ef.CountOfUnits > 0) return ef;
+                }
+            }
+            return null;
         }
 
         // Arrangement 域阵型映射（cps1-migrate-specialists）：提案 ReasonCode=ArrangementKind 枚举值
