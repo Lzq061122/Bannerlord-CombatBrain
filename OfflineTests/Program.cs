@@ -239,6 +239,9 @@ namespace OfflineTests
             Console.WriteLine("== CPS3r EvidenceChain ==");
             TestCps3rEvidenceChain();
 
+            Console.WriteLine("== CPS3r RepairPrefixStage ==");
+            TestCps3rRepairPrefixStage();
+
             Console.WriteLine("== ATC1 BattlePhaseFSM ==");
             TestBattlePhaseFSM();
 
@@ -3590,10 +3593,15 @@ namespace OfflineTests
             Check(SetOrderObserver.At(1).Seq == 1 && SetOrderObserver.At(2).Seq == 2,
                 "cps3r event seq strictly increasing");
 
-            // D) 覆盖判定：Applied 后同 identity 同域窗口内 External（0.3s 跨拍）→ ExternalReplaced（CrossTick）
+            // D) 覆盖判定：CB scope Applied 后同 identity 同域窗口内 External（0.3s 跨拍）→ ExternalReplaced（CrossTick）
+            //    （t42 source 优先：Applied 基准须 CB scope 内落地——包 CommandSourceScope 模拟 CB setter）
             SetOrderObserver.Clear();
             SetOrderObserver.NotifyTick(10f);
-            SetOrderObserver.Observe(1, 2, 555, CommandDomain.Movement, CommandKind.Move, 7, (int)SetOrderStage.Applied);
+            using (CommandSourceScope.Enter(CommandSource.Cavalry))
+            {
+                SetOrderObserver.Observe(1, 2, 555, CommandDomain.Movement, CommandKind.Move, 7,
+                    (int)SetOrderStage.Applied);
+            }
             SetOrderObserver.NotifyTick(10.3f);
             SetOrderObserver.Observe(1, 2, 555, CommandDomain.Movement, CommandKind.Move, 9, 0); // 无 scope → External
             Check(SetOrderObserver.ExternalReplacedCount == 1 && SetOrderObserver.CrossTickExternalReplace == 1
@@ -3605,7 +3613,11 @@ namespace OfflineTests
             // E) 覆盖判定：同拍 External（<0.01s）→ SameTick 分列
             SetOrderObserver.Clear();
             SetOrderObserver.NotifyTick(20f);
-            SetOrderObserver.Observe(1, 2, 555, CommandDomain.Movement, CommandKind.Move, 7, (int)SetOrderStage.Applied);
+            using (CommandSourceScope.Enter(CommandSource.Cavalry))
+            {
+                SetOrderObserver.Observe(1, 2, 555, CommandDomain.Movement, CommandKind.Move, 7,
+                    (int)SetOrderStage.Applied);
+            }
             SetOrderObserver.Observe(1, 2, 555, CommandDomain.Movement, CommandKind.Move, 9, 0);
             Check(SetOrderObserver.SameTickExternalReplace == 1 && SetOrderObserver.ExternalReplacedCount == 1
                 && SetOrderObserver.CrossTickExternalReplace == 0,
@@ -3648,6 +3660,66 @@ namespace OfflineTests
             Check(!SetOrderObserver.HasOwnPatch(new[] { "rbm.mod.patch", "other.mod" }),
                 "cps3r foreign patch owner not counted (防假阳性)");
             Check(!SetOrderObserver.HasOwnPatch(null), "cps3r null owners not counted");
+
+            SetOrderObserver.Enabled = false;
+        }
+
+        // t42 repair（Prefix stage 语义）：无 scope（ExternalUnknown）观测即使 Prefix 误标 stage=Applied 也
+        // 不得作 CB Applied 基准（source 优先——source==ExternalUnknown 一律按 External 走覆盖判定）
+        private static void TestCps3rRepairPrefixStage()
+        {
+            SetOrderObserver.Enabled = true;
+
+            // A) 无 scope + stage=Applied（模拟 Prefix 误标）→ 不作 CB Applied 基准（后续 External 不触发 Replaced）
+            SetOrderObserver.Clear();
+            SetOrderObserver.NotifyTick(10f);
+            SetOrderObserver.Observe(1, 2, 555, CommandDomain.Movement, CommandKind.Move, 7,
+                (int)SetOrderStage.Applied); // 测试线程无 scope → Source=ExternalUnknown
+            SetOrderObserver.NotifyTick(10.3f);
+            SetOrderObserver.Observe(1, 2, 555, CommandDomain.Movement, CommandKind.Move, 9, 0);
+            Check(SetOrderObserver.ExternalReplacedCount == 0,
+                "cps3r-stage external with applied-stamp not treated as CB baseline (误标不作基准)");
+            Check(SetOrderObserver.At(0).Source == CommandSource.ExternalUnknown,
+                "cps3r-stage mislabeled applied observed as external (source 优先)");
+
+            // B) CB scope + stage=Applied → 基准写入（窗口内 External → Replaced）
+            SetOrderObserver.Clear();
+            SetOrderObserver.NotifyTick(20f);
+            using (CommandSourceScope.Enter(CommandSource.Cavalry))
+            {
+                SetOrderObserver.Observe(1, 2, 555, CommandDomain.Movement, CommandKind.Move, 7,
+                    (int)SetOrderStage.Applied);
+            }
+            SetOrderObserver.NotifyTick(20.3f);
+            SetOrderObserver.Observe(1, 2, 555, CommandDomain.Movement, CommandKind.Move, 9, 0);
+            Check(SetOrderObserver.ExternalReplacedCount == 1,
+                "cps3r-stage cb-scoped applied sets baseline (覆盖判定生效)");
+            Check(SetOrderObserver.At(0).Source == CommandSource.Cavalry
+                && SetOrderObserver.At(0).Stage == SetOrderStage.Applied,
+                "cps3r-stage cb-scoped applied stage+source correct");
+
+            // C) 误标 Applied 的 External 出现在 CB 基准后 → 按 External 处理 → Replaced（source 优先）
+            SetOrderObserver.Clear();
+            SetOrderObserver.NotifyTick(30f);
+            using (CommandSourceScope.Enter(CommandSource.Brace))
+            {
+                SetOrderObserver.Observe(1, 2, 555, CommandDomain.Movement, CommandKind.Move, 7,
+                    (int)SetOrderStage.Applied);
+            }
+            SetOrderObserver.NotifyTick(30.3f);
+            SetOrderObserver.Observe(1, 2, 555, CommandDomain.Movement, CommandKind.Move, 9,
+                (int)SetOrderStage.Applied); // 无 scope 误标 Applied
+            Check(SetOrderObserver.ExternalReplacedCount == 1
+                && SetOrderObserver.At(1).Stage == SetOrderStage.ExternalReplaced,
+                "cps3r-stage mislabeled external after cb baseline -> replaced (source 优先)");
+
+            // D) 无 scope stage=Applied 且无基准 → 不计数且不写基准
+            SetOrderObserver.Clear();
+            SetOrderObserver.NotifyTick(40f);
+            SetOrderObserver.Observe(1, 2, 555, CommandDomain.Movement, CommandKind.Move, 7,
+                (int)SetOrderStage.Applied);
+            Check(SetOrderObserver.ExternalReplacedCount == 0,
+                "cps3r-stage no baseline -> no replace (误标不写基准)");
 
             SetOrderObserver.Enabled = false;
         }

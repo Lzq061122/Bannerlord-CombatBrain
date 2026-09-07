@@ -510,10 +510,12 @@ namespace CombatBrain.Coordination
 
             // t40：真实覆盖判定——先记录 CB Applied 基准（stage=Applied 事件；Harmony Prefix 在 CB scope 内落地）；
             //   无 scope 且非 Applied 标记的 ExternalUnknown setter 出现在同 identity 同域 Applied 后窗口内 → ExternalReplaced
+            // t42 repair（source 优先）：无 scope（ExternalUnknown）观测即使 Prefix 误标 stage=Applied 也
+            //   不得作 CB Applied 基准（source==ExternalUnknown 一律按 External 走覆盖判定，不写 _lastApplied）
             int akey = identity * 16 + (int)domain;
-            if (obs.Stage == SetOrderStage.Applied && identity != 0)
+            if (obs.Source != CommandSource.ExternalUnknown && obs.Stage == SetOrderStage.Applied && identity != 0)
             {
-                _lastApplied[akey] = now; // CB setter 落地基准（供后续 External 覆盖判定）
+                _lastApplied[akey] = now; // 仅 CB scope 内落地作基准（供后续 External 覆盖判定）
             }
             else if (obs.Source == CommandSource.ExternalUnknown && identity != 0)
             {
