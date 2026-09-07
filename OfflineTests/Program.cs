@@ -227,6 +227,9 @@ namespace OfflineTests
             Console.WriteLine("== CPS3 ModeSync ==");
             TestCps3ModeSync();
 
+            Console.WriteLine("== CPS3 ObserverDiagnostics ==");
+            TestCps3ObserverDiagnostics();
+
             Console.WriteLine("== ATC1 BattlePhaseFSM ==");
             TestBattlePhaseFSM();
 
@@ -3466,6 +3469,35 @@ namespace OfflineTests
             Check(CombatBrain.Settings.Cps3RuntimeSettings.Mode == CombatBrain.Settings.Cps3Mode.A_NativeBaseline
                 && !CombatBrain.Settings.Cps3RuntimeSettings.NeedsModeSync(0),
                 "cps3-mode-sync reset restores safe state");
+        }
+
+        // t34（cps3-observer-diagnostics）：Enable 挂载成功唯一标识日志 + HarmonyId——下次运行期采样
+        // 日志可明确区分「patch 未挂上」（无挂载日志/有异常日志）vs「patch 挂上但原版未调 setter」
+        //（有挂载日志但 ExternalUnknown 仍 0，转向原版 AI 是否真调 setter 方向）
+        private static void TestCps3ObserverDiagnostics()
+        {
+            // A) HarmonyId 唯一标识常量
+            Check(SetOrderObserver.HarmonyId == "com.combatbrain.setorderobserver",
+                "cps3-diag harmony id constant");
+
+            // B) 挂载成功日志格式（唯一标识 + prefix 核验数；Apply 幂等仅一次不重复刷）
+            string log3 = SetOrderObserver.BuildMountLog(3);
+            Check(log3.StartsWith("[SetOrderObserver] 观测已挂载（Harmony patch OK")
+                && log3.Contains("id=com.combatbrain.setorderobserver") && log3.Contains("prefixes=3"),
+                "cps3-diag mount log format (3/3 prefixes OK)");
+
+            // C) MCM 写回链路核实：Cps3ObserverEnabled get/set 直读写 Cps3RuntimeSettings.ObserverEnabled
+            //    （CombatBrainMcmSettings.cs 薄转发；字段 roundtrip 即写回链路正确——t26 cps3-mcm 断言已覆盖，
+            //    此处复核字段语义）
+            CombatBrain.Settings.Cps3RuntimeSettings.ObserverEnabled = true;
+            Check(CombatBrain.Settings.Cps3RuntimeSettings.ObserverEnabled,
+                "cps3-diag observer-enabled field roundtrip (MCM 写回链路)");
+            CombatBrain.Settings.Cps3RuntimeSettings.ObserverEnabled = false;
+
+            // D) 失败场景：Enable 失败沿用「观测不可用」日志（t3 §4.2.8 路径保留）——BuildMountLog 仅成功串；
+            //    异常串为 Apply 内字面文本（代码审查级，0/3 场景由异常分支输出）
+            Check(!SetOrderObserver.BuildMountLog(0).Contains("观测不可用"),
+                "cps3-diag mount log is success-only (失败沿用观测不可用路径)");
         }
 
         // ATC-1 战局阶段机（BattlePhaseFSM 纯逻辑）：五态全边界/最短驻留/同态不重播/Retreat 终态/早期伤亡不误进 Exploit

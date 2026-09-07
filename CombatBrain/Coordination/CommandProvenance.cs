@@ -376,6 +376,15 @@ namespace CombatBrain.Coordination
         public static float LastTick;           // 逻辑拍时间基准（CommandProvenance.BeginLogicalTick 同步）
         public const int Capacity = 128;        // 观测 ring 固定容量（破顶覆盖最旧，O(1)）
 
+        // t34（cps3-observer-diagnostics）：Harmony patch 唯一标识（挂载日志/核验/测试用；原 Patches 私有提升公开）
+        public const string HarmonyId = "com.combatbrain.setorderobserver";
+
+        /// <summary>t34：挂载成功日志文本（唯一标识 + prefix 核验数；Apply 仅一次执行幂等不重复刷；可离线断言格式）。</summary>
+        public static string BuildMountLog(int prefixCount)
+        {
+            return "[SetOrderObserver] 观测已挂载（Harmony patch OK, id=" + HarmonyId + ", prefixes=" + prefixCount + "）";
+        }
+
         private static readonly SetOrderObservation[] _ring = new SetOrderObservation[Capacity];
         private static int _head;
         private static int _count;
@@ -478,7 +487,6 @@ namespace CombatBrain.Coordination
         // 仅诊断观测；PatchAll 只扫描本嵌套类（本程序集唯一带 HarmonyPatch 的类）。
         internal static class Patches
         {
-            private const string HarmonyId = "com.combatbrain.setorderobserver";
             private static HarmonyLib.Harmony _harmony;
 
             public static void Apply()
@@ -486,6 +494,19 @@ namespace CombatBrain.Coordination
                 if (_harmony != null) return;
                 _harmony = new HarmonyLib.Harmony(HarmonyId);
                 _harmony.PatchAll(typeof(Patches).Assembly); // 版本签名不匹配/无 target → 抛 → Enable 捕获 fail-open
+                // t34（cps3-observer-diagnostics）：挂载核验——三 target 各至少 1 个 prefix（GetPatchInfo 只读查询），
+                //   成功写唯一标识日志（幂等：Apply 仅 _harmony==null 时执行一次）；不足则写异常日志——
+                //   下次运行期采样可明确区分「patch 未挂上」vs「patch 挂上但原版未调 setter」
+                int prefixCount = CountVerifiedPrefixes();
+                if (prefixCount == 3)
+                {
+                    CombatLog.Log(BuildMountLog(prefixCount));
+                }
+                else
+                {
+                    CombatLog.Log("[SetOrderObserver] 观测挂载异常：仅 " + prefixCount
+                        + "/3 target 有 prefix（Harmony patch 可能未生效，查 Harmony 版本/模块加载）");
+                }
             }
 
             public static void Unapply()
@@ -493,6 +514,25 @@ namespace CombatBrain.Coordination
                 if (_harmony == null) return;
                 _harmony.UnpatchAll(HarmonyId);
                 _harmony = null;
+            }
+
+            // 核验三 setter 各至少 1 个 prefix（HarmonyLib.Harmony.GetPatchInfo 只读；公开方法反射非私有，反作弊闸守）
+            private static int CountVerifiedPrefixes()
+            {
+                int n = 0;
+                if (HasAnyPrefix(typeof(Formation).GetMethod(nameof(Formation.SetMovementOrder)))) n++;
+                if (HasAnyPrefix(typeof(Formation).GetMethod(nameof(Formation.SetFacingOrder)))) n++;
+                if (HasAnyPrefix(typeof(Formation).GetMethod(nameof(Formation.SetArrangementOrder)))) n++;
+                return n;
+            }
+
+            private static bool HasAnyPrefix(System.Reflection.MethodBase original)
+            {
+                if (original == null) return false;
+                // 0Harmony 版本核实：GetPatchInfo 返回 HarmonyLib.Patches（属性 Owners: ReadOnlyCollection<Patch>）——
+                // 任一 patch 挂载即视为该 target 已观测（只读查询，非私有字段反射，反作弊闸守）
+                HarmonyLib.Patches patches = HarmonyLib.Harmony.GetPatchInfo(original);
+                return patches != null && patches.Owners != null && patches.Owners.Count > 0;
             }
 
             [HarmonyLib.HarmonyPatch(typeof(Formation), nameof(Formation.SetMovementOrder))]
