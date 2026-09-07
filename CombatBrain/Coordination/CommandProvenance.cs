@@ -591,13 +591,20 @@ namespace CombatBrain.Coordination
             // t36：显式 Patch 目标（三 setter；诊断/测试共用方法名清单）
             public static readonly string[] PatchTargetMethodNames =
                 { "SetMovementOrder", "SetFacingOrder", "SetArrangementOrder" };
+            // t38 repair：三 setter 原方法参数名（Harmony 显式 Patch 按参数名绑定 Prefix——Prefix 参数名必须
+            //   与原方法一致，否则抛「Parameter not found」fail-open）。官方反编译 v1.4.8：SetMovementOrder(MovementOrder input)/
+            //   SetFacingOrder(FacingOrder order)/SetArrangementOrder(ArrangementOrder order)（Formation.cs:685/717/722）。
+            //   防复发：本表与三个 Prefix 方法签名参数名一一对应，离线断言锁定。
+            public static readonly string[] PatchTargetParameterNames =
+                { "input", "order", "order" };
 
-            private static void MovementPrefix(Formation __instance, MovementOrder order)
+            private static void MovementPrefix(Formation __instance, MovementOrder input)
             {
                 // 只读观测：不修改参数、不跳过原方法、不改变返回结果（§4.2 第1条）；
-                // 命令种类用统一 OrderType（v1.4.8：MovementOrder.OrderType 公开属性），不读私有字段（反作弊闸）
+                // 命令种类用统一 OrderType（v1.4.8：MovementOrder.OrderType 公开属性），不读私有字段（反作弊闸）；
+                // t38：参数名 input 与原方法 SetMovementOrder(MovementOrder input) 一致（Harmony 按参数名绑定）
                 SetOrderObserver.Observe(__instance.Index, CommandDomain.Movement, CommandKind.Move,
-                    (int)order.OrderType, 0);
+                    (int)input.OrderType, 0);
             }
 
             private static void FacingPrefix(Formation __instance, FacingOrder order)

@@ -233,6 +233,9 @@ namespace OfflineTests
             Console.WriteLine("== CPS3 HarmonyExplicitPatch ==");
             TestCps3HarmonyExplicitPatch();
 
+            Console.WriteLine("== CPS3 HarmonyParamNames ==");
+            TestCps3HarmonyParamNames();
+
             Console.WriteLine("== ATC1 BattlePhaseFSM ==");
             TestBattlePhaseFSM();
 
@@ -3527,6 +3530,33 @@ namespace OfflineTests
             // D) 失败路径：显式 Patch 任一步抛异常 → Enable catch「观测不可用（具体异常）」fail-open（t3 保留）
             Check(SetOrderObserver.BuildMountLog(0).StartsWith("[SetOrderObserver] 观测已挂载"),
                 "cps3-harmony mount log only success template (失败走异常分支)");
+        }
+
+        // t38 repair（MovementPrefix 参数名 order→input）：Harmony 显式 Patch 按参数名绑定 Prefix——
+        // SetMovementOrder(MovementOrder input) 原方法参数名 input，Prefix 参数名不匹配抛「Parameter not found」
+        // fail-open（captain 实测 18:33:21 日志实锤）。防复发映射表（三 setter 原方法参数名）离线锁定。
+        private static void TestCps3HarmonyParamNames()
+        {
+            // A) 三 setter 原方法参数名映射表（与官方反编译 Formation.cs:685/717/722 一致：
+            //    SetMovementOrder(input)/SetFacingOrder(order)/SetArrangementOrder(order)）
+            string[] pnames = SetOrderObserver.Patches.PatchTargetParameterNames;
+            Check(pnames.Length == 3 && pnames[0] == "input" && pnames[1] == "order" && pnames[2] == "order",
+                "cps3-paramnames setter parameter names input/order/order (Harmony 按参数名绑定)");
+            // 与目标方法名一一对应（下标对齐）
+            string[] targets = SetOrderObserver.Patches.PatchTargetMethodNames;
+            Check(targets.Length == pnames.Length
+                && targets[0] == "SetMovementOrder" && pnames[0] == "input"
+                && targets[1] == "SetFacingOrder" && pnames[1] == "order"
+                && targets[2] == "SetArrangementOrder" && pnames[2] == "order",
+                "cps3-paramnames method/param name pairs aligned (防复发)");
+
+            // B) 挂载日志格式保持（t34/t36）；修复后应出现「观测已挂载（..., prefixes=3）」一次
+            Check(SetOrderObserver.BuildMountLog(3).Contains("prefixes=3"),
+                "cps3-paramnames mount log prefixes=3 (修复后全挂载)");
+
+            // C) 失败路径保持：参数名不匹配 → 抛 → Enable catch fail-open（t3 §4.2.8；修复后不再触发）
+            Check(SetOrderObserver.BuildMountLog(0).StartsWith("[SetOrderObserver] 观测已挂载"),
+                "cps3-paramnames mount log success-only template (失败走异常分支)");
         }
 
         // ATC-1 战局阶段机（BattlePhaseFSM 纯逻辑）：五态全边界/最短驻留/同态不重播/Retreat 终态/早期伤亡不误进 Exploit
