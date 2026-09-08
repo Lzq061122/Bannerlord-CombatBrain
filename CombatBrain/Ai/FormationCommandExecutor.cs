@@ -455,6 +455,9 @@ namespace CombatBrain.Ai
         //   消除 t20 GetAiWeight=10×SetBehaviorWeight=10=100 放大）
         public const float BaseBehaviorWeight = 1f;
 
+        // t54（D-RouteA）：稳定性 flap 检测窗口（秒）——窗口内意图回摆到先前意图=权重对刷
+        public const float RouteAStabilityFlapWindowSeconds = 2f;
+
         /// <summary>FindBestBehavior 有效权重（纯逻辑可离线测）：GetAiWeight×WeightFactor（FormationAI.cs:179）。</summary>
         public static float EffectiveWeight(float getAiWeight, float setBehaviorWeight)
         {
@@ -538,7 +541,8 @@ namespace CombatBrain.Ai
                 SetOwnWeightZero(f, conflicts[i]);
             }
             // t50 硬门④：归因事件链记录（Intent→BehaviorSelected→OrderApplied 的 part1/2；落地自带 RouteA scope）
-            RouteAEventLogger.RecordIntentApplied(f, intent);
+            RouteAEventLogger.RecordIntentApplied(
+                f.Team != null ? f.Team.TeamIndex : 0, f.Index, intent);
         }
 
         private static void SetOwnWeightZero(Formation f, Cps2RouteAIntent intent)
@@ -625,28 +629,135 @@ namespace CombatBrain.Ai
             _cache.Clear();
         }
 
-        // ---- 归因事件链（t50 硬门④）----
+        // ---- 归因事件链（t50 硬门④/t54 D-RouteA）----
         /// <summary>意图→Behavior 选中→OrderApplied 事件链记录（RouteA 专用观测；不靠命令内容相似推断）。
-        ///   OrderApplied 由落地 SetMovementOrder 在 CommandSourceScope.Enter(CombatBrainRouteA) 内经
-        ///   SetOrderObserver 全参 Observe 归因（CommandSource=CombatBrainRouteA）。</summary>
+        ///   t54 四段：Intent（ApplySingle 命中）→BehaviorSelected（FindBestBehavior 选中执行）→
+        ///   OrderApplied（落地 SetMovementOrder，RouteA scope 内）→ Stable（未被 ExternalReplaced 覆盖）。
+        ///   ExternalReplaced 复用 SetOrderObserver 覆盖判定（该编队 Movement 域）。</summary>
         public static class RouteAEventLogger
         {
             private static long _intentCount;
+            private static long _selectedCount;
+            private static long _orderAppliedCount;
 
-            public static void RecordIntentApplied(Formation f, Cps2RouteAIntent intent)
+            public static void RecordIntentApplied(int teamId, int formationId, Cps2RouteAIntent intent)
             {
+                // t54 修复：签名去 Formation（TaleWorlds 类型）——离线测试 JIT 无需加载 TaleWorlds.MountAndBlade；
+                // 生产调用点传 f.Team.TeamIndex/f.Index 标量
                 _intentCount = (_intentCount + 1) % 1000000;
                 if (CombatBrain.Settings.Cps3RuntimeSettings.ShadowWouldApplyLogEnabled)
                 {
                     CombatLog.Log(string.Format(
                         "[RouteA] intent→{0} team={1} f={2} seq={3}（Behavior 选中→OrderApplied 由 RouteA scope 归因）",
-                        intent, f.Team != null ? f.Team.TeamIndex : 0, f.Index, _intentCount));
+                        intent, teamId, formationId, _intentCount));
                 }
             }
 
-            /// <summary>纯逻辑断言语义：意图选择计数>&lt;限（t50 离线测试）。</summary>
+            // t54：Behavior 被 FindBestBehavior 选中执行（CalculateCurrentOrder 被调）→ BehaviorSelected
+            public static void RecordBehaviorSelected()
+            {
+                _selectedCount = (_selectedCount + 1) % 1000000;
+            }
+
+            // t54：落地 SetMovementOrder（RouteA scope 内）→ OrderApplied
+            public static void RecordOrderApplied()
+            {
+                _orderAppliedCount = (_orderAppliedCount + 1) % 1000000;
+            }
+
+            /// <summary>纯逻辑断言语义：意图选择计数（t50 离线测试）。</summary>
             public static long IntentCount { get { return _intentCount; } }
-            public static void Reset() { _intentCount = 0; }
+            public static long SelectedCount { get { return _selectedCount; } }
+            public static long OrderAppliedCount { get { return _orderAppliedCount; } }
+
+            /// <summary>t54：Stable 计数=OrderApplied 中未被 ExternalReplaced 覆盖的次数（四段终态）。</summary>
+            public static long StableCount
+            {
+                get
+                {
+                    long replaced = SetOrderObserver.ExternalReplacedCount;
+                    return _orderAppliedCount - (replaced > _orderAppliedCount ? _orderAppliedCount : replaced);
+                }
+            }
+
+            /// <summary>t54：RouteA 段汇总（供 5s 日志/战斗结束判定）。</summary>
+            public static string BuildSummary()
+            {
+                return "intent=" + _intentCount + ";selected=" + _selectedCount
+                    + ";orderApplied=" + _orderAppliedCount + ";stable=" + StableCount
+                    + ";externalReplaced=" + SetOrderObserver.ExternalReplacedCount
+                    + ";sameTick=" + SetOrderObserver.SameTickExternalReplace
+                    + ";crossTick=" + SetOrderObserver.CrossTickExternalReplace;
+            }
+
+            public static void Reset() { _intentCount = 0; _selectedCount = 0; _orderAppliedCount = 0; }
+        }
+
+        // t54（D-RouteA）：无态势变化稳定性验证——意图变化计数 + 高频权重对刷（flap）检测（纯逻辑可离线测）。
+        // 节流窗口内同一编队意图来回切换 ≥2 次 = 权重对刷（flap）；迟滞/节流由窗口判定（非每拍对刷）。
+        public static class RouteAStability
+        {
+            private sealed class State
+            {
+                public Cps2RouteAIntent Last;
+                public float LastAt;
+                public int ChangeCount;
+                public int FlapCount;
+                public Cps2RouteAIntent PrevPrev = Cps2RouteAIntent.None;
+            }
+
+            private static readonly Dictionary<string, State> _states = new Dictionary<string, State>();
+            private static readonly List<string> _order = new List<string>();
+
+            /// <summary>意图变化 + flap 检测（key=编队标识；窗口内意图 A→B→A 回摆 = flap）。</summary>
+            public static void Record(string key, Cps2RouteAIntent intent, float now, float flapWindowSeconds)
+            {
+                State s;
+                if (!_states.TryGetValue(key, out s))
+                {
+                    s = new State { Last = intent, LastAt = now };
+                    _states[key] = s;
+                    _order.Add(key);
+                    return;
+                }
+                if (s.Last != intent)
+                {
+                    s.ChangeCount++;
+                    if (s.PrevPrev == intent && now - s.LastAt <= flapWindowSeconds)
+                    {
+                        s.FlapCount++; // 窗口内回摆到先前意图 = 权重对刷
+                    }
+                    s.PrevPrev = s.Last;
+                    s.Last = intent;
+                    s.LastAt = now;
+                }
+            }
+
+            public static int ChangeCount(string key)
+            {
+                State s;
+                return _states.TryGetValue(key, out s) ? s.ChangeCount : 0;
+            }
+
+            public static int FlapCount(string key)
+            {
+                State s;
+                return _states.TryGetValue(key, out s) ? s.FlapCount : 0;
+            }
+
+            /// <summary>汇总（全部编队；供日志/判定：无态势变化→change/flap 低）。</summary>
+            public static string BuildSummary()
+            {
+                int totalChange = 0, totalFlap = 0;
+                for (int i = 0; i < _order.Count; i++)
+                {
+                    State s;
+                    if (_states.TryGetValue(_order[i], out s)) { totalChange += s.ChangeCount; totalFlap += s.FlapCount; }
+                }
+                return "formations=" + _states.Count + ";intentChange=" + totalChange + ";weightFlap=" + totalFlap;
+            }
+
+            public static void Reset() { _states.Clear(); _order.Clear(); }
         }
     }
 
@@ -666,9 +777,13 @@ namespace CombatBrain.Ai
         protected override float GetAiWeight() { return CbRouteAPoC.BaseBehaviorWeight; }
         protected override void CalculateCurrentOrder()
         {
+            CbRouteAPoC.RouteAEventLogger.RecordBehaviorSelected(); // t54：BehaviorSelected
             CurrentOrder = MovementOrder.MovementOrderStop;
             using (CommandSourceScope.Enter(CommandSource.CombatBrainRouteA))
+            {
                 Formation.SetMovementOrder(CurrentOrder);
+                CbRouteAPoC.RouteAEventLogger.RecordOrderApplied(); // t54：OrderApplied（落地）
+            }
         }
     }
 
@@ -678,9 +793,13 @@ namespace CombatBrain.Ai
         protected override float GetAiWeight() { return CbRouteAPoC.BaseBehaviorWeight; }
         protected override void CalculateCurrentOrder()
         {
+            CbRouteAPoC.RouteAEventLogger.RecordBehaviorSelected();
             CurrentOrder = MovementOrder.MovementOrderAdvance;
             using (CommandSourceScope.Enter(CommandSource.CombatBrainRouteA))
+            {
                 Formation.SetMovementOrder(CurrentOrder);
+                CbRouteAPoC.RouteAEventLogger.RecordOrderApplied();
+            }
         }
     }
 
@@ -692,11 +811,15 @@ namespace CombatBrain.Ai
         protected override float GetAiWeight() { return CbRouteAPoC.BaseBehaviorWeight; }
         protected override void CalculateCurrentOrder()
         {
+            CbRouteAPoC.RouteAEventLogger.RecordBehaviorSelected();
             WorldPosition wp = Formation.CachedMedianPosition;
             wp.SetVec2(new Vec2(_targetX, _targetY));
             CurrentOrder = MovementOrder.MovementOrderMove(wp); // Rejoin：向 MainBody 移动（§5.2）
             using (CommandSourceScope.Enter(CommandSource.CombatBrainRouteA))
+            {
                 Formation.SetMovementOrder(CurrentOrder);
+                CbRouteAPoC.RouteAEventLogger.RecordOrderApplied();
+            }
         }
     }
 
@@ -706,9 +829,13 @@ namespace CombatBrain.Ai
         protected override float GetAiWeight() { return CbRouteAPoC.BaseBehaviorWeight; }
         protected override void CalculateCurrentOrder()
         {
+            CbRouteAPoC.RouteAEventLogger.RecordBehaviorSelected();
             CurrentOrder = MovementOrder.MovementOrderRetreat;
             using (CommandSourceScope.Enter(CommandSource.CombatBrainRouteA))
+            {
                 Formation.SetMovementOrder(CurrentOrder);
+                CbRouteAPoC.RouteAEventLogger.RecordOrderApplied();
+            }
         }
     }
 }

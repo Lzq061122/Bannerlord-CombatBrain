@@ -254,6 +254,9 @@ namespace OfflineTests
             Console.WriteLine("== CPS3r RouteARepair2 ==");
             TestCps3rRouteARepair2();
 
+            Console.WriteLine("== CPS3r DRouteAMode ==");
+            TestCps3rDRouteAMode();
+
             Console.WriteLine("== ATC1 BattlePhaseFSM ==");
             TestBattlePhaseFSM();
 
@@ -3963,6 +3966,83 @@ namespace OfflineTests
                 && Cps2RouteAPolicy.ToCommandKind(Cps2RouteAIntent.Rejoin) == CommandKind.Move
                 && Cps2RouteAPolicy.ToCommandKind(Cps2RouteAIntent.Retreat) == CommandKind.Retreat,
                 "cps3r-routeA-r2 all intents effective commands (Behavior 落地语义)");
+        }
+
+        // t54（cps3r-d-routea-mode）：D-RouteA 运行期验证模式——E_RouteA 模式语义（RouteA 开+租约关）、
+        // 事件链四段（Intent/BehaviorSelected/OrderApplied/Stable）、稳定性（意图变化/flap 检测）
+        private static void TestCps3rDRouteAMode()
+        {
+            // ①E_RouteA 模式语义：追加不重排既有值 + 转换 0..4 + 组合矩阵（RouteA 开+租约关）
+            Check((int)CombatBrain.Settings.Cps3Mode.E_RouteA == 4,
+                "cps3r-droutea E_RouteA value 4 (追加不重排)");
+            Check(CombatBrain.Settings.Cps3RuntimeSettings.ModeFromSelectedIndex(4) == CombatBrain.Settings.Cps3Mode.E_RouteA
+                && CombatBrain.Settings.Cps3RuntimeSettings.SelectedIndexFromMode(CombatBrain.Settings.Cps3Mode.E_RouteA) == 4,
+                "cps3r-droutea mode<->selected roundtrip 0..4");
+            Check(CombatBrain.Settings.Cps3RuntimeSettings.ModeFromSelectedIndex(5) == CombatBrain.Settings.Cps3Mode.A_NativeBaseline,
+                "cps3r-droutea out-of-range clamps to A");
+            Check(CombatBrain.Settings.Cps3RuntimeSettings.IsValidCombination(CombatBrain.Settings.Cps3Mode.E_RouteA, false, true),
+                "cps3r-droutea E valid (routeA on + lease off)");
+            Check(!CombatBrain.Settings.Cps3RuntimeSettings.IsValidCombination(CombatBrain.Settings.Cps3Mode.E_RouteA, true, true),
+                "cps3r-droutea E invalid with lease (与租约区分)");
+            Check(CombatBrain.Settings.Cps3RuntimeSettings.RouteAActive(CombatBrain.Settings.Cps3Mode.E_RouteA)
+                && !CombatBrain.Settings.Cps3RuntimeSettings.RouteAActive(CombatBrain.Settings.Cps3Mode.D_ExclusivePoc),
+                "cps3r-droutea RouteAActive only in E (不用 ForceLease)");
+            Check(!CombatBrain.Settings.Cps3RuntimeSettings.ForceLeaseActive(CombatBrain.Settings.Cps3Mode.E_RouteA),
+                "cps3r-droutea ForceLease inactive in E (租约注入仅 D)");
+
+            // ②事件链：Intent/BehaviorSelected/OrderApplied 计数 + Stable=Applied-Replaced（纯逻辑）
+            CbRouteAPoC.RouteAEventLogger.Reset();
+            SetOrderObserver.Enabled = true;
+            SetOrderObserver.Clear();
+            SetOrderObserver.NotifyTick(5f);
+            CbRouteAPoC.RouteAEventLogger.RecordIntentApplied(0, -1, Cps2RouteAIntent.Hold); // 标量（签名去 TaleWorlds 类型）
+            CbRouteAPoC.RouteAEventLogger.RecordBehaviorSelected();
+            CbRouteAPoC.RouteAEventLogger.RecordOrderApplied();
+            CbRouteAPoC.RouteAEventLogger.RecordBehaviorSelected();
+            CbRouteAPoC.RouteAEventLogger.RecordOrderApplied();
+            Check(CbRouteAPoC.RouteAEventLogger.IntentCount == 1
+                && CbRouteAPoC.RouteAEventLogger.SelectedCount == 2
+                && CbRouteAPoC.RouteAEventLogger.OrderAppliedCount == 2,
+                "cps3r-droutea event chain counts (intent/selected/applied)");
+            Check(CbRouteAPoC.RouteAEventLogger.StableCount == 2,
+                "cps3r-droutea stable = applied - replaced (无 ExternalReplaced 全稳定)");
+            // 有 ExternalReplaced 时 Stable 扣减（Applied 须 CB scope 内作基准——t42 source 优先语义）
+            SetOrderObserver.NotifyTick(5.3f);
+            using (CommandSourceScope.Enter(CommandSource.CombatBrainRouteA))
+            {
+                SetOrderObserver.Observe(0, 1, 42, CommandDomain.Movement, CommandKind.Move, 7,
+                    (int)SetOrderStage.Applied);
+            }
+            SetOrderObserver.NotifyTick(5.6f);
+            SetOrderObserver.Observe(0, 1, 42, CommandDomain.Movement, CommandKind.Move, 9, 0); // External 覆盖
+            Check(SetOrderObserver.ExternalReplacedCount == 1
+                && CbRouteAPoC.RouteAEventLogger.StableCount == 1,
+                "cps3r-droutea stable decremented by replaced (四段终态)");
+            string summary = CbRouteAPoC.RouteAEventLogger.BuildSummary();
+            Check(summary.Contains("intent=1") && summary.Contains("selected=2")
+                && summary.Contains("orderApplied=2") && summary.Contains("externalReplaced=1"),
+                "cps3r-droutea event chain summary format");
+            SetOrderObserver.Enabled = false;
+            SetOrderObserver.Clear();
+            CbRouteAPoC.RouteAEventLogger.Reset();
+
+            // ③稳定性：意图持续无变化→change=0；窗口内回摆→flap；窗口外变化→仅 change
+            CbRouteAPoC.RouteAStability.Reset();
+            CbRouteAPoC.RouteAStability.Record("k", Cps2RouteAIntent.Hold, 0f, 2f);
+            CbRouteAPoC.RouteAStability.Record("k", Cps2RouteAIntent.Hold, 0.5f, 2f);
+            CbRouteAPoC.RouteAStability.Record("k", Cps2RouteAIntent.Hold, 1.0f, 2f);
+            Check(CbRouteAPoC.RouteAStability.ChangeCount("k") == 0 && CbRouteAPoC.RouteAStability.FlapCount("k") == 0,
+                "cps3r-droutea stable no change same intent (无态势变化)");
+            CbRouteAPoC.RouteAStability.Record("k", Cps2RouteAIntent.Advance, 1.2f, 2f); // 变化 1
+            CbRouteAPoC.RouteAStability.Record("k", Cps2RouteAIntent.Hold, 1.5f, 2f);     // 回摆窗口内→flap 1
+            Check(CbRouteAPoC.RouteAStability.ChangeCount("k") == 2 && CbRouteAPoC.RouteAStability.FlapCount("k") == 1,
+                "cps3r-droutea flap on in-window swing (权重对刷检测)");
+            CbRouteAPoC.RouteAStability.Record("k", Cps2RouteAIntent.Advance, 4.0f, 2f); // 窗口外变化→仅 change
+            Check(CbRouteAPoC.RouteAStability.FlapCount("k") == 1 && CbRouteAPoC.RouteAStability.ChangeCount("k") == 3,
+                "cps3r-droutea out-of-window change not flap (迟滞防抖)");
+            Check(CbRouteAPoC.RouteAStability.BuildSummary().Contains("weightFlap=1"),
+                "cps3r-droutea stability summary format");
+            CbRouteAPoC.RouteAStability.Reset();
         }
 
         // ATC-1 战局阶段机（BattlePhaseFSM 纯逻辑）：五态全边界/最短驻留/同态不重播/Retreat 终态/早期伤亡不误进 Exploit

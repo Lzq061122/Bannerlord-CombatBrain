@@ -474,8 +474,11 @@ namespace CombatBrain.Ai
             // t50（cps3r-route-a-hardgates）：①单编队单 Movement 域隔离（弃 Teams×Formations 遍历——
             //   每拍至多 RouteAMaxFormations=1 支非玩家 AI 编队）；②完整可逆（ApplySingle 内恢复）；
             //   ③per-Formation Mission + Rejoin 导航；④RouteA scope 归因
+            // t54（D-RouteA）：E_RouteA 模式自动启用 RouteA（routeOn 判定含模式）+ 稳定性记录（意图变化/flap）
             {
-                bool routeOn = CombatBrain.Settings.Cps2PoCSettings.RouteAEnabled;
+                bool routeOn = CombatBrain.Settings.Cps2PoCSettings.RouteAEnabled
+                    || (CombatBrain.Settings.Cps3RuntimeSettings.Enabled
+                        && CombatBrain.Settings.Cps3RuntimeSettings.RouteAActive(CombatBrain.Settings.Cps3RuntimeSettings.Mode));
                 if (routeOn || CbRouteAPoC.HasArmed())
                 {
                     ApplyRouteASingle(mission, routeOn);
@@ -493,6 +496,15 @@ namespace CombatBrain.Ai
                     || CombatBrain.Settings.Cps2PoCSettings.RouteBObservationEnabled)
                 {
                     CombatLog.Log("[Cps2Observation] " + Cps2LeaseObserver.BuildSummary());
+                }
+                // t54（D-RouteA）：RouteA 段汇总（事件链计数 + 稳定性 + 该编队 Movement 域 ExternalReplaced 分列），
+                //   供战斗后读日志判定（E_RouteA 模式或 RouteAEnabled 时输出）
+                if (CombatBrain.Settings.Cps2PoCSettings.RouteAEnabled
+                    || (CombatBrain.Settings.Cps3RuntimeSettings.Enabled
+                        && CombatBrain.Settings.Cps3RuntimeSettings.RouteAActive(CombatBrain.Settings.Cps3RuntimeSettings.Mode)))
+                {
+                    CombatLog.Log("[RouteA] " + CbRouteAPoC.RouteAEventLogger.BuildSummary()
+                        + ";" + CbRouteAPoC.RouteAStability.BuildSummary());
                 }
             }
 
@@ -2391,6 +2403,11 @@ namespace CombatBrain.Ai
                     FormationMission fm = GetFormationMissionOrDefault(f);
                     bool inRetreat = IsFormationInRetreat(f);
                     Vec2 mainBody = GetTeamCenter(team); // Rejoin 目标≈队中心（MainBody 近似，§5.2）
+                    Cps2RouteAIntent routeIntent = Cps2RouteAPolicy.MapFormationToIntent(inRetreat, (int)fm,
+                        CombatBrain.Battle.BattlePhase.Deployment);
+                    // t54：稳定性记录（意图变化/flap 检测；无态势变化→change/flap 低——同一意图持续不刷权重）
+                    CbRouteAPoC.RouteAStability.Record("t" + team.TeamIndex + "f" + f.Index, routeIntent,
+                        _elapsed, CbRouteAPoC.RouteAStabilityFlapWindowSeconds);
                     CbRouteAPoC.ApplySingle(f, routeOn, eligibleField, f.IsAIControlled, true,
                         (int)fm, inRetreat, mainBody.x, mainBody.y, enemySnaps);
                     applied++;
