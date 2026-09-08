@@ -17,6 +17,7 @@ using CombatBrain.Intent;
 using CombatBrain.Lod;
 using CombatBrain.Perception;
 using CombatBrain.Telemetry;
+using CombatBrain.Settings;
 
 namespace CombatBrain.Ai
 {
@@ -77,6 +78,7 @@ namespace CombatBrain.Ai
             public readonly List<FormationCoordSnapshot> FrameOwn = new List<FormationCoordSnapshot>();
             public readonly List<FormationCoordSnapshot> FrameEnemy = new List<FormationCoordSnapshot>();
             public bool FrameValid;
+            public float RouteAFrameAt;
 
             // ATC-3 Formation Mission / Separation / Isolation 影子判定（0.5s；只判断不下召回命令）。
             // atc4-state-lifecycle P1-1：输出按 FormationId 保存（每支编队结果独立）——原单值字段被
@@ -115,9 +117,8 @@ namespace CombatBrain.Ai
         private readonly BattleTelemetry _telemetry = new BattleTelemetry(); // T38-01 战斗遥测计数器（事件驱动累加，战斗结束一次落盘）
         private bool _telemetrySaved; // 落盘幂等守卫（OnMissionStateFinalized/OnClearScene 双钩子只写一次）
         private readonly AnomalyDetector _anomaly = new AnomalyDetector(); // T39-01 战术异常检测（6 类反模式，0.5s 低频判定）
-        // t60（派单 §八）：RouteA 敌快照缓冲复用（不每帧 new List——稳态零分配）
-        private readonly List<FormationCoordSnapshot> _enemySnapsBuffer = new List<FormationCoordSnapshot>();
-
+        // Route A 复用 TeamState.FrameEnemy，仅保存上拍态势值用于振荡判定。
+        private readonly RouteASituationStamp _routeASituation = new RouteASituationStamp();
         private float _lodTimer;
         private float _intentTimer;
         private float _blockTimer;
@@ -250,6 +251,17 @@ namespace CombatBrain.Ai
 
         private void Init()
         {
+            try { InitCore(); }
+            catch
+            {
+                _initialized = false;
+                CbRouteAPoC.ResetAll();
+                throw;
+            }
+        }
+
+        private void InitCore()
+        {
             if (_initialized) return;
             _initialized = true;
 
@@ -257,6 +269,7 @@ namespace CombatBrain.Ai
             //   跨战斗残留会串场；InGameFeedback 静态去重/计数同理；_opponent/_attackSuppression 实例级也一并清
             //   （统一走 MissionStateLifecycle 单一入口，双保险；ATC-5R 租约 ReleaseAll 一并纳入）。
             MissionStateLifecycle.ClearStatic(_opponent, _attackSuppression, _leaseGlue, Mission);
+            CbRouteAPoC.BeginSession(Mission);
 
             // T1 观测管线：挂载决策分支计数器 + 补丁/管线活性自检（单一 CombatLog 渠道）
             DecisionObservatory.Attach();
@@ -304,6 +317,7 @@ namespace CombatBrain.Ai
             var mission = Mission;
             if (mission == null || !mission.IsLoadingFinished)
             {
+                CbRouteAPoC.Control.Release(RouteAExit.EmptyOrInvalid, CbRouteAPoC.Now);
                 _bench.EndFrame(dt, 0);
                 return;
             }
@@ -467,25 +481,16 @@ namespace CombatBrain.Ai
             // CPS-1 唯一执行器挂点（§5.3.2 执行器位于本拍所有 proposal producer 之后）：
             // 先收集（_commandProposals，迁移卡填充）→ 统一 Resolve → 再执行；
             // cps2-lease-integration：LeaseOk 接入真实租约状态（_leaseGlue.HasActiveLease）
+            // Route A 先清理/取得 Movement 权限，再让普通执行器做写入资格判断。
+            _bench.BeginSection("routea");
+            ApplyRouteASingle(mission, CbRouteAPoC.Enabled);
+            if (CbRouteAPoC.Control.Target != null)
+                _commandExecutor.ForgetMovement(CbRouteAPoC.Control.Target.Identity as Formation);
+            _bench.EndSection("routea");
             _bench.BeginSection("executor");
             _commandExecutor.Tick(mission, _elapsed, _commandProposals, _leaseGlue.HasActiveLease);
             _bench.EndSection("executor");
 
-            // CPS-2 路线 A PoC 挂点（§6.1，默认关闭零 AddAiBehavior/SetBehaviorWeight 调用安全态；
-            //   CPS-3 运行期验证开启）：自定义 BehaviorComponent 权重表达 Movement 域意图。
-            // t50（cps3r-route-a-hardgates）：①单编队单 Movement 域隔离（弃 Teams×Formations 遍历——
-            //   每拍至多 RouteAMaxFormations=1 支非玩家 AI 编队）；②完整可逆（ApplySingle 内恢复）；
-            //   ③per-Formation Mission + Rejoin 导航；④RouteA scope 归因
-            // t54（D-RouteA）：E_RouteA 模式自动启用 RouteA（routeOn 判定含模式）+ 稳定性记录（意图变化/flap）
-            {
-                bool routeOn = CombatBrain.Settings.Cps2PoCSettings.RouteAEnabled
-                    || (CombatBrain.Settings.Cps3RuntimeSettings.Enabled
-                        && CombatBrain.Settings.Cps3RuntimeSettings.RouteAActive(CombatBrain.Settings.Cps3RuntimeSettings.Mode));
-                if (routeOn || CbRouteAPoC.HasArmed())
-                {
-                    ApplyRouteASingle(mission, routeOn);
-                }
-            }
             // CPS-2 路线 B 观测：5s 汇总（Cps2LeaseObserver Acquire/Release/Expired/ExternalOwner +
             //   ExternalUnknown 三域覆盖数，供 CPS-3 A/B；默认关闭无日志；喂数据点属运行期验证钩子）
             _cps2ObservationTimer -= dt;
@@ -501,13 +506,8 @@ namespace CombatBrain.Ai
                 }
                 // t54（D-RouteA）：RouteA 段汇总（事件链计数 + 稳定性 + 该编队 Movement 域 ExternalReplaced 分列），
                 //   供战斗后读日志判定（E_RouteA 模式或 RouteAEnabled 时输出）
-                if (CombatBrain.Settings.Cps2PoCSettings.RouteAEnabled
-                    || (CombatBrain.Settings.Cps3RuntimeSettings.Enabled
-                        && CombatBrain.Settings.Cps3RuntimeSettings.RouteAActive(CombatBrain.Settings.Cps3RuntimeSettings.Mode)))
-                {
-                    CombatLog.Log("[RouteA] " + CbRouteAPoC.RouteAEventLogger.BuildSummary()
-                        + ";" + CbRouteAPoC.RouteAStability.BuildSummary());
-                }
+                // 即使已经退出 E 也排空 Exit/Restore；无诊断事件时不构造日志字符串。
+                CbRouteAPoC.FlushEvidence();
             }
 
             _bench.EndFrame(dt, agentCount);
@@ -755,6 +755,7 @@ namespace CombatBrain.Ai
             CoordinationFrameBuilder.BuildOwn(own, state.FrameOwn);
             CoordinationFrameBuilder.BuildEnemy(own, enemy, IsEnemyFormationKnown, state.FrameEnemy);
             state.FrameValid = true;
+            state.RouteAFrameAt = CbRouteAPoC.Now;
 
             // Main Body（最大连通簇，§4.1）复用帧
             var main = MainBodySelector.Select(state.FrameOwn);
@@ -1673,7 +1674,9 @@ namespace CombatBrain.Ai
         // v1.4.8 无 OnMissionEnded；OnMissionStateFinalized 为战役收尾标准钩子，OnClearScene 兜底（幂等）
         public override void OnMissionStateFinalized()
         {
+            CbRouteAPoC.ResetAll();
             base.OnMissionStateFinalized();
+            _routeASituation.Reset();
             _experience.OnMissionEnd();
             LogProvenanceAggregate(); // ATC-0 战斗结束按 CommandSource 聚合（幂等：只在收尾钩子输出一次）
             SaveTelemetry();
@@ -1682,7 +1685,9 @@ namespace CombatBrain.Ai
 
         public override void OnClearScene()
         {
+            CbRouteAPoC.ResetAll();
             base.OnClearScene();
+            _routeASituation.Reset();
             _experience.OnMissionEnd();
             LogProvenanceAggregate(); // ATC-0 战斗结束聚合（OnClearScene 兜底，幂等）
             SaveTelemetry();
@@ -2365,83 +2370,50 @@ namespace CombatBrain.Ai
         //   热关闭（RouteAEnabled=false）仍调以恢复已接管编队（真恢复非仅停加权）。
         // t60（派单 §六 Rejoin 语义 + §八 P1）：真实战斗阶段（禁固定 Deployment）；敌我快照按受控 Formation 所属
         //   Team 构建（禁固定玩家队取敌）；Rejoin 目标=Army MainBody（真实聚合，禁 Team 中心）；仅 AI 步兵编队；
-        //   缓冲复用（_enemySnapsBuffer 字段，不每帧 new List）。
+        //   缓冲复用（TeamState.FrameEnemy，不每帧 new List）。
+        // 单槽注册先清旧对象，再找候选。全局只取一支；配置预算再大也不能扩为第二支。
         private void ApplyRouteASingle(Mission mission, bool routeOn)
         {
-            if (mission == null) return;
-            bool eligibleField = Cps2RouteAPolicy.IsEligibleFieldBattle(
-                mission.IsFieldBattle, mission.IsSiegeBattle, mission.IsSallyOutBattle);
-            int budget = CombatBrain.Settings.Cps2PoCSettings.RouteAMaxFormations;
-            if (budget < 1) budget = 1;
-            int applied = 0;
+            CbRouteAPoC.Reconcile(mission);
+            if (!routeOn || mission == null)
+            {
+                CbRouteAPoC.Control.Release(RouteAExit.Disabled, CbRouteAPoC.Now);
+                return;
+            }
+            Formation candidate = null;
+            TeamState candidateState = null;
             foreach (Team team in mission.Teams)
             {
-                if (team == null || !team.MBTeam.IsValid) continue;
-                if (team.IsPlayerTeam) continue; // 硬门①：非玩家队
-                TeamState ownState;
-                _states.TryGetValue(team.TeamIndex, out ownState);
-                // t60：真实战斗阶段（TeamState.Phase——BattlePhaseFSM 每拍 Advance；禁固定 Deployment）
-                BattlePhase phase = ownState != null ? ownState.Phase : BattlePhase.Deployment;
-                // t60：敌我快照按受控 Formation 所属 Team 构建（禁固定玩家队取敌）
-                _enemySnapsBuffer.Clear();
-                foreach (Team et in mission.Teams)
-                    if (et != null && et.IsEnemyOf(team))
-                        foreach (Formation ef in et.FormationsIncludingEmpty)
-                            if (ef != null && ef.CountOfUnits > 0 && ef.QuerySystem != null)
-                                _enemySnapsBuffer.Add(new FormationCoordSnapshot
-                                {
-                                    FormationId = ef.Index,
-                                    Count = ef.CountOfUnits,
-                                    X = ef.CachedMedianPosition.AsVec2.x,
-                                    Y = ef.CachedMedianPosition.AsVec2.y
-                                });
-                // t60：Army MainBody（真实聚合，Rejoin 目标——禁 Team 中心）
-                float mainBodyX = 0f, mainBodyY = 0f;
-                if (ownState != null)
-                {
-                    mainBodyX = ownState.Army.MainBodyX;
-                    mainBodyY = ownState.Army.MainBodyY;
-                }
+                if (team == null || team.IsPlayerTeam || !team.MBTeam.IsValid) continue;
+                TeamState state;
+                if (!_states.TryGetValue(team.TeamIndex, out state) || !state.FrameValid
+                    || CbRouteAPoC.Now - state.RouteAFrameAt > 1f) continue;
                 foreach (Formation f in team.FormationsIncludingEmpty)
                 {
-                    if (f == null || f.CountOfUnits == 0 || f.QuerySystem == null) continue;
-                    bool playerOwned = f.PlayerOwner != null || f.HasPlayerControlledTroop || f.IsPlayerTroopInFormation;
-                    // 硬门①②：非玩家 AI 编队才接管；玩家接管/identity 无效 → 恢复
-                    bool formationValid = !playerOwned && f.IsAIControlled && f.FormationIndex >= 0;
-                    if (!formationValid)
-                    {
-                        CbRouteAPoC.ApplySingle(f, routeOn, eligibleField, f.IsAIControlled, false,
-                            -1, false, phase, 0f, 0f, _enemySnapsBuffer);
-                        continue;
-                    }
-                    if (applied >= budget) { CbRouteAPoC.ApplySingle(f, false, eligibleField, f.IsAIControlled, true, -1, false, phase, 0f, 0f, _enemySnapsBuffer); continue; }
-                    // t60 P1：第一阶段仅 AI 步兵 Formation（禁骑兵/骑射/其他）
-                    if (!IsRouteAInfantry(f))
-                    {
-                        CbRouteAPoC.ApplySingle(f, false, eligibleField, f.IsAIControlled, true, -1, false, phase, 0f, 0f, _enemySnapsBuffer);
-                        continue;
-                    }
-                    // per-Formation Mission → 意图（弃 Team 级 GetTeamIntent；t60 真实阶段）
-                    FormationMission fm = GetFormationMissionOrDefault(f);
-                    bool inRetreat = IsFormationInRetreat(f);
-                    Cps2RouteAIntent routeIntent = Cps2RouteAPolicy.MapFormationToIntent(inRetreat, (int)fm, phase);
-                    // t54：稳定性记录（意图变化/flap 检测；无态势变化→change/flap 低——同一意图持续不刷权重）
-                    CbRouteAPoC.RouteAStability.Record("t" + team.TeamIndex + "f" + f.Index, routeIntent,
-                        _elapsed, CbRouteAPoC.RouteAStabilityFlapWindowSeconds);
-                    CbRouteAPoC.ApplySingle(f, routeOn, eligibleField, f.IsAIControlled, true,
-                        (int)fm, inRetreat, phase, mainBodyX, mainBodyY, _enemySnapsBuffer);
-                    applied++;
+                    if (CbRouteAPoC.Eligibility(f, mission).Rejection != RouteAExit.None) continue;
+                    candidate = f; candidateState = state; break;
                 }
+                if (candidate != null) break;
             }
+            if (candidate == null)
+            {
+                CbRouteAPoC.Control.Release(RouteAExit.EmptyOrInvalid, CbRouteAPoC.Now);
+                return;
+            }
+            FormationMission fm = GetFormationMissionOrDefault(candidate);
+            // FrameEnemy 已由候选所属 Team 的已知敌军构建，不再按玩家队取敌或读取未知敌军。
+            // 独立于意图的态势变更号比较完整12维向量、Army、位置、兵数和接触；不以时间推进伪造变化。
+            bool contact = CommitmentContact.IsInContact(candidate.CachedMedianPosition.AsVec2.x,
+                candidate.CachedMedianPosition.AsVec2.y, candidateState.FrameEnemy, Cps2PoCSettings.RouteARejoinContactMeters);
+            int signal = _routeASituation.Update(candidate, new RouteASituation
+            {
+                Vector = candidateState.LastVector, Army = candidateState.Army, Phase = candidateState.Phase,
+                Count = candidate.CountOfUnits, X = candidate.CachedMedianPosition.AsVec2.x,
+                Y = candidate.CachedMedianPosition.AsVec2.y, Contact = contact
+            });
+            CbRouteAPoC.ApplySingle(candidate, fm, candidateState.Phase,
+                candidateState.Army, candidateState.FrameEnemy, signal);
         }
-
-        // t60（派单 §八）：第一阶段仅 AI 步兵 Formation（QuerySystem 兵种旗标只读聚合）
-        private bool IsRouteAInfantry(Formation f)
-        {
-            if (f.QuerySystem == null) return false;
-            return f.QuerySystem.IsInfantryFormation;
-        }
-
         // t50：读编队 Mission（TeamState.Missions 字典——ATC-3 TickFormationMissions 每帧写入，键=Formation.Index）
         private FormationMission GetFormationMissionOrDefault(Formation f)
         {

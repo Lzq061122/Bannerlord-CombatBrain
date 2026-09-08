@@ -1,0 +1,219 @@
+namespace CombatBrain.Coordination
+{
+    using System;
+    using System.Globalization;
+
+    public enum RouteAEventKind { Intent, BehaviorSelected, OrderApplied, UnverifiedApply, SetterBegin,
+        SetterCompleted, SetterSkipped, ExternalReplaced, ExternalWhileActive, ExternalAfterExit, Exit, Restore }
+
+    public struct RouteAEvent
+    {
+        public long Session, Seq, SetterSeq, ObserverSeq, RelatedSeq, Revision;
+        public int Identity, Team, Formation, OrderType, Signal;
+        public float Time;
+        public float X, Y;
+        public CommandDomain Domain;
+        public CommandSource Source;
+        public Cps2RouteAIntent Intent;
+        public RouteAEventKind Kind;
+        public RouteAExit Reason;
+    }
+
+    public struct RouteASetterToken
+    {
+        public long Session, Seq, ObserverSeq;
+        public int Identity, OrderType;
+        public float Time;
+        public bool Direct;
+        public CommandSource Source;
+    }
+
+    // 同步消费真实 setter，不扫描会被覆盖的 CPS-0 ring。固定容量；溢出明确标记证据失效。
+    public sealed class RouteAEvidence
+    {
+        private sealed class Stats
+        {
+            public WeakReference Object;
+            public int Team, Formation;
+            public long Intents, Selected, Applied, Replaced, Unverified, LastApplied, ExitSeq, Revision;
+            public int Changes, Flaps;
+            public float X, Y;
+            public bool Active, Pending;
+            public Cps2RouteAIntent Intent;
+        }
+        public const int IdentityCapacity = 64;
+        public const int EventCapacity = 2048;
+        private readonly Stats[] _stats = new Stats[IdentityCapacity];
+        private readonly RouteAEvent[] _events = new RouteAEvent[EventCapacity];
+        private int _identities, _head, _count;
+        private long _seq;
+        private long _setterSeq;
+        private object _expected;
+        private long _directSeq = -1;
+        private int _directOrderType = -1;
+        private bool _directCompleted;
+        public long Session { get; private set; }
+        public long Dropped { get; private set; }
+        private bool _capture;
+        public bool Capture
+        {
+            get { return _capture; }
+            set
+            {
+                if (_capture && !value && _identities > 0)
+                {
+                    Dropped++; // 中断观测后本 session 不再是完整验收样本。
+                    for (int i = 0; i < _identities; i++) _stats[i].Pending = false;
+                }
+                _capture = value;
+            }
+        }
+        public int Count { get { return _count; } }
+        public int Identities { get { return _identities; } }
+        public bool DirectCompleted { get { return _directCompleted; } }
+
+        public void BeginSession()
+        {
+            Session++;
+            Array.Clear(_stats, 0, _stats.Length);
+            Array.Clear(_events, 0, _events.Length);
+            _identities = _head = _count = 0;
+            _seq = _setterSeq = Dropped = 0;
+            _expected = null;
+            _directSeq = -1;
+            _directCompleted = false;
+        }
+
+        private int Find(object identity)
+        {
+            for (int i = 0; i < _identities; i++)
+                if (ReferenceEquals(_stats[i].Object.Target, identity)) return i + 1;
+            return 0;
+        }
+        public int Register(object identity, int team, int formation)
+        {
+            int id = Find(identity);
+            if (id != 0) return id;
+            if (identity == null || _identities == IdentityCapacity) { Dropped++; return 0; }
+            _stats[_identities] = new Stats { Object = new WeakReference(identity), Team = team, Formation = formation };
+            return ++_identities;
+        }
+        private Stats Get(int id) { return id > 0 && id <= _identities ? _stats[id - 1] : null; }
+        public void Activate(int id) { Stats s = Get(id); if (s != null) { s.Active = true; s.Pending = false; } }
+        public void Intent(int id, Cps2RouteAIntent intent, long revision, float now, int signal, float x, float y)
+        {
+            Stats s = Get(id); if (s == null) return;
+            s.Intent = intent; s.Revision = revision; s.Intents++;
+            s.X = x; s.Y = y;
+            Record(id, RouteAEventKind.Intent, now, revision: revision, signal: signal);
+        }
+        public void Selected(int id, long revision, float now)
+        {
+            Stats s = Get(id); if (s == null) return;
+            s.Selected++;
+            Record(id, RouteAEventKind.BehaviorSelected, now, revision: revision);
+        }
+        public void IntentChanged(int id, bool flap)
+        { Stats s = Get(id); if (s != null) { s.Changes++; if (flap) s.Flaps++; } }
+        public void ExpectSetter(object identity)
+        { _expected = identity; _directSeq = -1; _directCompleted = false; }
+        public void CancelExpectedSetter() { _expected = null; }
+
+        public RouteASetterToken SetterBeginning(object identity, CommandDomain domain, CommandSource source,
+            long setterSeq, int orderType, float now)
+        {
+            if (domain != CommandDomain.Movement || identity == null) return default(RouteASetterToken);
+            long routeSetterSeq = ++_setterSeq; // 不依赖 CPS-0 Enable/Clear 时会重置的序号。
+            int id = Find(identity);
+            if (id == 0) return default(RouteASetterToken);
+            bool direct = ReferenceEquals(_expected, identity) && source == CommandSource.CombatBrainRouteA;
+            if (direct) { _expected = null; _directSeq = routeSetterSeq; _directOrderType = orderType; }
+            // 同一 scope 内重入的 setter 不是 Adapter 的直接调用，不能冒充 RouteA。
+            if (!direct && source == CommandSource.CombatBrainRouteA) source = CommandSource.ExternalUnknown;
+            Record(id, RouteAEventKind.SetterBegin, now, routeSetterSeq, source: source, orderType: orderType, observer: setterSeq);
+            return new RouteASetterToken { Session = Session, Identity = id, Seq = routeSetterSeq, ObserverSeq = setterSeq,
+                Time = now, Source = source, Direct = direct, OrderType = orderType };
+        }
+
+        // 只读 Postfix：Prefix 不能证明被其它 Harmony Prefix 跳过的原方法已经执行。
+        public void SetterCompleted(RouteASetterToken token, bool originalRan, float now)
+        {
+            if (token.Identity == 0 || token.Session != Session) return;
+            Stats s = Get(token.Identity); if (s == null) return;
+            Record(token.Identity, originalRan ? RouteAEventKind.SetterCompleted : RouteAEventKind.SetterSkipped,
+                now, token.Seq, source: token.Source, orderType: token.OrderType, observer: token.ObserverSeq);
+            if (!originalRan) return;
+            if (token.Direct) { _directCompleted = token.Seq == _directSeq; return; }
+            if (s.Active)
+            {
+                bool replaced = s.Pending;
+                if (replaced) { s.Replaced++; s.Pending = false; }
+                Record(token.Identity, replaced ? RouteAEventKind.ExternalReplaced : RouteAEventKind.ExternalWhileActive,
+                    now, token.Seq, s.LastApplied, source: token.Source, orderType: token.OrderType, observer: token.ObserverSeq);
+            }
+            else if (s.ExitSeq != 0)
+                Record(token.Identity, RouteAEventKind.ExternalAfterExit, now, token.Seq, s.ExitSeq,
+                    source: token.Source, orderType: token.OrderType, observer: token.ObserverSeq);
+        }
+
+        public void Applied(int id, long revision, float now, bool verified, float x, float y)
+        {
+            Stats s = Get(id); if (s == null) return;
+            s.X = x; s.Y = y;
+            if (verified)
+            {
+                s.Applied++;
+                s.LastApplied = Record(id, RouteAEventKind.OrderApplied, now, _directSeq, revision: revision,
+                    source: CommandSource.CombatBrainRouteA, orderType: _directOrderType);
+                s.Pending = true;
+            }
+            else
+            {
+                s.Unverified++;
+                s.Pending = false;
+                Record(id, RouteAEventKind.UnverifiedApply, now, revision: revision,
+                    source: CommandSource.CombatBrainRouteA);
+            }
+        }
+        public void Exit(int id, RouteAExit reason, float now)
+        {
+            Stats s = Get(id); if (s == null) return;
+            s.Active = false; s.Pending = false;
+            s.ExitSeq = Record(id, RouteAEventKind.Exit, now, reason: reason);
+        }
+        public void Restored(int id, RouteAExit reason, float now, int failures)
+        { Record(id, RouteAEventKind.Restore, now, reason: reason, signal: failures); }
+        public long AppliedFor(int id) { Stats s = Get(id); return s == null ? 0 : s.Applied; }
+        public long ReplacedFor(int id) { Stats s = Get(id); return s == null ? 0 : s.Replaced; }
+        public long StableFor(int id) { return AppliedFor(id) - ReplacedFor(id); }
+
+        private long Record(int id, RouteAEventKind kind, float now, long setter = -1, long related = 0,
+            long revision = 0, CommandSource source = CommandSource.ExternalUnknown, int orderType = -1,
+            RouteAExit reason = RouteAExit.None, int signal = 0, long observer = -1)
+        {
+            Stats s = Get(id);
+            long seq = ++_seq;
+            if (!Capture || s == null) return seq;
+            if (_count == EventCapacity) { Dropped++; return seq; }
+            _events[(_head + _count++) % EventCapacity] = new RouteAEvent { Session = Session, Seq = seq,
+                Identity = id, Team = s.Team, Formation = s.Formation, Domain = CommandDomain.Movement,
+                Time = now, Kind = kind, SetterSeq = setter, RelatedSeq = related, Revision = revision,
+                Intent = s.Intent, Source = source, OrderType = orderType, Reason = reason, Signal = signal,
+                ObserverSeq = observer, X = s.X, Y = s.Y };
+            return seq;
+        }
+        public bool TryRead(out RouteAEvent item)
+        {
+            if (_count == 0) { item = default(RouteAEvent); return false; }
+            item = _events[_head]; _head = (_head + 1) % EventCapacity; _count--; return true;
+        }
+        public string BuildSummary(int id)
+        {
+            Stats s = Get(id); if (s == null) return "";
+            return string.Format(CultureInfo.InvariantCulture,
+                "session={0} identity={1} team={2} f={3} domain=Movement intent={4} selected={5} applied={6} replaced={7} stableSoFar={8} unverified={9} dropped={10} intentChange={11} weightFlap={12}",
+                Session, id, s.Team, s.Formation, s.Intents, s.Selected, s.Applied, s.Replaced,
+                s.Applied - s.Replaced, s.Unverified, Dropped, s.Changes, s.Flaps);
+        }
+    }
+}

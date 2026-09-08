@@ -19,7 +19,7 @@ using CombatBrain.Telemetry;
 
 namespace OfflineTests
 {
-    internal static class Program
+    internal static partial class Program
     {
         private static int _failures;
 
@@ -264,7 +264,7 @@ namespace OfflineTests
             TestNarrativeFactionFix();
 
             Console.WriteLine("== RouteAFinalBlocker ==");
-            TestCps3rRouteAFinalBlocker();
+            TestRouteAFinalRepair();
 
             Console.WriteLine("== ATC1 BattlePhaseFSM ==");
             TestBattlePhaseFSM();
@@ -4006,59 +4006,6 @@ namespace OfflineTests
             Check(!CombatBrain.Settings.Cps3RuntimeSettings.ForceLeaseActive(CombatBrain.Settings.Cps3Mode.E_RouteA),
                 "cps3r-droutea ForceLease inactive in E (租约注入仅 D)");
 
-            // ②事件链：Intent/BehaviorSelected/OrderApplied 计数 + Stable=Applied-Replaced（纯逻辑）
-            CbRouteAPoC.RouteAEventLogger.Reset();
-            SetOrderObserver.Enabled = true;
-            SetOrderObserver.Clear();
-            SetOrderObserver.NotifyTick(5f);
-            CbRouteAPoC.RouteAEventLogger.RecordIntentApplied(0, -1, Cps2RouteAIntent.Hold); // 标量（签名去 TaleWorlds 类型）
-            CbRouteAPoC.RouteAEventLogger.RecordBehaviorSelected();
-            CbRouteAPoC.RouteAEventLogger.RecordOrderApplied();
-            CbRouteAPoC.RouteAEventLogger.RecordBehaviorSelected();
-            CbRouteAPoC.RouteAEventLogger.RecordOrderApplied();
-            Check(CbRouteAPoC.RouteAEventLogger.IntentCount == 1
-                && CbRouteAPoC.RouteAEventLogger.SelectedCount == 2
-                && CbRouteAPoC.RouteAEventLogger.OrderAppliedCount == 2,
-                "cps3r-droutea event chain counts (intent/selected/applied)");
-            Check(CbRouteAPoC.RouteAEventLogger.StableCount == 2,
-                "cps3r-droutea stable = applied - replaced (无 ExternalReplaced 全稳定)");
-            // 有 ExternalReplaced 时 Stable 扣减（Applied 须 CB scope 内作基准——t42 source 优先语义）
-            SetOrderObserver.NotifyTick(5.3f);
-            using (CommandSourceScope.Enter(CommandSource.CombatBrainRouteA))
-            {
-                SetOrderObserver.Observe(0, 1, 42, CommandDomain.Movement, CommandKind.Move, 7,
-                    (int)SetOrderStage.Applied);
-            }
-            SetOrderObserver.NotifyTick(5.6f);
-            SetOrderObserver.Observe(0, 1, 42, CommandDomain.Movement, CommandKind.Move, 9, 0); // External 覆盖
-            Check(SetOrderObserver.ExternalReplacedCount == 1
-                && CbRouteAPoC.RouteAEventLogger.StableCount == 1,
-                "cps3r-droutea stable decremented by replaced (四段终态)");
-            string summary = CbRouteAPoC.RouteAEventLogger.BuildSummary();
-            Check(summary.Contains("intent=1") && summary.Contains("selected=2")
-                && summary.Contains("orderApplied=2") && summary.Contains("externalReplaced=1"),
-                "cps3r-droutea event chain summary format");
-            SetOrderObserver.Enabled = false;
-            SetOrderObserver.Clear();
-            CbRouteAPoC.RouteAEventLogger.Reset();
-
-            // ③稳定性：意图持续无变化→change=0；窗口内回摆→flap；窗口外变化→仅 change
-            CbRouteAPoC.RouteAStability.Reset();
-            CbRouteAPoC.RouteAStability.Record("k", Cps2RouteAIntent.Hold, 0f, 2f);
-            CbRouteAPoC.RouteAStability.Record("k", Cps2RouteAIntent.Hold, 0.5f, 2f);
-            CbRouteAPoC.RouteAStability.Record("k", Cps2RouteAIntent.Hold, 1.0f, 2f);
-            Check(CbRouteAPoC.RouteAStability.ChangeCount("k") == 0 && CbRouteAPoC.RouteAStability.FlapCount("k") == 0,
-                "cps3r-droutea stable no change same intent (无态势变化)");
-            CbRouteAPoC.RouteAStability.Record("k", Cps2RouteAIntent.Advance, 1.2f, 2f); // 变化 1
-            CbRouteAPoC.RouteAStability.Record("k", Cps2RouteAIntent.Hold, 1.5f, 2f);     // 回摆窗口内→flap 1
-            Check(CbRouteAPoC.RouteAStability.ChangeCount("k") == 2 && CbRouteAPoC.RouteAStability.FlapCount("k") == 1,
-                "cps3r-droutea flap on in-window swing (权重对刷检测)");
-            CbRouteAPoC.RouteAStability.Record("k", Cps2RouteAIntent.Advance, 4.0f, 2f); // 窗口外变化→仅 change
-            Check(CbRouteAPoC.RouteAStability.FlapCount("k") == 1 && CbRouteAPoC.RouteAStability.ChangeCount("k") == 3,
-                "cps3r-droutea out-of-window change not flap (迟滞防抖)");
-            Check(CbRouteAPoC.RouteAStability.BuildSummary().Contains("weightFlap=1"),
-                "cps3r-droutea stability summary format");
-            CbRouteAPoC.RouteAStability.Reset();
         }
 
         // t56 repair（MCM 下拉缺 E）：Cps3ModeNames 补第 5 项 "E: 单编队 Route A"（index 4 ↔ E_RouteA=4）。
@@ -4116,83 +4063,6 @@ namespace OfflineTests
                 "narr-fix faction culture map intact (映射表未破坏)");
             Check(CombatBrain.Ai.FeedbackText.FactionCultureName("empire") == "帝国",
                 "narr-fix faction culture empire mapped");
-        }
-
-        // t60（cps3r-routea-final-blocker）：Route A 四大 P0 修复的纯逻辑断言——
-        // 唯一写入（防双写判定）/生命周期（恢复幂等判定）/Rejoin（敌我/阶段/导航）/证据链（session/identity 隔离+ExitRestore）
-        private static void TestCps3rRouteAFinalBlocker()
-        {
-            // ① 唯一写入：RouteA 拥有 Movement 域判定（执行器防双写入口）
-            Check(!CbRouteAPoC.IsMovementOwnedByRouteA(int.MinValue),
-                "routeA-blk① fresh identity not owned (零接管)");
-
-            // ② 生命周期：恢复判定（派单 §五 事件 1-4）
-            Check(Cps2RouteAPolicy.ShouldRestoreRouteA(false, true, true),
-                "routeA-blk② hot-close restore (事件1)");
-            Check(Cps2RouteAPolicy.ShouldRestoreRouteA(true, false, true),
-                "routeA-blk② player takeover restore (事件2)");
-            Check(Cps2RouteAPolicy.ShouldRestoreRouteA(true, true, false),
-                "routeA-blk② invalid formation restore (事件3/4)");
-
-            // ③ Rejoin：真实阶段参与意图映射（禁固定 Deployment——派单 §六.2）
-            Check(Cps2RouteAPolicy.MapFormationToIntent(false, (int)FormationMission.Intercept, BattlePhase.Engage)
-                == Cps2RouteAIntent.Advance,
-                "routeA-blk③ engage phase intercept -> Advance (真实阶段)");
-            Check(Cps2RouteAPolicy.MapFormationToIntent(false, (int)FormationMission.SupportMainEffort, BattlePhase.Engage)
-                == Cps2RouteAIntent.Advance,
-                "routeA-blk③ engage phase support -> Advance (非固定 Deployment)");
-            // Rejoin 导航失败路径（派单 §六.5）：无效 MainBody/贴敌 → 不应用
-            Check(!Cps2RouteAPolicy.IsRejoinRouteValid(0f, 0f, 10f, 10f, null, 12f),
-                "routeA-blk③ rejoin nav fail on zero mainbody (本拍不执行)");
-            var enemy = new[] { new FormationCoordSnapshot { FormationId = 0, X = 20f, Y = 20f, Count = 50, IsKnown = true } };
-            Check(!Cps2RouteAPolicy.IsRejoinRouteValid(100f, 100f, 24f, 24f, enemy, 12f),
-                "routeA-blk③ rejoin nav fail in-contact (撤销不保留)");
-
-            // ④ 证据链（派单 §七）：session 清零（Reset）→ per-identity Applied/Replaced 隔离 + ExitRestore
-            CbRouteAPoC.RouteAEventLogger.Reset();
-            SetOrderObserver.Enabled = true;
-            SetOrderObserver.Clear();
-            CbRouteAPoC.RouteAEventLogger.RecordExitRestore(1, 5);
-            Check(CbRouteAPoC.RouteAEventLogger.ExitRestoreCount == 1,
-                "routeA-blk④ exit/restore recorded (RouteA 退出先记录)");
-            CbRouteAPoC.RouteAEventLogger.RecordAppliedByIdentity(777);
-            CbRouteAPoC.RouteAEventLogger.RecordAppliedByIdentity(777);
-            Check(CbRouteAPoC.RouteAEventLogger.AppliedByIdentity(777) == 2
-                && CbRouteAPoC.RouteAEventLogger.AppliedByIdentity(888) == 0,
-                "routeA-blk④ applied isolated by identity (禁全局)");
-            // Applied 后同 identity Movement 域 ExternalReplaced → Stable 扣减（同 identity 计算）
-            SetOrderObserver.NotifyTick(10f);
-            using (CommandSourceScope.Enter(CommandSource.CombatBrainRouteA))
-            {
-                SetOrderObserver.Observe(1, 5, 777, CommandDomain.Movement, CommandKind.Move, 7,
-                    (int)SetOrderStage.Applied);
-            }
-            SetOrderObserver.NotifyTick(10.3f);
-            SetOrderObserver.Observe(1, 5, 777, CommandDomain.Movement, CommandKind.Move, 9, 0);
-            Check(SetOrderObserver.ExternalReplacedCount == 1
-                && CbRouteAPoC.RouteAEventLogger.ReplacedByIdentity(777) == 1
-                && CbRouteAPoC.RouteAEventLogger.StableByIdentity(777) == 1,
-                "routeA-blk④ stable by identity = applied - replaced (同 identity 同域)");
-            // 新 Mission 清零（Reset 清 per-identity）
-            CbRouteAPoC.RouteAEventLogger.Reset();
-            Check(CbRouteAPoC.RouteAEventLogger.AppliedByIdentity(777) == 0
-                && CbRouteAPoC.RouteAEventLogger.ExitRestoreCount == 0,
-                "routeA-blk④ new mission resets session (旧场数据不得复用)");
-            SetOrderObserver.Enabled = false;
-            SetOrderObserver.Clear();
-
-            // ⑤ Astra 三条冲突互斥保留（派单 §六.6：保留并补回归——Astra 已补，此处复核）
-            Check(System.Array.IndexOf(Cps2RouteAPolicy.ConflictingOwn(Cps2RouteAIntent.Advance), Cps2RouteAIntent.Rejoin) >= 0,
-                "routeA-blk⑤ advance disables rejoin (Astra 补边保留)");
-            Check(System.Array.IndexOf(Cps2RouteAPolicy.ConflictingOwn(Cps2RouteAIntent.Rejoin), Cps2RouteAIntent.Hold) >= 0,
-                "routeA-blk⑤ rejoin disables hold (Astra 补边保留)");
-
-            // ⑥ 四意图映射（派单 §九.7）
-            Check(Cps2RouteAPolicy.ToCommandKind(Cps2RouteAIntent.Hold) == CommandKind.Hold
-                && Cps2RouteAPolicy.ToCommandKind(Cps2RouteAIntent.Advance) == CommandKind.Advance
-                && Cps2RouteAPolicy.ToCommandKind(Cps2RouteAIntent.Rejoin) == CommandKind.Move
-                && Cps2RouteAPolicy.ToCommandKind(Cps2RouteAIntent.Retreat) == CommandKind.Retreat,
-                "routeA-blk⑥ four intents map (Hold/Advance/Rejoin/Retreat)");
         }
 
         // ATC-1 战局阶段机（BattlePhaseFSM 纯逻辑）：五态全边界/最短驻留/同态不重播/Retreat 终态/早期伤亡不误进 Exploit

@@ -17,7 +17,7 @@ namespace CombatBrain.Settings
 
         // t50 硬门①⑧：RouteA 作用单编队数（每拍至多接管一支非玩家 AI 编队的单 Movement 域）——
         //   仅诊断/运行期验证，防多队并控
-        public static int RouteAMaxFormations = 1;
+        public const int RouteAMaxFormations = 1;
 
         // t50 硬门③：Rejoin 贴身接敌判定阈值（米；IsInContact 距离）
         public const float RouteARejoinContactMeters = 12f;

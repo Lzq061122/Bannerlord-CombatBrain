@@ -77,6 +77,9 @@
     <Compile Include="..\CombatBrain\Coordination\FormationCommandArbiter.cs" Link="Coordination\FormationCommandArbiter.cs" />
     <!-- CPS-1 执行器（决策核心纯逻辑可离线测；胶水部分编译需 TaleWorlds 引用，运行时惰性不触碰） -->
     <Compile Include="..\CombatBrain\Ai\FormationCommandExecutor.cs" Link="Ai\FormationCommandExecutor.cs" />
+    <Compile Include="..\CombatBrain\Ai\RouteAOrderAdapter.cs" Link="Ai\RouteAOrderAdapter.cs" />
+    <Compile Include="..\CombatBrain\Coordination\RouteAControl.cs" Link="Coordination\RouteAControl.cs" />
+    <Compile Include="..\CombatBrain\Coordination\RouteAEvidence.cs" Link="Coordination\RouteAEvidence.cs" />
     <!-- t58 叙事阵营名（MajorityCulture/FactionCultureName 纯字符串可离线测；Faction/CultureId 的 TaleWorlds 签名运行时惰性不触碰） -->
     <Compile Include="..\CombatBrain\Ai\FeedbackText.cs" Link="Ai\FeedbackText.cs" />
     <!-- t58 依赖：CavalryState/RetreatState 枚举由 SDK 默认 Compile 已包含（CavalryWaveFSM.cs/PhasedRetreat.cs） -->

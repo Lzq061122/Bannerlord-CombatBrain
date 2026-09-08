@@ -390,6 +390,8 @@ namespace CombatBrain.Coordination
     /// </summary>
     public static class SetOrderObserver
     {
+        // Route A 窄域订阅：同步消费对象引用和真实完成序列，CPS-0 原有 ring/计数语义不变。
+        public static RouteAEvidence RouteAEvidenceSink;
         public static bool Enabled;             // 诊断开关（默认 false=近零开销；MCM 暴露留 runtime-baseline 卡）
         public static float LastTick;           // 逻辑拍时间基准（CommandProvenance.BeginLogicalTick 同步）
         public const int Capacity = 128;        // 观测 ring 固定容量（破顶覆盖最旧，O(1)）
@@ -601,7 +603,8 @@ namespace CombatBrain.Coordination
                 {
                     // 显式 Patch 三 setter（不依赖 PatchAll 程序集扫描——消除扫描静默失败路径）
                     harmony.Patch(MethodOf(nameof(Formation.SetMovementOrder)),
-                        prefix: PrefixMethod(nameof(MovementPrefix)));
+                        prefix: PrefixMethod(nameof(MovementPrefix)),
+                        postfix: PrefixMethod(nameof(MovementPostfix)));
                     harmony.Patch(MethodOf(nameof(Formation.SetFacingOrder)),
                         prefix: PrefixMethod(nameof(FacingPrefix)));
                     harmony.Patch(MethodOf(nameof(Formation.SetArrangementOrder)),
@@ -694,8 +697,9 @@ namespace CombatBrain.Coordination
             public static readonly string[] PatchTargetParameterNames =
                 { "input", "order", "order" };
 
-            private static void MovementPrefix(Formation __instance, MovementOrder input)
+            private static void MovementPrefix(Formation __instance, MovementOrder input, out RouteASetterToken __state)
             {
+                __state = default(RouteASetterToken);
                 // 只读观测：不修改参数、不跳过原方法、不改变返回结果（§4.2 第1条）；
                 // 命令种类用统一 OrderType（v1.4.8：MovementOrder.OrderType 公开属性），不读私有字段（反作弊闸）；
                 // t38：参数名 input 与原方法 SetMovementOrder(MovementOrder input) 一致（Harmony 按参数名绑定）；
@@ -705,6 +709,17 @@ namespace CombatBrain.Coordination
                     System.Runtime.CompilerServices.RuntimeHelpers.GetHashCode(__instance),
                     CommandDomain.Movement, CommandKind.Move, (int)input.OrderType,
                     (int)SetOrderStage.Applied);
+                if (Enabled && RouteAEvidenceSink != null)
+                    __state = RouteAEvidenceSink.SetterBeginning(__instance, CommandDomain.Movement,
+                        CommandSourceScope.Current, _seq - 1, (int)input.OrderType,
+                        Mission.Current != null ? Mission.Current.CurrentTime : LastTick);
+            }
+
+            private static void MovementPostfix(RouteASetterToken __state, bool __runOriginal)
+            {
+                if (__state.Identity != 0 && RouteAEvidenceSink != null)
+                    RouteAEvidenceSink.SetterCompleted(__state, __runOriginal,
+                        Mission.Current != null ? Mission.Current.CurrentTime : LastTick);
             }
 
             private static void FacingPrefix(Formation __instance, FacingOrder order)

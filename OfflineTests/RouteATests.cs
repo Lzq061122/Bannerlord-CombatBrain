@@ -1,0 +1,242 @@
+namespace OfflineTests
+{
+    using System;
+    using System.Collections.Generic;
+    using CombatBrain.Ai;
+    using CombatBrain.Battle;
+    using CombatBrain.Coordination;
+    using CombatBrain.Settings;
+
+    internal static partial class Program
+    {
+        private sealed class RouteFake : IRouteAWeights
+        {
+            public readonly float[] Weights = { 0.25f, 0.5f, 0.75f, 1.25f };
+            public readonly object[] Behaviors = { new object(), new object(), new object(), new object() };
+            public int Writes;
+            public bool Destroyed;
+            public object Identity { get { return this; } }
+            public object Behavior(int i) { return Behaviors[i]; }
+            public float GetWeight(int i) { return Weights[i]; }
+            public void SetWeight(int i, float w)
+            {
+                if (Destroyed) throw new InvalidOperationException("destroyed engine object");
+                Writes++; Weights[i] = w;
+            }
+            public override int GetHashCode() { return 42; } // 故意碰撞，不能充当对象身份。
+            public bool Original { get { return Weights[0] == .25f && Weights[1] == .5f
+                && Weights[2] == .75f && Weights[3] == 1.25f; } }
+        }
+        private static RouteAEligibility RouteEligible()
+        {
+            return new RouteAEligibility { Enabled = true, FieldBattle = true, Present = true,
+                Alive = true, AiControlled = true, Infantry = true };
+        }
+        private static RouteAControl RouteController()
+        {
+            var c = new RouteAControl(); c.BeginSession(new object(), 0f); c.Evidence.Capture = true; return c;
+        }
+        private static bool Arm(RouteAControl c, RouteFake f, Cps2RouteAIntent intent = Cps2RouteAIntent.Hold,
+            float now = 0f, int signal = 5)
+        { return c.Update(f, RouteEligible(), intent, true, 0f, 0f, signal, 1, 0, now); }
+        private static RouteASetterToken ObservedRouteWrite(RouteAEvidence e, object f, long sequence, float now)
+        {
+            e.ExpectSetter(f);
+            RouteASetterToken t = e.SetterBeginning(f, CommandDomain.Movement, CommandSource.CombatBrainRouteA, sequence, 7, now);
+            e.SetterCompleted(t, true, now);
+            return t;
+        }
+
+        private static void TestRouteAFinalRepair()
+        {
+            var c = RouteController(); var f = new RouteFake(); var e = RouteEligible();
+            Check(Arm(c, f), "routeA live registration owns one formation");
+            int writes = 0;
+            object competitor = new object();
+            if (c.TrySelect(f, f.Behaviors[0], competitor, e, true, .1f)) writes++;
+            Check(writes == 0, "routeA losing candidate cannot reach write sink");
+            Arm(c, f);
+            if (c.TrySelect(f, f.Behaviors[0], f.Behaviors[0], e, true, .5f))
+            {
+                ObservedRouteWrite(c.Evidence, f, 1, .5f); writes++; c.Applied(.5f, true);
+            }
+            Check(writes == 1, "routeA selected callback reaches write sink once");
+            for (int i = 0; i < 20; i++)
+                if (c.TrySelect(f, f.Behaviors[0], f.Behaviors[0], e, true, 1f + i)) writes++;
+            Check(writes == 1, "routeA stable selected ticks do not spam equivalent orders");
+            c.Activated(f.Behaviors[0]);
+            Check(c.TrySelect(f, f.Behaviors[0], f.Behaviors[0], e, true, 22f), "routeA real reactivation may execute again");
+            int weightWrites = f.Writes;
+            for (int i = 0; i < 1000; i++) Arm(c, f);
+            Check(f.Writes == weightWrites, "routeA 1000 steady updates do not rewrite weights");
+
+            // 调生产 ExecuteWinner，检查返回值及实际 sink；不能只验证一个空注册表。
+            var winner = new FormationCommandProposal { Domain = CommandDomain.Movement, Kind = CommandKind.Hold };
+            var status = new FormationCommandExecutor.FormationStatus { Valid = true, FieldBattle = true,
+                LeaseOk = true, RouteAMovementOwned = c.Owns(f) };
+            var skips = new List<FormationCommandExecutor.WriteSkipReason>();
+            int ordinary = 0;
+            bool result = FormationCommandExecutor.ExecuteWinner(winner, status, default(FormationCommandExecutor.LastDomainWrite),
+                5f, .2f, p => ordinary++, skips, false);
+            Check(!result && ordinary == 0 && skips.Contains(FormationCommandExecutor.WriteSkipReason.RouteAMovementOwned),
+                "routeA owned Movement: executor returns skipped and never invokes sink");
+            foreach (CommandDomain domain in new[] { CommandDomain.Facing, CommandDomain.Arrangement })
+            {
+                winner.Domain = domain;
+                Check(FormationCommandExecutor.ExecuteWinner(winner, status, default(FormationCommandExecutor.LastDomainWrite),
+                    5f, .2f, p => ordinary++, null, false), "routeA leaves executor " + domain + " available");
+            }
+            c.Release(RouteAExit.Disabled, 23f); status.RouteAMovementOwned = c.Owns(f); winner.Domain = CommandDomain.Movement;
+            Check(FormationCommandExecutor.ExecuteWinner(winner, status, default(FormationCommandExecutor.LastDomainWrite),
+                5f, .2f, p => ordinary++, null, false), "routeA exit releases ordinary Movement sink");
+
+            // 每条恢复边都先真实改写四权重，再触发生产 Reconcile/Release 并检查保存值和重复释放。
+            for (int fault = 0; fault < 7; fault++)
+            {
+                c = RouteController(); f = new RouteFake(); Arm(c, f);
+                e = RouteEligible();
+                switch (fault)
+                {
+                    case 0: e.Enabled = false; break;
+                    case 1: e.PlayerOwned = true; break;
+                    case 2: e.Alive = false; break;
+                    case 3: e.Present = false; break;
+                    case 4: e.AiControlled = false; break;
+                    case 5: e.FieldBattle = false; break;
+                    case 6: e.Infantry = false; break;
+                }
+                c.Reconcile(e, 1f);
+                Check(!c.Owns(f) && f.Original, "routeA lifecycle restores captured weights: " + e.Rejection);
+                weightWrites = f.Writes; c.Reconcile(e, 2f); c.Release(RouteAExit.Disabled, 2f);
+                Check(f.Writes == weightWrites, "routeA lifecycle repeated release is inert: " + e.Rejection);
+            }
+            c = RouteController(); f = new RouteFake(); Arm(c, f);
+            e = RouteEligible(); e.PlayerOwned = true;
+            Check(!c.TrySelect(f, f.Behaviors[0], f.Behaviors[0], e, true, .01f) && f.Original && !c.Owns(f),
+                "routeA player acquired between Mission tick and callback is protected immediately");
+            c = RouteController(); f = new RouteFake(); Arm(c, f); e = RouteEligible(); e.ForcedTick = true;
+            Check(!c.TrySelect(f, f.Behaviors[0], f.Behaviors[0], e, true, .01f) && !c.Owns(f),
+                "routeA forced engine tick releases before potential SetControlledByAI follow-up write");
+
+            c = RouteController(); f = new RouteFake(); var replacement = new RouteFake(); Arm(c, f);
+            int firstIdentity = c.IdentityId;
+            Check(Arm(c, replacement) && f.Original && !c.Owns(f) && c.Owns(replacement)
+                && c.IdentityId != firstIdentity, "routeA same Index and colliding hash replacement restores old object first");
+            Check(!c.TrySelect(f, f.Behaviors[0], f.Behaviors[0], RouteEligible(), true, 2f), "routeA stale callback cannot command replacement");
+            c.BeginSession(new object(), 3f);
+            Check(replacement.Original && c.Target == null && c.Evidence.Identities == 0 && c.Revision == 0,
+                "routeA Mission change restores old weights and clears session identities");
+            c = RouteController(); f = new RouteFake(); Arm(c, f); f.Destroyed = true;
+            c.Release(RouteAExit.MissionEnding, 1f);
+            Check(c.Target == null && c.RestoreFailures == 4, "routeA destroyed target cannot prevent registry cleanup");
+
+            c = RouteController(); f = new RouteFake(); Arm(c, f, Cps2RouteAIntent.Rejoin);
+            Check(!c.Update(f, RouteEligible(), Cps2RouteAIntent.Rejoin, false, 20f, 30f, 5, 1, 0, 1f)
+                && f.Original && !c.Owns(f), "routeA failed fresh path validation revokes previous Rejoin and restores weights");
+            foreach (Cps2RouteAIntent intent in new[] { Cps2RouteAIntent.Hold, Cps2RouteAIntent.Advance,
+                Cps2RouteAIntent.Rejoin, Cps2RouteAIntent.Retreat })
+            {
+                c = RouteController(); f = new RouteFake(); Arm(c, f, intent);
+                bool onlyOne = true;
+                for (int i = 0; i < 4; i++) onlyOne &= f.Weights[i] == (i == (int)intent - 1 ? 10f : 0f);
+                Check(onlyOne, "routeA exactly one weighted behavior for " + intent);
+            }
+            Check(Cps2RouteAPolicy.MapFormationToIntent(false, (int)FormationMission.SupportMainEffort, BattlePhase.Engage)
+                == Cps2RouteAIntent.Advance, "routeA real Engage phase is not treated as Deployment/Rejoin");
+
+            TestRouteAEvidence();
+            TestRouteAFlapAndMode();
+        }
+
+        private static void TestRouteAEvidence()
+        {
+            RouteAControl c = RouteController(); RouteFake f = new RouteFake(); Arm(c, f);
+            RouteAEvidence e = c.Evidence; int id = c.IdentityId;
+            ObservedRouteWrite(e, f, 10, 1f); c.Applied(1f, true);
+            e.SetterCompleted(e.SetterBeginning(new RouteFake(), CommandDomain.Movement, CommandSource.ExternalUnknown, 11, 9, 1.1f), true, 1.1f);
+            e.SetterCompleted(e.SetterBeginning(f, CommandDomain.Facing, CommandSource.ExternalUnknown, 12, 9, 1.2f), true, 1.2f);
+            Check(e.StableFor(id) == 1, "routeA other identity and Facing setters do not consume Movement Stable");
+            RouteASetterToken skipped = e.SetterBeginning(f, CommandDomain.Movement, CommandSource.ExternalUnknown, 13, 9, 1.3f);
+            e.SetterCompleted(skipped, false, 1.3f);
+            Check(e.ReplacedFor(id) == 0, "routeA skipped setter is not an external replacement");
+            e.SetterCompleted(e.SetterBeginning(f, CommandDomain.Movement, CommandSource.ExternalUnknown, 14, 9, 8f), true, 8f);
+            Check(e.ReplacedFor(id) == 1 && e.StableFor(id) == 0, "routeA actual external write replaces outstanding Applied even beyond old one-second window");
+            for (int i = 0; i < 200; i++)
+                e.SetterCompleted(e.SetterBeginning(f, CommandDomain.Movement, CommandSource.ExternalUnknown, 15 + i, 9, 9f + i), true, 9f + i);
+            Check(e.ReplacedFor(id) == 1, "routeA repeated external writes replace one Applied only once; >128 events retain history");
+            ObservedRouteWrite(e, f, 215, 220f); c.Applied(220f, true);
+            c.Release(RouteAExit.Disabled, 221f);
+            e.SetterCompleted(e.SetterBeginning(f, CommandDomain.Movement, CommandSource.ExternalUnknown, 216, 9, 222f), true, 222f);
+            Check(e.AppliedFor(id) == 2 && e.ReplacedFor(id) == 1 && e.StableFor(id) == 1,
+                "routeA external setter after Exit is restoration, not a new replacement");
+            long exit = 0, afterExit = 0, replaced = 0, prevSeq = 0; bool strict = true; RouteAEvent item;
+            while (e.TryRead(out item))
+            {
+                strict &= item.Seq > prevSeq; prevSeq = item.Seq;
+                if (item.Kind == RouteAEventKind.Exit) exit = item.Seq;
+                if (item.Kind == RouteAEventKind.ExternalAfterExit) afterExit = item.Seq;
+                if (item.Kind == RouteAEventKind.ExternalReplaced) replaced = item.Seq;
+            }
+            Check(strict && replaced < exit && exit < afterExit, "routeA recorded event order distinguishes active overwrite from post-exit restoration");
+            RouteASetterToken late = e.SetterBeginning(f, CommandDomain.Movement, CommandSource.ExternalUnknown, 300, 9, 223f);
+            c.BeginSession(new object(), 224f); e.SetterCompleted(late, true, 225f);
+            Check(e.AppliedFor(id) == 0 && e.ReplacedFor(id) == 0 && e.Count == 0, "routeA prior-session completion cannot contaminate new session");
+
+            c = RouteController(); f = new RouteFake(); Arm(c, f); e = c.Evidence;
+            e.ExpectSetter(f);
+            RouteASetterToken direct = e.SetterBeginning(f, CommandDomain.Movement, CommandSource.CombatBrainRouteA, 1, 7, 1f);
+            RouteASetterToken nested = e.SetterBeginning(f, CommandDomain.Movement, CommandSource.CombatBrainRouteA, 2, 9, 1f);
+            Check(direct.Direct && !nested.Direct && nested.Source == CommandSource.ExternalUnknown,
+                "routeA nested setter cannot borrow the Adapter's direct-source token");
+            c.Applied(1f, false);
+            Check(e.AppliedFor(c.IdentityId) == 0 && e.StableFor(c.IdentityId) == 0, "routeA unobserved writes are excluded from verified Stable");
+
+            e.CancelExpectedSetter();
+            RouteASetterToken beforeReset = e.SetterBeginning(f, CommandDomain.Movement, CommandSource.ExternalUnknown, 900, 9, 2f);
+            RouteASetterToken afterReset = e.SetterBeginning(f, CommandDomain.Movement, CommandSource.ExternalUnknown, 0, 9, 3f);
+            Check(afterReset.Seq > beforeReset.Seq && afterReset.ObserverSeq == 0,
+                "routeA strict setter sequence survives legacy observer counter reset");
+            for (int i = 0; i <= RouteAEvidence.EventCapacity; i++) e.Selected(c.IdentityId, 1, 4f);
+            Check(e.Count == RouteAEvidence.EventCapacity && e.Dropped > 0,
+                "routeA bounded event overflow explicitly invalidates complete evidence");
+            long dropped = e.Dropped; e.Capture = false; e.Capture = true;
+            Check(e.Dropped > dropped, "routeA diagnostic interruption remains visible after re-enabling capture");
+        }
+
+        private static void TestRouteAFlapAndMode()
+        {
+            var c = RouteController(); var f = new RouteFake();
+            Arm(c, f, Cps2RouteAIntent.Hold, 0f); Arm(c, f, Cps2RouteAIntent.Advance, .5f); Arm(c, f, Cps2RouteAIntent.Hold, 1f);
+            Check(c.Flaps == 1, "routeA unchanged situation Hold-Advance-Hold within two seconds is a flap");
+            c = RouteController(); f = new RouteFake();
+            Arm(c, f, Cps2RouteAIntent.Hold, 0f); Arm(c, f, Cps2RouteAIntent.Advance, .5f, 6); Arm(c, f, Cps2RouteAIntent.Hold, 1f, 6);
+            Check(c.Flaps == 0, "routeA actual situation transition is not counted as no-change oscillation");
+            c = RouteController(); f = new RouteFake();
+            Arm(c, f, Cps2RouteAIntent.Hold, 0f); Arm(c, f, Cps2RouteAIntent.Advance, .5f);
+            Arm(c, f, Cps2RouteAIntent.Advance, .7f, 6); Arm(c, f, Cps2RouteAIntent.Hold, 1f);
+            Check(c.Flaps == 0, "routeA intervening situation change breaks no-change chain even with same intent");
+            c = RouteController(); f = new RouteFake();
+            Arm(c, f, Cps2RouteAIntent.Hold, 0f); Arm(c, f, Cps2RouteAIntent.Advance, .5f); Arm(c, f, Cps2RouteAIntent.Hold, 3f);
+            Check(c.Flaps == 0, "routeA return outside two-second transition window is not a flap");
+            var stamp = new RouteASituationStamp(); var snapshot = new RouteASituation { Count = 100 };
+            int revision = stamp.Update(f, snapshot);
+            Check(stamp.Update(f, snapshot) == revision, "routeA identical situation values retain revision without allocation");
+            snapshot.Count--;
+            Check(stamp.Update(f, snapshot) != revision, "routeA one casualty changes situation revision, not coarse 20-unit bins");
+            revision = stamp.Update(f, snapshot); snapshot.Vector.Moral = .01f;
+            Check(stamp.Update(f, snapshot) != revision, "routeA real morale-vector change breaks no-change chain");
+            Cps3Mode oldMode = Cps3RuntimeSettings.Mode; bool oldFlag = Cps2PoCSettings.RouteAEnabled;
+            bool oldEnabled = Cps3RuntimeSettings.Enabled;
+            Cps3RuntimeSettings.Enabled = true;
+            Cps3RuntimeSettings.Mode = Cps3Mode.A_NativeBaseline;
+            Cps3RuntimeSettings.Mode = Cps3Mode.E_RouteA;
+            Check(Cps2PoCSettings.RouteAEnabled && Cps3RuntimeSettings.RouteAExecutionEnabled(), "routeA entering E automatically arms dedicated switch");
+            Cps2PoCSettings.RouteAEnabled = false; Cps3RuntimeSettings.Mode = Cps3Mode.E_RouteA;
+            Check(!Cps2PoCSettings.RouteAEnabled && !Cps3RuntimeSettings.RouteAExecutionEnabled(), "routeA unchanged E selection cannot undo hot close");
+            Cps2PoCSettings.RouteAEnabled = true; Cps3RuntimeSettings.Mode = Cps3Mode.C_ArbiterCoexist;
+            Check(!Cps3RuntimeSettings.RouteAExecutionEnabled(), "routeA leaving E overrides a still-enabled dedicated switch");
+            Cps3RuntimeSettings.Mode = oldMode; Cps2PoCSettings.RouteAEnabled = oldFlag;
+            Cps3RuntimeSettings.Enabled = oldEnabled;
+        }
+    }
+}

@@ -48,7 +48,8 @@ namespace CombatBrain.Ai
             PlayerOwned = 3,        // 玩家/外部所有者接管（无迟滞停止执行）
             NotFieldBattle = 4,     // 非普通单机野战（fail-open）
             LeaseNotOk = 5,         // 租约状态复核未过
-            ApplyFailed = 6         // 实际写入异常（fail-open：本拍跳过，下拍重试）
+            ApplyFailed = 6,        // 实际写入异常（fail-open：本拍跳过，下拍重试）
+            RouteAMovementOwned = 7
         }
 
         /// <summary>上拍某域实际写入摘要（纯数据，供 ShouldWrite 迟滞判定；可离线测）。</summary>
@@ -63,6 +64,7 @@ namespace CombatBrain.Ai
         /// <summary>执行前 Formation 状态复核（胶水层填充；测试可离线构造）。</summary>
         public struct FormationStatus
         {
+            public bool RouteAMovementOwned;
             public bool Valid;        // Formation 存在且 CountOfUnits>0 且 identity 一致（§5.3.5）
             public bool PlayerOwned;  // 玩家/玩家控制兵员/玩家队（§8.1；豁免开关口径）
             public bool FieldBattle;  // 普通单机野战（攻城/守城/突围 fail-open，§8.2）
@@ -112,6 +114,11 @@ namespace CombatBrain.Ai
             bool recordTrace = true)
         {
             // §5.3.5 执行前复核：identity/存活/玩家所有权/任务类型/租约
+            if (RouteAControl.BlocksExecutor(status.RouteAMovementOwned, winner.Domain))
+            {
+                if (skipLog != null) skipLog.Add(WriteSkipReason.RouteAMovementOwned);
+                return false; // 必须早于 provenance、source scope 和 last-write 更新。
+            }
             if (!status.Valid) { if (skipLog != null) skipLog.Add(WriteSkipReason.FormationInvalid); return false; }
             if (status.PlayerOwned) { if (skipLog != null) skipLog.Add(WriteSkipReason.PlayerOwned); return false; }
             if (!status.FieldBattle) { if (skipLog != null) skipLog.Add(WriteSkipReason.NotFieldBattle); return false; }
@@ -216,6 +223,7 @@ namespace CombatBrain.Ai
                 // 状态复核输入（§8.1 玩家所有权 / §8.2 任务类型 / §6.2 租约状态）
                 var status = new FormationStatus
                 {
+                    RouteAMovementOwned = CbRouteAPoC.IsMovementOwnedByRouteA(f),
                     Valid = f.CountOfUnits > 0,
                     PlayerOwned = f.PlayerOwner != null || f.HasPlayerControlledTroop
                         || f.IsPlayerTroopInFormation
@@ -240,6 +248,13 @@ namespace CombatBrain.Ai
                 {
                     FormationArbitrationResult r = results[d];
                     if (!r.HasWinner) continue;
+                    if (RouteAControl.BlocksExecutor(status.RouteAMovementOwned, r.Domain))
+                    {
+                        // Route A 退出后普通执行器必须重新评估，不能沿用接管前的迟滞快照。
+                        LastDomainWrite[] previous;
+                        if (_lastWrites.TryGetValue(key, out previous)) previous[DomainIndex(r.Domain)] = default(LastDomainWrite);
+                        continue;
+                    }
                     LastDomainWrite last = GetLastWrite(key, r.Domain);
                     if (shadowOnly)
                     {
@@ -280,6 +295,14 @@ namespace CombatBrain.Ai
         }
 
         private static long Key(int teamId, int formationId) { return ((long)teamId << 10) | (uint)formationId; }
+
+        internal void ForgetMovement(Formation f)
+        {
+            if (f == null || f.Team == null) return;
+            LastDomainWrite[] writes;
+            if (_lastWrites.TryGetValue(Key(f.Team.TeamIndex, f.Index), out writes))
+                writes[DomainIndex(CommandDomain.Movement)] = default(LastDomainWrite);
+        }
 
         private static Formation FindFormation(Mission mission, int teamId, int formationId)
         {
@@ -341,12 +364,6 @@ namespace CombatBrain.Ai
         //   （防 CB 双写）；Facing/Arrangement 仍按仲裁执行。
         private static void ApplySetOrder(Mission mission, Formation f, FormationCommandProposal winner)
         {
-            if (winner.Domain == CommandDomain.Movement
-                && CbRouteAPoC.IsMovementOwnedByRouteA(
-                    System.Runtime.CompilerServices.RuntimeHelpers.GetHashCode(f)))
-            {
-                return; // RouteA 已接管该编队 Movement 域——执行器跳过防双写
-            }
             switch (winner.Domain)
             {
                 case CommandDomain.Movement:
@@ -436,546 +453,4 @@ namespace CombatBrain.Ai
         }
     }
 
-    // CPS-2 路线 A PoC 胶水（cps2-ownership-poc，§6.1/t20 研究）——默认关闭安全态。
-    // 机制：自定义 BehaviorComponent 表达 Movement 域 Hold/Advance/Rejoin/Retreat，经公开 API
-    //   FormationAI.AddAiBehavior（FormationAI.cs:133）/SetBehaviorWeight<T>（FormationAI.cs:120）挂载；
-    //   权重法竞争（FindBestBehavior max(GetAIWeight()×WeightFactor)，FormationAI.cs:179）——
-    //   CB 权重 10 > 原版默认 0.2~1.0，意图胜出无需全量降权；冲突降权表（Cps2RouteAPolicy.ConflictingIntents）
-    //   供运行期对具体原版类型 SetBehaviorWeight(0f)（降权而非删除，§6.1）。
-    // 约束（§6.1 禁止项）：不 ClearTacticOptions 重建、不替换 TeamAI、不复制第三方实现（RBM/OF 仅借鉴架构）。
-    // 仅 Movement 域（Behavior 只写 MovementOrder；Facing/Arrangement 不经 Behavior——t20 结论）。
-    // 安全：玩家接管天然恢复（FormationAI.cs:245/286 !IsAIControlled 停写）；每拍幂等 Apply
-    //   （GetBehavior<T> 查重 + AddAiBehavior + SetBehaviorWeight）覆盖拆分/增援重置。
-    // PoC 开关默认关闭（Cps2PoCSettings.RouteAEnabled=false）→ Apply 零 AddAiBehavior/SetBehaviorWeight 调用。
-    // CPS-2 路线 A PoC 胶水（cps2-ownership-poc，§6.1/t20 研究）——默认关闭安全态。
-    // t50（cps3r-route-a-hardgates）六硬门修复：①单编队单 Movement 域隔离（弃 Teams×Formations 遍历）；
-    //   ②完整可逆（开关关/玩家接管/identity 变化/Mission 结束恢复原权重无残留，热关闭=真恢复）；
-    //   ③per-Formation Mission（弃 Team 意图）+ Rejoin 导航校验；④权威归因（RouteA scope + Intent→Behavior选
-    //   →OrderApplied 事件链）；⑤冲突降权单维（GetAiWeight=10 单常量子，不再×SetBehaviorWeight=10=100）；
-    //   ⑥幂等无分配（实例缓存复用，不每拍 new）。
-    public static class CbRouteAPoC
-    {
-        // t50 硬门⑥：Behavior 实例缓存（key=identity；按需创建，命中复用不每拍 new）；与 _armed 同生命周期
-        private static readonly Dictionary<int, object> _cache = new Dictionary<int, object>();
-
-        // t52 repair（MEDIUM ⑤单维降权）：Behavior 基权重（GetAiWeight 返此值=1f 归一；有效权重=
-        //   GetAiWeight×WeightFactor=1×SetBehaviorWeight(CbBehaviorWeight=10)=10——FindBestBehavior 语义，
-        //   消除 t20 GetAiWeight=10×SetBehaviorWeight=10=100 放大）
-        public const float BaseBehaviorWeight = 1f;
-
-        // t54（D-RouteA）：稳定性 flap 检测窗口（秒）——窗口内意图回摆到先前意图=权重对刷
-        public const float RouteAStabilityFlapWindowSeconds = 2f;
-
-        /// <summary>FindBestBehavior 有效权重（纯逻辑可离线测）：GetAiWeight×WeightFactor（FormationAI.cs:179）。</summary>
-        public static float EffectiveWeight(float getAiWeight, float setBehaviorWeight)
-        {
-            return getAiWeight * setBehaviorWeight;
-        }
-
-                // t60（派单 §四）：RouteAOrderAdapter——四 CB Behavior 唯一 Movement setter 出口（CPS §14.1 条件 4 批准适配器）。
-        // 最终静态目标：执行器 3 setter + 本 Adapter 1 setter + 四 Behavior 0 直接 setter。
-        // 落地前复核（复用 Astra CanExecuteSelected）：模式/RouteA 开关/普通野战/Formation identity/ActiveBehavior 确为
-        //   当前 CB Behavior/非玩家队四条件/有效且 AI 控制/命令目标有效/RouteA 拥有 Movement 域（_armed 含 identity）。
-        // 复核失败→恢复该编队 RouteA 权重并清除注册（派单 §五：Adapter 资格复核失败→恢复）。
-        public static class RouteAOrderAdapter
-        {
-            /// <summary>唯一真实 Movement setter 出口（RouteA scope 包住）；成功 true。</summary>
-            public static bool TryApply(BehaviorComponent behavior)
-            {
-                Formation f = behavior != null ? behavior.Formation : null;
-                if (f == null) return false;
-                int id = System.Runtime.CompilerServices.RuntimeHelpers.GetHashCode(f);
-                if (!CanExecuteSelected(behavior))
-                {
-                    // 派单 §五/§六：资格复核失败（玩家接管/离开 E/失效/导航失败等）→ 恢复权重+清注册
-                    RestoreIfArmed(f, id);
-                    return false;
-                }
-                RouteAEventLogger.RecordBehaviorSelected(); // BehaviorSelected：真实胜出 TickOccasionally 路径
-                using (CommandSourceScope.Enter(CommandSource.CombatBrainRouteA))
-                {
-                    f.SetMovementOrder(behavior.CurrentOrder); // 唯一真实 setter
-                    RouteAEventLogger.RecordOrderApplied();
-                    RouteAEventLogger.RecordAppliedByIdentity(id); // t60：按 identity 隔离
-                }
-                return true;
-            }
-        }
-
-        /// <summary>t60：若编队仍被接管则恢复（权重 0+清注册+记录 Exit/Restore；幂等——Restore 内部记录）。</summary>
-        public static void RestoreIfArmed(Formation f, int id)
-        {
-            if (f == null) return;
-            if (_armed.Contains(id))
-            {
-                Restore(f, id);
-            }
-        }
-
-        /// <summary>t60：RouteA 是否拥有该编队 Movement 域（执行器防双写判定，纯逻辑）。</summary>
-        public static bool IsMovementOwnedByRouteA(int formationId)
-        {
-            return _armed.Contains(formationId);
-        }
-
-        // t50 硬门②：已接管编队登记（key=identity → Formation 引用；恢复时幂等还原）
-        private static readonly HashSet<int> _armed = new HashSet<int>();
-
-        /// <summary>是否有编队仍处于 CB 接管（供 MissionLogic 热关闭仍调 ApplySingle 以恢复；幂等）。</summary>
-        public static bool HasArmed()
-        {
-            return _armed.Count > 0;
-        }
-
-        // 引擎回调与 MissionLogic 不保证相邻；在真正落地前重新保护开关和玩家所有权。
-        internal static bool CanExecuteSelected(BehaviorComponent behavior)
-        {
-            Formation f = behavior.Formation;
-            Mission mission = Mission.Current;
-            bool enabled = CombatBrain.Settings.Cps2PoCSettings.RouteAEnabled
-                || (CombatBrain.Settings.Cps3RuntimeSettings.Enabled
-                    && CombatBrain.Settings.Cps3RuntimeSettings.RouteAActive(
-                        CombatBrain.Settings.Cps3RuntimeSettings.Mode));
-            return enabled && mission != null
-                && Cps2RouteAPolicy.IsEligibleFieldBattle(mission.IsFieldBattle,
-                    mission.IsSiegeBattle, mission.IsSallyOutBattle)
-                && f != null && f.CountOfUnits > 0 && f.IsAIControlled
-                && f.Team != null && !f.Team.IsPlayerTeam
-                && f.PlayerOwner == null && !f.HasPlayerControlledTroop && !f.IsPlayerTroopInFormation
-                && f.AI != null && object.ReferenceEquals(f.AI.ActiveBehavior, behavior)
-                && behavior.WeightFactor > 0f
-                && _armed.Contains(System.Runtime.CompilerServices.RuntimeHelpers.GetHashCode(f));
-        }
-
-        /// <summary>单编队幂等 Apply（t50 硬门①：单 Movement 域，不遍历 Teams×Formations）。
-        /// <paramref name="routeEnabled"/> 预判 RouteAEnabled；<paramref name="eligibleField"/> 为
-        ///   Cps2RouteAPolicy.IsEligibleFieldBattle(IsFieldBattle,IsSiege,IsSallyOut)；null→直接认定不合格。
-        /// <paramref name="formationMission"/>=-1 / inRetreat 供 per-Formation 意图映射；Rejoin 需 mainBody 有效 +
-        ///   非贴身接敌（IsRejoinRouteValid 纯逻辑）；归因：落地 SetMovementOrder 在 CommandSourceScope.Enter(CombatBrainRouteA) 内。
-        /// t60：加 phase（真实战斗阶段，禁固定 Deployment）；返回是否成功应用（Rejoin 导航失败→false 不注册）。</summary>
-        public static bool ApplySingle(Formation f, bool routeEnabled, bool eligibleField, bool isAIControlled,
-            bool formationValid, int formationMission, bool inRetreat, BattlePhase phase,
-            float mainBodyX, float mainBodyY,
-            System.Collections.Generic.IList<FormationCoordSnapshot> enemySnaps)
-        {
-            if (f == null) return false;
-            int id = System.Runtime.CompilerServices.RuntimeHelpers.GetHashCode(f);
-            // 硬门②：不合格（开关关/非野战/玩家接管/编队失效）→ 恢复（热关闭=真恢复）
-            if (!routeEnabled || !eligibleField || !isAIControlled || !formationValid)
-            {
-                Restore(f, id);
-                return false;
-            }
-            // 硬门①③：仅单编队相互作用；per-Formation 意图映射（t60：真实战斗阶段）
-            Cps2RouteAIntent intent = Cps2RouteAPolicy.MapFormationToIntent(
-                inRetreat, formationMission, phase);
-            bool applied = ApplySingleIntent(f, id, intent, mainBodyX, mainBodyY, enemySnaps);
-            if (!applied)
-            {
-                // t60：意图应用失败（Rejoin 导航失败/None）→ 不注册接管；若此前已接管则恢复（派单 §五/§六）
-                Restore(f, id);
-                return false;
-            }
-            _armed.Add(id);
-            return true;
-        }
-
-        private static bool ApplySingleIntent(Formation f, int id, Cps2RouteAIntent intent,
-            float mainBodyX, float mainBodyY,
-            System.Collections.Generic.IList<FormationCoordSnapshot> enemySnaps)
-        {
-            if (intent == Cps2RouteAIntent.None) return false;
-            float w = CombatBrain.Settings.Cps2PoCSettings.CbBehaviorWeight; // t50 硬门⑤：单维权重
-            switch (intent)
-            {
-                case Cps2RouteAIntent.Hold:
-                    EnsureBehavior(f, id, typeof(CbHoldBehavior), () => new CbHoldBehavior(f));
-                    f.AI.SetBehaviorWeight<CbHoldBehavior>(w);
-                    break;
-                case Cps2RouteAIntent.Advance:
-                    EnsureBehavior(f, id, typeof(CbAdvanceBehavior), () => new CbAdvanceBehavior(f));
-                    f.AI.SetBehaviorWeight<CbAdvanceBehavior>(w);
-                    break;
-                case Cps2RouteAIntent.Rejoin:
-                    // 硬门③：Rejoin 导航校验——MainBody 有效 + 非贴身接敌（无效→不挂载 Rejoin，防无人负责）
-                    Vec2 median = f.CachedMedianPosition.AsVec2;
-                    if (!Cps2RouteAPolicy.IsRejoinRouteValid(mainBodyX, mainBodyY,
-                        median.x, median.y,
-                        enemySnaps, CombatBrain.Settings.Cps2PoCSettings.RouteARejoinContactMeters))
-                    {
-                        return false; // t60：导航失败→不应用（派单 §六.5：本拍不执行+撤销权重）
-                    }
-                    EnsureBehavior(f, id, typeof(CbRejoinBehavior), () => new CbRejoinBehavior(f));
-                    f.AI.GetBehavior<CbRejoinBehavior>().SetTarget(mainBodyX, mainBodyY);
-                    f.AI.SetBehaviorWeight<CbRejoinBehavior>(w);
-                    break;
-                case Cps2RouteAIntent.Retreat:
-                    EnsureBehavior(f, id, typeof(CbRetreatBehavior), () => new CbRetreatBehavior(f));
-                    f.AI.SetBehaviorWeight<CbRetreatBehavior>(w);
-                    break;
-                default:
-                    return false;
-            }
-            // CB 域内互斥：冲突意图 behavior 权重 0（降权而非删除/清空，§6.1；Astra 补三条边保留）
-            Cps2RouteAIntent[] conflicts = Cps2RouteAPolicy.ConflictingOwn(intent);
-            for (int i = 0; i < conflicts.Length; i++)
-            {
-                SetOwnWeightZero(f, conflicts[i]);
-            }
-            // t50 硬门④：归因事件链记录（Intent；BehaviorSelected/OrderApplied 在 Adapter 落地路径）
-            RouteAEventLogger.RecordIntentApplied(
-                f.Team != null ? f.Team.TeamIndex : 0, f.Index, intent);
-            return true;
-        }
-
-        private static void SetOwnWeightZero(Formation f, Cps2RouteAIntent intent)
-        {
-            switch (intent)
-            {
-                case Cps2RouteAIntent.Hold: if (f.AI.GetBehavior<CbHoldBehavior>() != null) f.AI.SetBehaviorWeight<CbHoldBehavior>(0f); break;
-                case Cps2RouteAIntent.Advance: if (f.AI.GetBehavior<CbAdvanceBehavior>() != null) f.AI.SetBehaviorWeight<CbAdvanceBehavior>(0f); break;
-                case Cps2RouteAIntent.Rejoin: if (f.AI.GetBehavior<CbRejoinBehavior>() != null) f.AI.SetBehaviorWeight<CbRejoinBehavior>(0f); break;
-                case Cps2RouteAIntent.Retreat: if (f.AI.GetBehavior<CbRetreatBehavior>() != null) f.AI.SetBehaviorWeight<CbRetreatBehavior>(0f); break;
-            }
-        }
-
-        // t50 硬门⑥：实例缓存幂等挂载（命中缓存复用；未命中按需创建后缓存；GetBehavior 查重不重复 Add）
-        private static void EnsureBehavior(Formation f, int id, System.Type type,
-            System.Func<object> factory)
-        {
-            int key = id * 31 + type.GetHashCode();
-            object cached;
-            if (_cache.TryGetValue(key, out cached) && cached != null)
-            {
-                // 已缓存实例：确保已挂在 AI（拆分/增援可能重置移除——GetBehavior 查重后补挂）
-                if (GetOwnBehavior(f, type) == null) f.AI.AddAiBehavior((BehaviorComponent)cached);
-                return;
-            }
-            var existing = GetOwnBehavior(f, type);
-            if (existing != null)
-            {
-                _cache[key] = existing; // 复用引擎已有实例（幂等无 new）
-                return;
-            }
-            var created = (BehaviorComponent)factory();
-            f.AI.AddAiBehavior(created);
-            _cache[key] = created;
-        }
-
-        // GetBehavior<T> 只有泛型重载（FormationAI.cs:138）；按类型分派查重
-        private static BehaviorComponent GetOwnBehavior(Formation f, System.Type type)
-        {
-            if (type == typeof(CbHoldBehavior)) return f.AI.GetBehavior<CbHoldBehavior>();
-            if (type == typeof(CbAdvanceBehavior)) return f.AI.GetBehavior<CbAdvanceBehavior>();
-            if (type == typeof(CbRejoinBehavior)) return f.AI.GetBehavior<CbRejoinBehavior>();
-            if (type == typeof(CbRetreatBehavior)) return f.AI.GetBehavior<CbRetreatBehavior>();
-            return null;
-        }
-
-        // t50 硬门②：恢复原状（开关关/玩家接管/编队失效/Mission 结束）——移除 CB 加权（权重 0），清残留
-        // t60：先记录 Exit/Restore（派单 §七：RouteA 退出先记录，后续原版 setter 解释为正常恢复）再恢复；幂等
-        private static void Restore(Formation f, int id)
-        {
-            if (!_armed.Contains(id)) return; // 未接管无操作（幂等）
-            RouteAEventLogger.RecordExitRestore(
-                f.Team != null ? f.Team.TeamIndex : 0, f.Index);
-            // 还原原版状态唯一动作：CB 全部 behavior 权重 0（原版 FindBestBehavior 不再选中 CB——
-            //   等效还原原行为竞争；不 ClearTacticOptions/不整套清空，§6.1/硬门⑤可恢复）
-            if (f.AI != null)
-            {
-                if (f.AI.GetBehavior<CbHoldBehavior>() != null) f.AI.SetBehaviorWeight<CbHoldBehavior>(0f);
-                if (f.AI.GetBehavior<CbAdvanceBehavior>() != null) f.AI.SetBehaviorWeight<CbAdvanceBehavior>(0f);
-                if (f.AI.GetBehavior<CbRejoinBehavior>() != null) f.AI.SetBehaviorWeight<CbRejoinBehavior>(0f);
-                if (f.AI.GetBehavior<CbRetreatBehavior>() != null) f.AI.SetBehaviorWeight<CbRetreatBehavior>(0f);
-            }
-            _armed.Remove(id);
-            // 缓存清理：编队失效清该编队全部缓存（释放实例防泄漏）；否则保留复用（同 identity 重武装）。
-            //   t50 简化：恢复即清该 identity 全部缓存（编队对象生命周期结束/重武装语义下缓存无复用价值）
-            for (int t = 0; t < 4; t++)
-            {
-                _cache.Remove(id * 31 + OwnTypeHash(t));
-            }
-        }
-
-        private static int OwnTypeHash(int index)
-        {
-            switch (index)
-            {
-                case 0: return typeof(CbHoldBehavior).GetHashCode();
-                case 1: return typeof(CbAdvanceBehavior).GetHashCode();
-                case 2: return typeof(CbRejoinBehavior).GetHashCode();
-                default: return typeof(CbRetreatBehavior).GetHashCode();
-            }
-        }
-
-        /// <summary>Mission 结束/清场：全量恢复（幂等；由 CombatAiMissionLogic 调用）。
-        ///   t60：接入真实 Mission 生命周期——session 清零（证据链 §七新 Mission 必须清零）。</summary>
-        public static void ResetAll()
-        {
-            _armed.Clear();
-            _cache.Clear();
-            RouteAEventLogger.Reset();
-            RouteAStability.Reset();
-        }
-
-        // ---- 归因事件链（t50 硬门④/t54 D-RouteA/t60 派单 §七证据链修正）----
-        /// <summary>意图→Behavior 选中→OrderApplied→ExternalReplaced/Exit-Restore 事件链（RouteA 专用观测）。
-        ///   t60：①计数按 Mission session（Reset 清零）+ Formation identity（AppliedFor/ReplacedFor 字典隔离）+
-        ///   CommandDomain（RouteA 仅 Movement 域）；②Stable 只由同一 Formation 同一 Movement 域 RouteA Applied
-        ///   与对应 ExternalReplaced 计算（禁减全局）；③ExternalReplaced 从 SetOrderObserver ring 按 identity+Movement+
-        ///   Stage==ExternalReplaced 过滤（保留 setter 严格序号 Seq 与时间）；④Exit/Restore 先记录再允许后续原版
-        ///   setter 解释为正常恢复——日志可直接判断「RouteA 活跃时被覆盖 vs RouteA 退出后原版恢复」。</summary>
-        public static class RouteAEventLogger
-        {
-            private static long _intentCount;
-            private static long _selectedCount;
-            private static long _orderAppliedCount;
-            private static long _exitRestoreCount;
-            private static readonly Dictionary<int, long> _appliedByIdentity = new Dictionary<int, long>();
-
-            public static void RecordIntentApplied(int teamId, int formationId, Cps2RouteAIntent intent)
-            {
-                _intentCount = (_intentCount + 1) % 1000000;
-                if (CombatBrain.Settings.Cps3RuntimeSettings.ShadowWouldApplyLogEnabled)
-                {
-                    CombatLog.Log(string.Format(
-                        "[RouteA] intent→{0} team={1} f={2} seq={3}（Behavior 选中→OrderApplied 由 RouteA scope 归因）",
-                        intent, teamId, formationId, _intentCount));
-                }
-            }
-
-            // FormationAI 最终选中的 ActiveBehavior.TickOccasionally 回调才记 Selected（Astra 修正）。
-            public static void RecordBehaviorSelected()
-            {
-                _selectedCount = (_selectedCount + 1) % 1000000;
-            }
-
-            // 落地 SetMovementOrder（RouteA scope 内）→ OrderApplied（按 identity 隔离）
-            public static void RecordOrderApplied()
-            {
-                _orderAppliedCount = (_orderAppliedCount + 1) % 1000000;
-            }
-
-            /// <summary>t60：RouteA Applied 按 identity 计数（同一 session 内）。</summary>
-            public static void RecordAppliedByIdentity(int identity)
-            {
-                long v;
-                _appliedByIdentity.TryGetValue(identity, out v);
-                _appliedByIdentity[identity] = v + 1;
-            }
-
-            /// <summary>t60：Exit/Restore 事件（RouteA 退出先记录——后续原版 setter 解释为正常恢复）。</summary>
-            public static void RecordExitRestore(int teamId, int formationId)
-            {
-                _exitRestoreCount = (_exitRestoreCount + 1) % 1000000;
-                if (CombatBrain.Settings.Cps3RuntimeSettings.ShadowWouldApplyLogEnabled)
-                {
-                    CombatLog.Log(string.Format(
-                        "[RouteA] exit-restore team={0} f={1} seq={2}（RouteA 退出，后续原版 setter 为正常恢复）",
-                        teamId, formationId, _exitRestoreCount));
-                }
-            }
-
-            /// <summary>纯逻辑断言语义：意图选择计数（t50 离线测试）。</summary>
-            public static long IntentCount { get { return _intentCount; } }
-            public static long SelectedCount { get { return _selectedCount; } }
-            public static long OrderAppliedCount { get { return _orderAppliedCount; } }
-            public static long ExitRestoreCount { get { return _exitRestoreCount; } }
-
-            /// <summary>t60：该 identity 的 RouteA Applied 数（本 session）。</summary>
-            public static long AppliedByIdentity(int identity)
-            {
-                long v;
-                return _appliedByIdentity.TryGetValue(identity, out v) ? v : 0L;
-            }
-
-            /// <summary>t60：该 identity 的 Movement 域 ExternalReplaced 数（SetOrderObserver ring 按 identity+Movement 过滤；
-            ///   保留 setter 严格序号 Seq 与时间——ring 观测自带）。</summary>
-            public static long ReplacedByIdentity(int identity)
-            {
-                long n = 0;
-                for (int i = 0; i < SetOrderObserver.Count; i++)
-                {
-                    var o = SetOrderObserver.At(i);
-                    if (o.Identity == identity && o.Domain == CommandDomain.Movement
-                        && o.Stage == SetOrderStage.ExternalReplaced) n++;
-                }
-                return n;
-            }
-
-            /// <summary>t60：Stable 只按同一 Formation+同一 Movement 域+同一 session 计算（禁减全局 ExternalReplaced）。</summary>
-            public static long StableByIdentity(int identity)
-            {
-                long applied = AppliedByIdentity(identity);
-                long replaced = ReplacedByIdentity(identity);
-                return applied - (replaced > applied ? applied : replaced);
-            }
-
-            /// <summary>t54 兼容：全局 Stable（诊断汇总；t60 后生产判定用 StableByIdentity）。</summary>
-            public static long StableCount
-            {
-                get
-                {
-                    long replaced = SetOrderObserver.ExternalReplacedCount;
-                    return _orderAppliedCount - (replaced > _orderAppliedCount ? _orderAppliedCount : replaced);
-                }
-            }
-
-            /// <summary>t54：RouteA 段汇总（供 5s 日志/战斗结束判定；含 ExitRestore）。</summary>
-            public static string BuildSummary()
-            {
-                return "intent=" + _intentCount + ";selected=" + _selectedCount
-                    + ";orderApplied=" + _orderAppliedCount + ";stable=" + StableCount
-                    + ";exitRestore=" + _exitRestoreCount
-                    + ";externalReplaced=" + SetOrderObserver.ExternalReplacedCount
-                    + ";sameTick=" + SetOrderObserver.SameTickExternalReplace
-                    + ";crossTick=" + SetOrderObserver.CrossTickExternalReplace;
-            }
-
-            /// <summary>t60：新 Mission 清零（session 隔离；ResetAll 接入 Mission 生命周期）。</summary>
-            public static void Reset()
-            {
-                _intentCount = 0; _selectedCount = 0; _orderAppliedCount = 0; _exitRestoreCount = 0;
-                _appliedByIdentity.Clear();
-            }
-        }
-
-        // t54（D-RouteA）：无态势变化稳定性验证——意图变化计数 + 高频权重对刷（flap）检测（纯逻辑可离线测）。
-        // 节流窗口内同一编队意图来回切换 ≥2 次 = 权重对刷（flap）；迟滞/节流由窗口判定（非每拍对刷）。
-        public static class RouteAStability
-        {
-            private sealed class State
-            {
-                public Cps2RouteAIntent Last;
-                public float LastAt;
-                public int ChangeCount;
-                public int FlapCount;
-                public Cps2RouteAIntent PrevPrev = Cps2RouteAIntent.None;
-            }
-
-            private static readonly Dictionary<string, State> _states = new Dictionary<string, State>();
-            private static readonly List<string> _order = new List<string>();
-
-            /// <summary>意图变化 + flap 检测（key=编队标识；窗口内意图 A→B→A 回摆 = flap）。</summary>
-            public static void Record(string key, Cps2RouteAIntent intent, float now, float flapWindowSeconds)
-            {
-                State s;
-                if (!_states.TryGetValue(key, out s))
-                {
-                    s = new State { Last = intent, LastAt = now };
-                    _states[key] = s;
-                    _order.Add(key);
-                    return;
-                }
-                if (s.Last != intent)
-                {
-                    s.ChangeCount++;
-                    if (s.PrevPrev == intent && now - s.LastAt <= flapWindowSeconds)
-                    {
-                        s.FlapCount++; // 窗口内回摆到先前意图 = 权重对刷
-                    }
-                    s.PrevPrev = s.Last;
-                    s.Last = intent;
-                    s.LastAt = now;
-                }
-            }
-
-            public static int ChangeCount(string key)
-            {
-                State s;
-                return _states.TryGetValue(key, out s) ? s.ChangeCount : 0;
-            }
-
-            public static int FlapCount(string key)
-            {
-                State s;
-                return _states.TryGetValue(key, out s) ? s.FlapCount : 0;
-            }
-
-            /// <summary>汇总（全部编队；供日志/判定：无态势变化→change/flap 低）。</summary>
-            public static string BuildSummary()
-            {
-                int totalChange = 0, totalFlap = 0;
-                for (int i = 0; i < _order.Count; i++)
-                {
-                    State s;
-                    if (_states.TryGetValue(_order[i], out s)) { totalChange += s.ChangeCount; totalFlap += s.FlapCount; }
-                }
-                return "formations=" + _states.Count + ";intentChange=" + totalChange + ";weightFlap=" + totalFlap;
-            }
-
-            public static void Reset() { _states.Clear(); _order.Clear(); }
-        }
-    }
-
-    // ---- 路线 A 自定义 BehaviorComponent 子类（Movement 域；继承 TaleWorlds.MountAndBlade.BehaviorComponent，
-    //     构造 base(formation)（BehaviorComponent.cs:76），override protected abstract GetAiWeight（:154）
-    //     + protected virtual CalculateCurrentOrder（:172）设 CurrentOrder（protected set，:65）） ----
-    // t50：GetAiWeight 返回单值 w（硬门⑤消除 100 放大）；落地 SetMovementOrder 在 RouteA scope 内（硬门④归因）。
-    // v1.4.8：FindBestBehavior 会预计算尚未胜出的候选，CalculateCurrentOrder 必须无命令副作用。
-    // 普通行为胜出后 FormationAI 调 ActiveBehavior.TickOccasionally 并直接 return；
-    // 在公开回调内落地，scope 只覆盖实际 setter，不把候选预计算伪记为 Selected。
-
-    internal sealed class CbHoldBehavior : BehaviorComponent
-    {
-        public CbHoldBehavior(Formation formation) : base(formation) { }
-        // t52 repair（MEDIUM ⑤单维降权）：GetAiWeight 返 1f（基权重归一），SetBehaviorWeight 应用 CbBehaviorWeight=10
-        //   → 有效权重=1×10=10（消除 t20 GetAiWeight=10×SetBehaviorWeight=10=100 放大；FindBestBehavior 语义 GetAiWeight×WeightFactor）
-        protected override float GetAiWeight() { return CbRouteAPoC.BaseBehaviorWeight; }
-        protected override void CalculateCurrentOrder()
-        {
-            CurrentOrder = MovementOrder.MovementOrderStop;
-        }
-        public override void TickOccasionally()
-        {
-            // t60：唯一 setter 出口=RouteAOrderAdapter（四 Behavior 0 直接 setter，派单 §四）
-            CbRouteAPoC.RouteAOrderAdapter.TryApply(this);
-        }
-    }
-
-    internal sealed class CbAdvanceBehavior : BehaviorComponent
-    {
-        public CbAdvanceBehavior(Formation formation) : base(formation) { }
-        protected override float GetAiWeight() { return CbRouteAPoC.BaseBehaviorWeight; }
-        protected override void CalculateCurrentOrder()
-        {
-            CurrentOrder = MovementOrder.MovementOrderAdvance;
-        }
-        public override void TickOccasionally()
-        {
-            CbRouteAPoC.RouteAOrderAdapter.TryApply(this);
-        }
-    }
-
-    internal sealed class CbRejoinBehavior : BehaviorComponent
-    {
-        private float _targetX, _targetY;
-        public CbRejoinBehavior(Formation formation) : base(formation) { }
-        public void SetTarget(float x, float y) { _targetX = x; _targetY = y; }
-        protected override float GetAiWeight() { return CbRouteAPoC.BaseBehaviorWeight; }
-        protected override void CalculateCurrentOrder()
-        {
-            WorldPosition wp = Formation.CachedMedianPosition;
-            wp.SetVec2(new Vec2(_targetX, _targetY));
-            CurrentOrder = MovementOrder.MovementOrderMove(wp); // Rejoin：向 MainBody 移动（§5.2）
-        }
-        public override void TickOccasionally()
-        {
-            CbRouteAPoC.RouteAOrderAdapter.TryApply(this);
-        }
-    }
-
-    internal sealed class CbRetreatBehavior : BehaviorComponent
-    {
-        public CbRetreatBehavior(Formation formation) : base(formation) { }
-        protected override float GetAiWeight() { return CbRouteAPoC.BaseBehaviorWeight; }
-        protected override void CalculateCurrentOrder()
-        {
-            CurrentOrder = MovementOrder.MovementOrderRetreat;
-        }
-        public override void TickOccasionally()
-        {
-            CbRouteAPoC.RouteAOrderAdapter.TryApply(this);
-        }
-    }
 }

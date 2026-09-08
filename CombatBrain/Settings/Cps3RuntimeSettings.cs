@@ -25,7 +25,16 @@ namespace CombatBrain.Settings
         public static bool Enabled = false;
 
         // 验证模式（Enabled=true 时生效；默认 A=全关对照——未启用时字段值不影响生产）
-        public static Cps3Mode Mode = Cps3Mode.A_NativeBaseline;
+        private static Cps3Mode _mode = Cps3Mode.A_NativeBaseline;
+        public static Cps3Mode Mode
+        {
+            get { return _mode; }
+            set
+            {
+                if (value != _mode && value == Cps3Mode.E_RouteA) Cps2PoCSettings.RouteAEnabled = true;
+                _mode = value;
+            }
+        }
 
         // SetOrderObserver.Enable 门控（t3 遗留启动接线；默认关=近零开销，开启后三域 ExternalUnknown 可观测）
         public static bool ObserverEnabled = false;
@@ -108,6 +117,11 @@ namespace CombatBrain.Settings
         public static bool RouteAActive(Cps3Mode mode)
         {
             return mode == Cps3Mode.E_RouteA;
+        }
+
+        public static bool RouteAExecutionEnabled()
+        {
+            return Enabled && Mode == Cps3Mode.E_RouteA && Cps2PoCSettings.RouteAEnabled;
         }
 
         // t32 repair（cps3-mcm-switches 下拉切换失效）：MCMv5 对 Dropdown 引用类型可能直接改实例 SelectedIndex

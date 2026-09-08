@@ -130,6 +130,15 @@ namespace CombatBrain.Mcm
             set => CombatBrain.Settings.Cps3RuntimeSettings.ObserverEnabled = value;
         }
 
+        [SettingPropertyBool("Route A 移动控制", RequireRestart = false,
+            HintText = "进入 E 模式时自动开启；战中关闭立即释放 Route A，离开 E 模式同样释放。")]
+        [SettingPropertyGroup("CPS 验证")]
+        public bool RouteAMovementEnabled
+        {
+            get => CombatBrain.Settings.Cps2PoCSettings.RouteAEnabled;
+            set => CombatBrain.Settings.Cps2PoCSettings.RouteAEnabled = value;
+        }
+
         [SettingPropertyBool("Shadow 决策日志", RequireRestart = false,
             HintText = "B 模式下输出 WouldApply 决策日志（供决策 vs 落地对比）")]
         [SettingPropertyGroup("CPS 验证")]
