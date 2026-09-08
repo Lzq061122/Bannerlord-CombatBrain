@@ -207,11 +207,11 @@ namespace CombatBrain.Coordination
                 case Cps2RouteAIntent.Hold:
                     return new[] { Cps2RouteAIntent.Advance, Cps2RouteAIntent.Rejoin, Cps2RouteAIntent.Retreat };
                 case Cps2RouteAIntent.Advance:
-                    return new[] { Cps2RouteAIntent.Hold, Cps2RouteAIntent.Retreat };
+                    return new[] { Cps2RouteAIntent.Hold, Cps2RouteAIntent.Rejoin, Cps2RouteAIntent.Retreat };
                 case Cps2RouteAIntent.Rejoin:
-                    return new[] { Cps2RouteAIntent.Advance, Cps2RouteAIntent.Retreat };
+                    return new[] { Cps2RouteAIntent.Hold, Cps2RouteAIntent.Advance, Cps2RouteAIntent.Retreat };
                 case Cps2RouteAIntent.Retreat:
-                    return new[] { Cps2RouteAIntent.Advance, Cps2RouteAIntent.Hold };
+                    return new[] { Cps2RouteAIntent.Advance, Cps2RouteAIntent.Hold, Cps2RouteAIntent.Rejoin };
                 default:
                     return new Cps2RouteAIntent[0];
             }

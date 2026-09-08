@@ -263,6 +263,9 @@ namespace OfflineTests
             Console.WriteLine("== NarrativeFactionFix ==");
             TestNarrativeFactionFix();
 
+            Console.WriteLine("== RouteAFinalBlocker ==");
+            TestCps3rRouteAFinalBlocker();
+
             Console.WriteLine("== ATC1 BattlePhaseFSM ==");
             TestBattlePhaseFSM();
 
@@ -3920,6 +3923,13 @@ namespace OfflineTests
                 && System.Array.IndexOf(conflict, Cps2RouteAIntent.Rejoin) >= 0
                 && System.Array.IndexOf(conflict, Cps2RouteAIntent.Retreat) >= 0,
                 "cps3r-routeA⑤ minimal conflict set (降权而非清空)");
+            // 方向性回归：曾经缺失的降权边会使旧行为保留权重，并被引擎保留倍率继续选中。
+            Check(System.Array.IndexOf(Cps2RouteAPolicy.ConflictingOwn(Cps2RouteAIntent.Advance), Cps2RouteAIntent.Rejoin) >= 0,
+                "routeA Rejoin -> Advance disables old Rejoin");
+            Check(System.Array.IndexOf(Cps2RouteAPolicy.ConflictingOwn(Cps2RouteAIntent.Rejoin), Cps2RouteAIntent.Hold) >= 0,
+                "routeA Hold -> Rejoin disables old Hold");
+            Check(System.Array.IndexOf(Cps2RouteAPolicy.ConflictingOwn(Cps2RouteAIntent.Retreat), Cps2RouteAIntent.Rejoin) >= 0,
+                "routeA Rejoin -> Retreat disables old Rejoin");
             Check(CombatBrain.Settings.Cps2PoCSettings.CbBehaviorWeight == 10f,
                 "cps3r-routeA⑤ single-dim weight (无 100 放大)");
 
@@ -3939,7 +3949,7 @@ namespace OfflineTests
             SetOrderObserver.NotifyTick(1f);
             using (CommandSourceScope.Enter(CommandSource.CombatBrainRouteA))
             {
-                // 模拟 RouteA scope 内的 SetMovementOrder 落地（Behavior.CalculateCurrentOrder 同款路径）；
+                // 仅测试 scope 归因；不执行游戏 setter，不证明引擎选中/落地行为。
                 // MovementOrder 参数由实际 Behavior 产出——此处只验证 scope 归因：观测记录的 Source=CombatBrainRouteA
                 //   而非 ExternalUnknown（t52：除去引擎间接路径后 Behavior 内 setter 归因成立）
                 SetOrderObserver.Observe(5, 1, 42, CommandDomain.Movement, CommandKind.Move, 7, 0); // scope 内
@@ -4106,6 +4116,83 @@ namespace OfflineTests
                 "narr-fix faction culture map intact (映射表未破坏)");
             Check(CombatBrain.Ai.FeedbackText.FactionCultureName("empire") == "帝国",
                 "narr-fix faction culture empire mapped");
+        }
+
+        // t60（cps3r-routea-final-blocker）：Route A 四大 P0 修复的纯逻辑断言——
+        // 唯一写入（防双写判定）/生命周期（恢复幂等判定）/Rejoin（敌我/阶段/导航）/证据链（session/identity 隔离+ExitRestore）
+        private static void TestCps3rRouteAFinalBlocker()
+        {
+            // ① 唯一写入：RouteA 拥有 Movement 域判定（执行器防双写入口）
+            Check(!CbRouteAPoC.IsMovementOwnedByRouteA(int.MinValue),
+                "routeA-blk① fresh identity not owned (零接管)");
+
+            // ② 生命周期：恢复判定（派单 §五 事件 1-4）
+            Check(Cps2RouteAPolicy.ShouldRestoreRouteA(false, true, true),
+                "routeA-blk② hot-close restore (事件1)");
+            Check(Cps2RouteAPolicy.ShouldRestoreRouteA(true, false, true),
+                "routeA-blk② player takeover restore (事件2)");
+            Check(Cps2RouteAPolicy.ShouldRestoreRouteA(true, true, false),
+                "routeA-blk② invalid formation restore (事件3/4)");
+
+            // ③ Rejoin：真实阶段参与意图映射（禁固定 Deployment——派单 §六.2）
+            Check(Cps2RouteAPolicy.MapFormationToIntent(false, (int)FormationMission.Intercept, BattlePhase.Engage)
+                == Cps2RouteAIntent.Advance,
+                "routeA-blk③ engage phase intercept -> Advance (真实阶段)");
+            Check(Cps2RouteAPolicy.MapFormationToIntent(false, (int)FormationMission.SupportMainEffort, BattlePhase.Engage)
+                == Cps2RouteAIntent.Advance,
+                "routeA-blk③ engage phase support -> Advance (非固定 Deployment)");
+            // Rejoin 导航失败路径（派单 §六.5）：无效 MainBody/贴敌 → 不应用
+            Check(!Cps2RouteAPolicy.IsRejoinRouteValid(0f, 0f, 10f, 10f, null, 12f),
+                "routeA-blk③ rejoin nav fail on zero mainbody (本拍不执行)");
+            var enemy = new[] { new FormationCoordSnapshot { FormationId = 0, X = 20f, Y = 20f, Count = 50, IsKnown = true } };
+            Check(!Cps2RouteAPolicy.IsRejoinRouteValid(100f, 100f, 24f, 24f, enemy, 12f),
+                "routeA-blk③ rejoin nav fail in-contact (撤销不保留)");
+
+            // ④ 证据链（派单 §七）：session 清零（Reset）→ per-identity Applied/Replaced 隔离 + ExitRestore
+            CbRouteAPoC.RouteAEventLogger.Reset();
+            SetOrderObserver.Enabled = true;
+            SetOrderObserver.Clear();
+            CbRouteAPoC.RouteAEventLogger.RecordExitRestore(1, 5);
+            Check(CbRouteAPoC.RouteAEventLogger.ExitRestoreCount == 1,
+                "routeA-blk④ exit/restore recorded (RouteA 退出先记录)");
+            CbRouteAPoC.RouteAEventLogger.RecordAppliedByIdentity(777);
+            CbRouteAPoC.RouteAEventLogger.RecordAppliedByIdentity(777);
+            Check(CbRouteAPoC.RouteAEventLogger.AppliedByIdentity(777) == 2
+                && CbRouteAPoC.RouteAEventLogger.AppliedByIdentity(888) == 0,
+                "routeA-blk④ applied isolated by identity (禁全局)");
+            // Applied 后同 identity Movement 域 ExternalReplaced → Stable 扣减（同 identity 计算）
+            SetOrderObserver.NotifyTick(10f);
+            using (CommandSourceScope.Enter(CommandSource.CombatBrainRouteA))
+            {
+                SetOrderObserver.Observe(1, 5, 777, CommandDomain.Movement, CommandKind.Move, 7,
+                    (int)SetOrderStage.Applied);
+            }
+            SetOrderObserver.NotifyTick(10.3f);
+            SetOrderObserver.Observe(1, 5, 777, CommandDomain.Movement, CommandKind.Move, 9, 0);
+            Check(SetOrderObserver.ExternalReplacedCount == 1
+                && CbRouteAPoC.RouteAEventLogger.ReplacedByIdentity(777) == 1
+                && CbRouteAPoC.RouteAEventLogger.StableByIdentity(777) == 1,
+                "routeA-blk④ stable by identity = applied - replaced (同 identity 同域)");
+            // 新 Mission 清零（Reset 清 per-identity）
+            CbRouteAPoC.RouteAEventLogger.Reset();
+            Check(CbRouteAPoC.RouteAEventLogger.AppliedByIdentity(777) == 0
+                && CbRouteAPoC.RouteAEventLogger.ExitRestoreCount == 0,
+                "routeA-blk④ new mission resets session (旧场数据不得复用)");
+            SetOrderObserver.Enabled = false;
+            SetOrderObserver.Clear();
+
+            // ⑤ Astra 三条冲突互斥保留（派单 §六.6：保留并补回归——Astra 已补，此处复核）
+            Check(System.Array.IndexOf(Cps2RouteAPolicy.ConflictingOwn(Cps2RouteAIntent.Advance), Cps2RouteAIntent.Rejoin) >= 0,
+                "routeA-blk⑤ advance disables rejoin (Astra 补边保留)");
+            Check(System.Array.IndexOf(Cps2RouteAPolicy.ConflictingOwn(Cps2RouteAIntent.Rejoin), Cps2RouteAIntent.Hold) >= 0,
+                "routeA-blk⑤ rejoin disables hold (Astra 补边保留)");
+
+            // ⑥ 四意图映射（派单 §九.7）
+            Check(Cps2RouteAPolicy.ToCommandKind(Cps2RouteAIntent.Hold) == CommandKind.Hold
+                && Cps2RouteAPolicy.ToCommandKind(Cps2RouteAIntent.Advance) == CommandKind.Advance
+                && Cps2RouteAPolicy.ToCommandKind(Cps2RouteAIntent.Rejoin) == CommandKind.Move
+                && Cps2RouteAPolicy.ToCommandKind(Cps2RouteAIntent.Retreat) == CommandKind.Retreat,
+                "routeA-blk⑥ four intents map (Hold/Advance/Rejoin/Retreat)");
         }
 
         // ATC-1 战局阶段机（BattlePhaseFSM 纯逻辑）：五态全边界/最短驻留/同态不重播/Retreat 终态/早期伤亡不误进 Exploit

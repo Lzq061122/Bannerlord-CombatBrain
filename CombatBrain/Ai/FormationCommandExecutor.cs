@@ -337,8 +337,16 @@ namespace CombatBrain.Ai
         }
 
         // 唯一 SetOrder 出口（§3.1；执行器是批准的写入点）
+        // t60（派单 §三）：RouteA 拥有目标 Formation Movement 域时，普通执行器不得写同 Formation Movement
+        //   （防 CB 双写）；Facing/Arrangement 仍按仲裁执行。
         private static void ApplySetOrder(Mission mission, Formation f, FormationCommandProposal winner)
         {
+            if (winner.Domain == CommandDomain.Movement
+                && CbRouteAPoC.IsMovementOwnedByRouteA(
+                    System.Runtime.CompilerServices.RuntimeHelpers.GetHashCode(f)))
+            {
+                return; // RouteA 已接管该编队 Movement 域——执行器跳过防双写
+            }
             switch (winner.Domain)
             {
                 case CommandDomain.Movement:
@@ -464,6 +472,52 @@ namespace CombatBrain.Ai
             return getAiWeight * setBehaviorWeight;
         }
 
+                // t60（派单 §四）：RouteAOrderAdapter——四 CB Behavior 唯一 Movement setter 出口（CPS §14.1 条件 4 批准适配器）。
+        // 最终静态目标：执行器 3 setter + 本 Adapter 1 setter + 四 Behavior 0 直接 setter。
+        // 落地前复核（复用 Astra CanExecuteSelected）：模式/RouteA 开关/普通野战/Formation identity/ActiveBehavior 确为
+        //   当前 CB Behavior/非玩家队四条件/有效且 AI 控制/命令目标有效/RouteA 拥有 Movement 域（_armed 含 identity）。
+        // 复核失败→恢复该编队 RouteA 权重并清除注册（派单 §五：Adapter 资格复核失败→恢复）。
+        public static class RouteAOrderAdapter
+        {
+            /// <summary>唯一真实 Movement setter 出口（RouteA scope 包住）；成功 true。</summary>
+            public static bool TryApply(BehaviorComponent behavior)
+            {
+                Formation f = behavior != null ? behavior.Formation : null;
+                if (f == null) return false;
+                int id = System.Runtime.CompilerServices.RuntimeHelpers.GetHashCode(f);
+                if (!CanExecuteSelected(behavior))
+                {
+                    // 派单 §五/§六：资格复核失败（玩家接管/离开 E/失效/导航失败等）→ 恢复权重+清注册
+                    RestoreIfArmed(f, id);
+                    return false;
+                }
+                RouteAEventLogger.RecordBehaviorSelected(); // BehaviorSelected：真实胜出 TickOccasionally 路径
+                using (CommandSourceScope.Enter(CommandSource.CombatBrainRouteA))
+                {
+                    f.SetMovementOrder(behavior.CurrentOrder); // 唯一真实 setter
+                    RouteAEventLogger.RecordOrderApplied();
+                    RouteAEventLogger.RecordAppliedByIdentity(id); // t60：按 identity 隔离
+                }
+                return true;
+            }
+        }
+
+        /// <summary>t60：若编队仍被接管则恢复（权重 0+清注册+记录 Exit/Restore；幂等——Restore 内部记录）。</summary>
+        public static void RestoreIfArmed(Formation f, int id)
+        {
+            if (f == null) return;
+            if (_armed.Contains(id))
+            {
+                Restore(f, id);
+            }
+        }
+
+        /// <summary>t60：RouteA 是否拥有该编队 Movement 域（执行器防双写判定，纯逻辑）。</summary>
+        public static bool IsMovementOwnedByRouteA(int formationId)
+        {
+            return _armed.Contains(formationId);
+        }
+
         // t50 硬门②：已接管编队登记（key=identity → Formation 引用；恢复时幂等还原）
         private static readonly HashSet<int> _armed = new HashSet<int>();
 
@@ -473,36 +527,64 @@ namespace CombatBrain.Ai
             return _armed.Count > 0;
         }
 
+        // 引擎回调与 MissionLogic 不保证相邻；在真正落地前重新保护开关和玩家所有权。
+        internal static bool CanExecuteSelected(BehaviorComponent behavior)
+        {
+            Formation f = behavior.Formation;
+            Mission mission = Mission.Current;
+            bool enabled = CombatBrain.Settings.Cps2PoCSettings.RouteAEnabled
+                || (CombatBrain.Settings.Cps3RuntimeSettings.Enabled
+                    && CombatBrain.Settings.Cps3RuntimeSettings.RouteAActive(
+                        CombatBrain.Settings.Cps3RuntimeSettings.Mode));
+            return enabled && mission != null
+                && Cps2RouteAPolicy.IsEligibleFieldBattle(mission.IsFieldBattle,
+                    mission.IsSiegeBattle, mission.IsSallyOutBattle)
+                && f != null && f.CountOfUnits > 0 && f.IsAIControlled
+                && f.Team != null && !f.Team.IsPlayerTeam
+                && f.PlayerOwner == null && !f.HasPlayerControlledTroop && !f.IsPlayerTroopInFormation
+                && f.AI != null && object.ReferenceEquals(f.AI.ActiveBehavior, behavior)
+                && behavior.WeightFactor > 0f
+                && _armed.Contains(System.Runtime.CompilerServices.RuntimeHelpers.GetHashCode(f));
+        }
+
         /// <summary>单编队幂等 Apply（t50 硬门①：单 Movement 域，不遍历 Teams×Formations）。
         /// <paramref name="routeEnabled"/> 预判 RouteAEnabled；<paramref name="eligibleField"/> 为
         ///   Cps2RouteAPolicy.IsEligibleFieldBattle(IsFieldBattle,IsSiege,IsSallyOut)；null→直接认定不合格。
         /// <paramref name="formationMission"/>=-1 / inRetreat 供 per-Formation 意图映射；Rejoin 需 mainBody 有效 +
-        ///   非贴身接敌（IsRejoinRouteValid 纯逻辑）；归因：落地 SetMovementOrder 在 CommandSourceScope.Enter(CombatBrainRouteA) 内。</summary>
-        public static void ApplySingle(Formation f, bool routeEnabled, bool eligibleField, bool isAIControlled,
-            bool formationValid, int formationMission, bool inRetreat,
+        ///   非贴身接敌（IsRejoinRouteValid 纯逻辑）；归因：落地 SetMovementOrder 在 CommandSourceScope.Enter(CombatBrainRouteA) 内。
+        /// t60：加 phase（真实战斗阶段，禁固定 Deployment）；返回是否成功应用（Rejoin 导航失败→false 不注册）。</summary>
+        public static bool ApplySingle(Formation f, bool routeEnabled, bool eligibleField, bool isAIControlled,
+            bool formationValid, int formationMission, bool inRetreat, BattlePhase phase,
             float mainBodyX, float mainBodyY,
             System.Collections.Generic.IList<FormationCoordSnapshot> enemySnaps)
         {
-            if (f == null) return;
+            if (f == null) return false;
             int id = System.Runtime.CompilerServices.RuntimeHelpers.GetHashCode(f);
             // 硬门②：不合格（开关关/非野战/玩家接管/编队失效）→ 恢复（热关闭=真恢复）
             if (!routeEnabled || !eligibleField || !isAIControlled || !formationValid)
             {
                 Restore(f, id);
-                return;
+                return false;
             }
-            // 硬门①③：仅单编队相互作用；per-Formation 意图映射（阶段按当前——胶水未传阶段，用 Deployment 保守）
+            // 硬门①③：仅单编队相互作用；per-Formation 意图映射（t60：真实战斗阶段）
             Cps2RouteAIntent intent = Cps2RouteAPolicy.MapFormationToIntent(
-                inRetreat, formationMission, BattlePhase.Deployment);
-            ApplySingleIntent(f, id, intent, mainBodyX, mainBodyY, enemySnaps);
+                inRetreat, formationMission, phase);
+            bool applied = ApplySingleIntent(f, id, intent, mainBodyX, mainBodyY, enemySnaps);
+            if (!applied)
+            {
+                // t60：意图应用失败（Rejoin 导航失败/None）→ 不注册接管；若此前已接管则恢复（派单 §五/§六）
+                Restore(f, id);
+                return false;
+            }
             _armed.Add(id);
+            return true;
         }
 
-        private static void ApplySingleIntent(Formation f, int id, Cps2RouteAIntent intent,
+        private static bool ApplySingleIntent(Formation f, int id, Cps2RouteAIntent intent,
             float mainBodyX, float mainBodyY,
             System.Collections.Generic.IList<FormationCoordSnapshot> enemySnaps)
         {
-            if (intent == Cps2RouteAIntent.None) return;
+            if (intent == Cps2RouteAIntent.None) return false;
             float w = CombatBrain.Settings.Cps2PoCSettings.CbBehaviorWeight; // t50 硬门⑤：单维权重
             switch (intent)
             {
@@ -521,7 +603,7 @@ namespace CombatBrain.Ai
                         median.x, median.y,
                         enemySnaps, CombatBrain.Settings.Cps2PoCSettings.RouteARejoinContactMeters))
                     {
-                        return;
+                        return false; // t60：导航失败→不应用（派单 §六.5：本拍不执行+撤销权重）
                     }
                     EnsureBehavior(f, id, typeof(CbRejoinBehavior), () => new CbRejoinBehavior(f));
                     f.AI.GetBehavior<CbRejoinBehavior>().SetTarget(mainBodyX, mainBodyY);
@@ -532,17 +614,18 @@ namespace CombatBrain.Ai
                     f.AI.SetBehaviorWeight<CbRetreatBehavior>(w);
                     break;
                 default:
-                    return;
+                    return false;
             }
-            // CB 域内互斥：冲突意图 behavior 权重 0（降权而非删除/清空，§6.1）
+            // CB 域内互斥：冲突意图 behavior 权重 0（降权而非删除/清空，§6.1；Astra 补三条边保留）
             Cps2RouteAIntent[] conflicts = Cps2RouteAPolicy.ConflictingOwn(intent);
             for (int i = 0; i < conflicts.Length; i++)
             {
                 SetOwnWeightZero(f, conflicts[i]);
             }
-            // t50 硬门④：归因事件链记录（Intent→BehaviorSelected→OrderApplied 的 part1/2；落地自带 RouteA scope）
+            // t50 硬门④：归因事件链记录（Intent；BehaviorSelected/OrderApplied 在 Adapter 落地路径）
             RouteAEventLogger.RecordIntentApplied(
                 f.Team != null ? f.Team.TeamIndex : 0, f.Index, intent);
+            return true;
         }
 
         private static void SetOwnWeightZero(Formation f, Cps2RouteAIntent intent)
@@ -590,9 +673,12 @@ namespace CombatBrain.Ai
         }
 
         // t50 硬门②：恢复原状（开关关/玩家接管/编队失效/Mission 结束）——移除 CB 加权（权重 0），清残留
+        // t60：先记录 Exit/Restore（派单 §七：RouteA 退出先记录，后续原版 setter 解释为正常恢复）再恢复；幂等
         private static void Restore(Formation f, int id)
         {
             if (!_armed.Contains(id)) return; // 未接管无操作（幂等）
+            RouteAEventLogger.RecordExitRestore(
+                f.Team != null ? f.Team.TeamIndex : 0, f.Index);
             // 还原原版状态唯一动作：CB 全部 behavior 权重 0（原版 FindBestBehavior 不再选中 CB——
             //   等效还原原行为竞争；不 ClearTacticOptions/不整套清空，§6.1/硬门⑤可恢复）
             if (f.AI != null)
@@ -622,28 +708,33 @@ namespace CombatBrain.Ai
             }
         }
 
-        /// <summary>Mission 结束/清场：全量恢复（幂等；由 CombatAiMissionLogic 调用）。</summary>
+        /// <summary>Mission 结束/清场：全量恢复（幂等；由 CombatAiMissionLogic 调用）。
+        ///   t60：接入真实 Mission 生命周期——session 清零（证据链 §七新 Mission 必须清零）。</summary>
         public static void ResetAll()
         {
             _armed.Clear();
             _cache.Clear();
+            RouteAEventLogger.Reset();
+            RouteAStability.Reset();
         }
 
-        // ---- 归因事件链（t50 硬门④/t54 D-RouteA）----
-        /// <summary>意图→Behavior 选中→OrderApplied 事件链记录（RouteA 专用观测；不靠命令内容相似推断）。
-        ///   t54 四段：Intent（ApplySingle 命中）→BehaviorSelected（FindBestBehavior 选中执行）→
-        ///   OrderApplied（落地 SetMovementOrder，RouteA scope 内）→ Stable（未被 ExternalReplaced 覆盖）。
-        ///   ExternalReplaced 复用 SetOrderObserver 覆盖判定（该编队 Movement 域）。</summary>
+        // ---- 归因事件链（t50 硬门④/t54 D-RouteA/t60 派单 §七证据链修正）----
+        /// <summary>意图→Behavior 选中→OrderApplied→ExternalReplaced/Exit-Restore 事件链（RouteA 专用观测）。
+        ///   t60：①计数按 Mission session（Reset 清零）+ Formation identity（AppliedFor/ReplacedFor 字典隔离）+
+        ///   CommandDomain（RouteA 仅 Movement 域）；②Stable 只由同一 Formation 同一 Movement 域 RouteA Applied
+        ///   与对应 ExternalReplaced 计算（禁减全局）；③ExternalReplaced 从 SetOrderObserver ring 按 identity+Movement+
+        ///   Stage==ExternalReplaced 过滤（保留 setter 严格序号 Seq 与时间）；④Exit/Restore 先记录再允许后续原版
+        ///   setter 解释为正常恢复——日志可直接判断「RouteA 活跃时被覆盖 vs RouteA 退出后原版恢复」。</summary>
         public static class RouteAEventLogger
         {
             private static long _intentCount;
             private static long _selectedCount;
             private static long _orderAppliedCount;
+            private static long _exitRestoreCount;
+            private static readonly Dictionary<int, long> _appliedByIdentity = new Dictionary<int, long>();
 
             public static void RecordIntentApplied(int teamId, int formationId, Cps2RouteAIntent intent)
             {
-                // t54 修复：签名去 Formation（TaleWorlds 类型）——离线测试 JIT 无需加载 TaleWorlds.MountAndBlade；
-                // 生产调用点传 f.Team.TeamIndex/f.Index 标量
                 _intentCount = (_intentCount + 1) % 1000000;
                 if (CombatBrain.Settings.Cps3RuntimeSettings.ShadowWouldApplyLogEnabled)
                 {
@@ -653,24 +744,74 @@ namespace CombatBrain.Ai
                 }
             }
 
-            // t54：Behavior 被 FindBestBehavior 选中执行（CalculateCurrentOrder 被调）→ BehaviorSelected
+            // FormationAI 最终选中的 ActiveBehavior.TickOccasionally 回调才记 Selected（Astra 修正）。
             public static void RecordBehaviorSelected()
             {
                 _selectedCount = (_selectedCount + 1) % 1000000;
             }
 
-            // t54：落地 SetMovementOrder（RouteA scope 内）→ OrderApplied
+            // 落地 SetMovementOrder（RouteA scope 内）→ OrderApplied（按 identity 隔离）
             public static void RecordOrderApplied()
             {
                 _orderAppliedCount = (_orderAppliedCount + 1) % 1000000;
+            }
+
+            /// <summary>t60：RouteA Applied 按 identity 计数（同一 session 内）。</summary>
+            public static void RecordAppliedByIdentity(int identity)
+            {
+                long v;
+                _appliedByIdentity.TryGetValue(identity, out v);
+                _appliedByIdentity[identity] = v + 1;
+            }
+
+            /// <summary>t60：Exit/Restore 事件（RouteA 退出先记录——后续原版 setter 解释为正常恢复）。</summary>
+            public static void RecordExitRestore(int teamId, int formationId)
+            {
+                _exitRestoreCount = (_exitRestoreCount + 1) % 1000000;
+                if (CombatBrain.Settings.Cps3RuntimeSettings.ShadowWouldApplyLogEnabled)
+                {
+                    CombatLog.Log(string.Format(
+                        "[RouteA] exit-restore team={0} f={1} seq={2}（RouteA 退出，后续原版 setter 为正常恢复）",
+                        teamId, formationId, _exitRestoreCount));
+                }
             }
 
             /// <summary>纯逻辑断言语义：意图选择计数（t50 离线测试）。</summary>
             public static long IntentCount { get { return _intentCount; } }
             public static long SelectedCount { get { return _selectedCount; } }
             public static long OrderAppliedCount { get { return _orderAppliedCount; } }
+            public static long ExitRestoreCount { get { return _exitRestoreCount; } }
 
-            /// <summary>t54：Stable 计数=OrderApplied 中未被 ExternalReplaced 覆盖的次数（四段终态）。</summary>
+            /// <summary>t60：该 identity 的 RouteA Applied 数（本 session）。</summary>
+            public static long AppliedByIdentity(int identity)
+            {
+                long v;
+                return _appliedByIdentity.TryGetValue(identity, out v) ? v : 0L;
+            }
+
+            /// <summary>t60：该 identity 的 Movement 域 ExternalReplaced 数（SetOrderObserver ring 按 identity+Movement 过滤；
+            ///   保留 setter 严格序号 Seq 与时间——ring 观测自带）。</summary>
+            public static long ReplacedByIdentity(int identity)
+            {
+                long n = 0;
+                for (int i = 0; i < SetOrderObserver.Count; i++)
+                {
+                    var o = SetOrderObserver.At(i);
+                    if (o.Identity == identity && o.Domain == CommandDomain.Movement
+                        && o.Stage == SetOrderStage.ExternalReplaced) n++;
+                }
+                return n;
+            }
+
+            /// <summary>t60：Stable 只按同一 Formation+同一 Movement 域+同一 session 计算（禁减全局 ExternalReplaced）。</summary>
+            public static long StableByIdentity(int identity)
+            {
+                long applied = AppliedByIdentity(identity);
+                long replaced = ReplacedByIdentity(identity);
+                return applied - (replaced > applied ? applied : replaced);
+            }
+
+            /// <summary>t54 兼容：全局 Stable（诊断汇总；t60 后生产判定用 StableByIdentity）。</summary>
             public static long StableCount
             {
                 get
@@ -680,17 +821,23 @@ namespace CombatBrain.Ai
                 }
             }
 
-            /// <summary>t54：RouteA 段汇总（供 5s 日志/战斗结束判定）。</summary>
+            /// <summary>t54：RouteA 段汇总（供 5s 日志/战斗结束判定；含 ExitRestore）。</summary>
             public static string BuildSummary()
             {
                 return "intent=" + _intentCount + ";selected=" + _selectedCount
                     + ";orderApplied=" + _orderAppliedCount + ";stable=" + StableCount
+                    + ";exitRestore=" + _exitRestoreCount
                     + ";externalReplaced=" + SetOrderObserver.ExternalReplacedCount
                     + ";sameTick=" + SetOrderObserver.SameTickExternalReplace
                     + ";crossTick=" + SetOrderObserver.CrossTickExternalReplace;
             }
 
-            public static void Reset() { _intentCount = 0; _selectedCount = 0; _orderAppliedCount = 0; }
+            /// <summary>t60：新 Mission 清零（session 隔离；ResetAll 接入 Mission 生命周期）。</summary>
+            public static void Reset()
+            {
+                _intentCount = 0; _selectedCount = 0; _orderAppliedCount = 0; _exitRestoreCount = 0;
+                _appliedByIdentity.Clear();
+            }
         }
 
         // t54（D-RouteA）：无态势变化稳定性验证——意图变化计数 + 高频权重对刷（flap）检测（纯逻辑可离线测）。
@@ -765,9 +912,9 @@ namespace CombatBrain.Ai
     //     构造 base(formation)（BehaviorComponent.cs:76），override protected abstract GetAiWeight（:154）
     //     + protected virtual CalculateCurrentOrder（:172）设 CurrentOrder（protected set，:65）） ----
     // t50：GetAiWeight 返回单值 w（硬门⑤消除 100 放大）；落地 SetMovementOrder 在 RouteA scope 内（硬门④归因）。
-    // t52 repair：scope 不再只包 CurrentOrder——Behavior 是引擎驱动，引擎在 Behavior 返回后才有真正 SetMovementOrder
-    //   （Formation.FormationAI.Tick），不在 Behavior scope 内 → 归因仍是 ExternalUnknown。改为在 CalculateCurrentOrder
-    //   内直接 Formation.SetMovementOrder 并包 scope（Behavior 即真实 setter 来源，消除间接路径归因盲区）。
+    // v1.4.8：FindBestBehavior 会预计算尚未胜出的候选，CalculateCurrentOrder 必须无命令副作用。
+    // 普通行为胜出后 FormationAI 调 ActiveBehavior.TickOccasionally 并直接 return；
+    // 在公开回调内落地，scope 只覆盖实际 setter，不把候选预计算伪记为 Selected。
 
     internal sealed class CbHoldBehavior : BehaviorComponent
     {
@@ -777,13 +924,12 @@ namespace CombatBrain.Ai
         protected override float GetAiWeight() { return CbRouteAPoC.BaseBehaviorWeight; }
         protected override void CalculateCurrentOrder()
         {
-            CbRouteAPoC.RouteAEventLogger.RecordBehaviorSelected(); // t54：BehaviorSelected
             CurrentOrder = MovementOrder.MovementOrderStop;
-            using (CommandSourceScope.Enter(CommandSource.CombatBrainRouteA))
-            {
-                Formation.SetMovementOrder(CurrentOrder);
-                CbRouteAPoC.RouteAEventLogger.RecordOrderApplied(); // t54：OrderApplied（落地）
-            }
+        }
+        public override void TickOccasionally()
+        {
+            // t60：唯一 setter 出口=RouteAOrderAdapter（四 Behavior 0 直接 setter，派单 §四）
+            CbRouteAPoC.RouteAOrderAdapter.TryApply(this);
         }
     }
 
@@ -793,13 +939,11 @@ namespace CombatBrain.Ai
         protected override float GetAiWeight() { return CbRouteAPoC.BaseBehaviorWeight; }
         protected override void CalculateCurrentOrder()
         {
-            CbRouteAPoC.RouteAEventLogger.RecordBehaviorSelected();
             CurrentOrder = MovementOrder.MovementOrderAdvance;
-            using (CommandSourceScope.Enter(CommandSource.CombatBrainRouteA))
-            {
-                Formation.SetMovementOrder(CurrentOrder);
-                CbRouteAPoC.RouteAEventLogger.RecordOrderApplied();
-            }
+        }
+        public override void TickOccasionally()
+        {
+            CbRouteAPoC.RouteAOrderAdapter.TryApply(this);
         }
     }
 
@@ -811,15 +955,13 @@ namespace CombatBrain.Ai
         protected override float GetAiWeight() { return CbRouteAPoC.BaseBehaviorWeight; }
         protected override void CalculateCurrentOrder()
         {
-            CbRouteAPoC.RouteAEventLogger.RecordBehaviorSelected();
             WorldPosition wp = Formation.CachedMedianPosition;
             wp.SetVec2(new Vec2(_targetX, _targetY));
             CurrentOrder = MovementOrder.MovementOrderMove(wp); // Rejoin：向 MainBody 移动（§5.2）
-            using (CommandSourceScope.Enter(CommandSource.CombatBrainRouteA))
-            {
-                Formation.SetMovementOrder(CurrentOrder);
-                CbRouteAPoC.RouteAEventLogger.RecordOrderApplied();
-            }
+        }
+        public override void TickOccasionally()
+        {
+            CbRouteAPoC.RouteAOrderAdapter.TryApply(this);
         }
     }
 
@@ -829,13 +971,11 @@ namespace CombatBrain.Ai
         protected override float GetAiWeight() { return CbRouteAPoC.BaseBehaviorWeight; }
         protected override void CalculateCurrentOrder()
         {
-            CbRouteAPoC.RouteAEventLogger.RecordBehaviorSelected();
             CurrentOrder = MovementOrder.MovementOrderRetreat;
-            using (CommandSourceScope.Enter(CommandSource.CombatBrainRouteA))
-            {
-                Formation.SetMovementOrder(CurrentOrder);
-                CbRouteAPoC.RouteAEventLogger.RecordOrderApplied();
-            }
+        }
+        public override void TickOccasionally()
+        {
+            CbRouteAPoC.RouteAOrderAdapter.TryApply(this);
         }
     }
 }
