@@ -260,6 +260,9 @@ namespace OfflineTests
             Console.WriteLine("== CPS3r McmDropdownE ==");
             TestCps3rMcmDropdownE();
 
+            Console.WriteLine("== NarrativeFactionFix ==");
+            TestNarrativeFactionFix();
+
             Console.WriteLine("== ATC1 BattlePhaseFSM ==");
             TestBattlePhaseFSM();
 
@@ -4071,6 +4074,38 @@ namespace OfflineTests
             CombatBrain.Settings.Cps3RuntimeSettings.Mode = CombatBrain.Settings.Cps3Mode.A_NativeBaseline; // 复位安全态
             Check(CombatBrain.Settings.Cps3RuntimeSettings.Mode == CombatBrain.Settings.Cps3Mode.A_NativeBaseline,
                 "cps3r-mcm-e reset restores A");
+        }
+
+        // t58 repair（叙事阵营名）：CultureId 去 GeneralAgent 兜底——士兵文化多数决失败直接 null（宁缺毋假，
+        //   消除自定义战斗 GeneralAgent 文化不可靠导致的「选帝国显示瓦兰迪亚」）；Faction(null)→我军/敌军
+        private static void TestNarrativeFactionFix()
+        {
+            // A) 士兵多数决：有票→最多票文化（先到平票保持）
+            Check(CombatBrain.Ai.FeedbackText.MajorityCulture(new[] { "empire", "empire", "vlandia" }) == "empire",
+                "narr-fix majority culture empire (3 票胜出)");
+            Check(CombatBrain.Ai.FeedbackText.MajorityCulture(new[] { "vlandia", "empire", "empire", "vlandia", "vlandia" }) == "vlandia",
+                "narr-fix majority culture vlandia (真实多数)");
+            Check(CombatBrain.Ai.FeedbackText.MajorityCulture(new[] { "empire", "vlandia" }) == "empire",
+                "narr-fix tie keeps first (平票先到)");
+
+            // B) 无票/多数决失败 → null（不再兜底 GeneralAgent——宁缺毋假，防瓦兰迪亚误显示）
+            Check(CombatBrain.Ai.FeedbackText.MajorityCulture(null) == null,
+                "narr-fix null input -> null (不兜底)");
+            Check(CombatBrain.Ai.FeedbackText.MajorityCulture(new string[0]) == null,
+                "narr-fix no soldiers -> null (无兵不兜底 GeneralAgent)");
+            Check(CombatBrain.Ai.FeedbackText.MajorityCulture(new[] { "", "  ", null }) == null,
+                "narr-fix blank cultures -> null (跳过无效票)");
+
+            // C) Faction 语义（null → 我军/敌军兜底——t58 核心：不再出现错误阵营名）。
+            //    注意：Faction(Team) 签名含 TaleWorlds 类型，离线调用触发加载（同 t54/t56 教训）——
+            //    此处断言其组成：FactionCultureName(null)=null（未映射）→ Faction 落我军/敌军兜底（:92-93 代码审查）
+            Check(CombatBrain.Ai.FeedbackText.FactionCultureName(null) == null,
+                "narr-fix faction unknown culture null passthrough (Faction 落我军/敌军兜底)");
+            // 映射文化正常返回（Faction 映射表不变）
+            Check(CombatBrain.Ai.FeedbackText.FactionCultureName("vlandia") == "瓦兰迪亚",
+                "narr-fix faction culture map intact (映射表未破坏)");
+            Check(CombatBrain.Ai.FeedbackText.FactionCultureName("empire") == "帝国",
+                "narr-fix faction culture empire mapped");
         }
 
         // ATC-1 战局阶段机（BattlePhaseFSM 纯逻辑）：五态全边界/最短驻留/同态不重播/Retreat 终态/早期伤亡不误进 Exploit

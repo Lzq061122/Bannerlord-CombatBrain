@@ -79,7 +79,16 @@ namespace CombatBrain.Ai
         public static string Faction(Team team)
         {
             string sid = CultureId(team);
-            switch (sid)
+            string name = FactionCultureName(sid);
+            if (name != null) return name;
+            if (sid != null) return sid;
+            return team != null && team.IsPlayerTeam ? "我军" : "敌军";
+        }
+
+        // t58：文化 StringId → 中文阵营名（纯逻辑可离线测；Faction 复用；未映射→null）
+        public static string FactionCultureName(string cultureStringId)
+        {
+            switch (cultureStringId)
             {
                 case "empire": return "帝国";
                 case "aserai": return "阿塞莱";
@@ -88,9 +97,8 @@ namespace CombatBrain.Ai
                 case "sturgia": return "斯特吉亚";
                 case "vlandia": return "瓦兰迪亚";
                 case "looter": return "掠夺者";
+                default: return null;
             }
-            if (sid != null) return sid;
-            return team != null && team.IsPlayerTeam ? "我军" : "敌军";
         }
 
         // N2 L0 战场事件文案模板（§3 文案表；{S}/{O} 占位由 Narrator 代填；单句 ≤16 字，
@@ -156,7 +164,10 @@ namespace CombatBrain.Ai
             }
         }
         // 与士兵不同阵营（实测选帝国显示瓦兰迪亚、日志读空 阵营=-）。改为遍历各编队士兵统计
-        // 文化票数取多数；无兵 → GeneralAgent 兜底 → null（调用方自行再兜底）。
+        // 文化票数取多数；无兵/多数决失败 → null（调用方自行再兜底）。
+        // t58 repair：去掉 GeneralAgent 兜底（原 :192-196）——自定义战斗 GeneralAgent 文化不可靠
+        //   （实测选帝国显示瓦兰迪亚，CombatAiMissionLogic.cs:1327-1329 注释已记录）；宁缺毋假——
+        //   多数决失败直接返回 null → Faction 落「我军/敌军」兜底（:92-93），不再误显示瓦兰迪亚。
         // 反作弊闸：文化=公开只读属性；调用均为事件驱动低频（FSM 跃迁/意图切换），O(兵数) 可接受。
         // API 核实（v1.4.8 反编译源 Formation.cs L1166）：GetUnitsWithoutDetachedOnes() 枚举全部士兵。
         public static string CultureId(Team team)
@@ -188,15 +199,34 @@ namespace CombatBrain.Ai
                 }
             }
             catch { }
-            if (best != null) return best;
-            try
+            // t58：去 GeneralAgent 兜底——多数决失败直接 null（宁缺毋假，防瓦兰迪亚误显示）
+            return best;
+        }
+
+        // t58：文化多数决纯逻辑（可离线测；FeedbackText.CultureId 逐兵票选同一语义）——
+        //   有票→最多票文化；平票取先到；无票→null（不兜底 GeneralAgent）
+        public static string MajorityCulture(System.Collections.Generic.IList<string> cultureStringIds)
+        {
+            if (cultureStringIds == null || cultureStringIds.Count == 0) return null;
+            string best = null;
+            int bestVotes = 0;
+            Dictionary<string, int> votes = new Dictionary<string, int>();
+            for (int i = 0; i < cultureStringIds.Count; i++)
             {
-                Agent general = team.GeneralAgent; // 兜底：无活兵时才用将军文化
-                if (general != null && general.Character != null && general.Character.Culture != null)
-                    return general.Character.Culture.StringId;
+                string sid = cultureStringIds[i];
+                if (string.IsNullOrEmpty(sid)) continue;
+                if (string.IsNullOrWhiteSpace(sid)) continue; // t58：空白文化票无效（防 best="  " 误判非 null）
+                int v;
+                votes.TryGetValue(sid, out v);
+                v++;
+                votes[sid] = v;
+                if (v > bestVotes)
+                {
+                    bestVotes = v;
+                    best = sid;
+                }
             }
-            catch { }
-            return null;
+            return best;
         }
     }
 }

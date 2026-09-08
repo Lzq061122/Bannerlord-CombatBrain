@@ -77,6 +77,9 @@
     <Compile Include="..\CombatBrain\Coordination\FormationCommandArbiter.cs" Link="Coordination\FormationCommandArbiter.cs" />
     <!-- CPS-1 执行器（决策核心纯逻辑可离线测；胶水部分编译需 TaleWorlds 引用，运行时惰性不触碰） -->
     <Compile Include="..\CombatBrain\Ai\FormationCommandExecutor.cs" Link="Ai\FormationCommandExecutor.cs" />
+    <!-- t58 叙事阵营名（MajorityCulture/FactionCultureName 纯字符串可离线测；Faction/CultureId 的 TaleWorlds 签名运行时惰性不触碰） -->
+    <Compile Include="..\CombatBrain\Ai\FeedbackText.cs" Link="Ai\FeedbackText.cs" />
+    <!-- t58 依赖：CavalryState/RetreatState 枚举由 SDK 默认 Compile 已包含（CavalryWaveFSM.cs/PhasedRetreat.cs） -->
     <!-- CPS-2：路线 A/B PoC 配置（纯 static，可离线测） -->
     <Compile Include="..\CombatBrain\Settings\Cps2PoCSettings.cs" Link="Settings\Cps2PoCSettings.cs" />
     <!-- CPS-3：运行期 A/B 模式配置（纯 static 可离线测） -->
@@ -102,6 +105,11 @@
     </Reference>
     <Reference Include="TaleWorlds.Core">
       <HintPath>E:\SteamLibrary\steamapps\common\Mount &amp; Blade II Bannerlord\bin\Win64_Shipping_Client\TaleWorlds.Core.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <!-- t58：FeedbackText.CultureId 引用 BasicCultureObject（TaleWorlds.ObjectSystem） -->
+    <Reference Include="TaleWorlds.ObjectSystem">
+      <HintPath>E:\SteamLibrary\steamapps\common\Mount &amp; Blade II Bannerlord\bin\Win64_Shipping_Client\TaleWorlds.ObjectSystem.dll</HintPath>
       <Private>false</Private>
     </Reference>
     <Reference Include="TaleWorlds.Library">
