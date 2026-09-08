@@ -257,6 +257,9 @@ namespace OfflineTests
             Console.WriteLine("== CPS3r DRouteAMode ==");
             TestCps3rDRouteAMode();
 
+            Console.WriteLine("== CPS3r McmDropdownE ==");
+            TestCps3rMcmDropdownE();
+
             Console.WriteLine("== ATC1 BattlePhaseFSM ==");
             TestBattlePhaseFSM();
 
@@ -4043,6 +4046,31 @@ namespace OfflineTests
             Check(CbRouteAPoC.RouteAStability.BuildSummary().Contains("weightFlap=1"),
                 "cps3r-droutea stability summary format");
             CbRouteAPoC.RouteAStability.Reset();
+        }
+
+        // t56 repair（MCM 下拉缺 E）：Cps3ModeNames 补第 5 项 "E: 单编队 Route A"（index 4 ↔ E_RouteA=4）。
+        // 注意：CombatBrainMcmSettings 类型含 Dropdown<string>/MCM attribute——离线 JIT 加载触发 MCMv5 缺失
+        //   （同 t54 教训），数组字面量由 CombatBrain 编译 + CONTEXT 记录保证；本卡断言转换纯逻辑（Cps3RuntimeSettings）
+        private static void TestCps3rMcmDropdownE()
+        {
+            // A) index 4 ↔ E_RouteA roundtrip（MCM get/set 转换在新数组下正确）
+            Check(CombatBrain.Settings.Cps3RuntimeSettings.ModeFromSelectedIndex(4) == CombatBrain.Settings.Cps3Mode.E_RouteA,
+                "cps3r-mcm-e index 4 -> E_RouteA");
+            Check(CombatBrain.Settings.Cps3RuntimeSettings.SelectedIndexFromMode(CombatBrain.Settings.Cps3Mode.E_RouteA) == 4,
+                "cps3r-mcm-e E_RouteA -> index 4");
+            Check(CombatBrain.Settings.Cps3RuntimeSettings.ModeFromSelectedIndex(5) == CombatBrain.Settings.Cps3Mode.A_NativeBaseline,
+                "cps3r-mcm-e out-of-range 5 clamps to A (安全态)");
+            Check(CombatBrain.Settings.Cps3RuntimeSettings.SelectedIndexFromMode(CombatBrain.Settings.Cps3Mode.A_NativeBaseline) == 0,
+                "cps3r-mcm-e default index 0 = A (安全态保持)");
+
+            // B) 组合矩阵语义：E 需 RouteA 开（t54）——MCM 下拉选 E 后 Mode=E_RouteA 且组合校验通过
+            CombatBrain.Settings.Cps3RuntimeSettings.Mode = CombatBrain.Settings.Cps3Mode.E_RouteA;
+            Check(CombatBrain.Settings.Cps3RuntimeSettings.IsValidCombination(
+                CombatBrain.Settings.Cps3RuntimeSettings.Mode, false, true),
+                "cps3r-mcm-e E selection valid with routeA on");
+            CombatBrain.Settings.Cps3RuntimeSettings.Mode = CombatBrain.Settings.Cps3Mode.A_NativeBaseline; // 复位安全态
+            Check(CombatBrain.Settings.Cps3RuntimeSettings.Mode == CombatBrain.Settings.Cps3Mode.A_NativeBaseline,
+                "cps3r-mcm-e reset restores A");
         }
 
         // ATC-1 战局阶段机（BattlePhaseFSM 纯逻辑）：五态全边界/最短驻留/同态不重播/Retreat 终态/早期伤亡不误进 Exploit

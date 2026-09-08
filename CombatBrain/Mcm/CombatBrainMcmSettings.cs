@@ -83,19 +83,21 @@ namespace CombatBrain.Mcm
 
         // cps3-mcm-switches repair（t28）：MCMv5 SettingPropertyDropdown 不支持原生 C# 枚举属性（实测只显示名称
         //   无下拉可点）——改 MCMv5 正确类型 Dropdown<string>（MCM.Common，实证 BetterPikesSettings.cs:28），
-        //   SelectedIndex（0..3）↔ Cps3RuntimeSettings.Mode（Cps3Mode A..D）双向转换（Cps3RuntimeSettings
+        //   SelectedIndex（0..4）↔ Cps3RuntimeSettings.Mode（Cps3Mode A..E）双向转换（Cps3RuntimeSettings
         //   ModeFromSelectedIndex/SelectedIndexFromMode 纯逻辑）；默认 SelectedIndex=0=A 安全态；RequireRestart=false 热切。
         // t32 repair（下拉切换失效）：MCMv5 对 Dropdown 引用类型可能直接改实例 SelectedIndex 而不调 setter
         //   （实证 BetterPikes/TAOM 用自动属性）——旧 getter 每次强制实例=Mode 对应值导致选 B 后 UI 恒显示 A。
         //   现 getter 改反向同步：读实例当前 SelectedIndex，与 Mode 不一致才写回 Mode（实例优先，覆盖直接改实例
         //   路径；一致时不写防漂移）；setter 路径保留（value.SelectedIndex → ModeFromSelectedIndex → Mode）。
         //   双路径（直接改实例 / 调 setter）都保证 Mode 最终正确。
+        // t56 repair（下拉缺 E）：Cps3Mode.E_RouteA=4（t54）已加但选项数组仍 4 项——补第 5 项
+        //   "E: 单编队 Route A"（index 4 ↔ E_RouteA），与 0..4 转换对应
         private static readonly string[] Cps3ModeNames =
-            { "A: Native 全关", "B: Shadow", "C: 仲裁共存", "D: 单域排他" };
+            { "A: Native 全关", "B: Shadow", "C: 仲裁共存", "D: 单域排他", "E: 单编队 Route A" };
         private readonly Dropdown<string> _cps3ModeDropdown = new Dropdown<string>(Cps3ModeNames, 0);
 
         [SettingPropertyDropdown("CPS 验证模式", RequireRestart = false,
-            HintText = "A=Native 全关对照（三域 CB 命令全关）/ B=Shadow（决策运行不落地）/ C=仲裁共存（原版仍控）/ D=单域排他（需租约 PoC 开）")]
+            HintText = "A=Native 全关对照（三域 CB 命令全关）/ B=Shadow（决策运行不落地）/ C=仲裁共存（原版仍控）/ D=单域排他（需租约 PoC 开）/ E=单编队 Route A（需 RouteA 开，自动启用）")]
         [SettingPropertyGroup("CPS 验证")]
         public Dropdown<string> Cps3ValidationMode
         {
