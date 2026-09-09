@@ -95,7 +95,7 @@ Harness Captain / member（Phase A 尚为 spec，未强制注入）:
 
 | 轴 | 问题 | 依据顺序 |
 |---|---|---|
-| Normative | 应该怎样运行 | Constitution/invariants > 架构约束 > 子系统规格 > Waiver > 历史 |
+| Normative | 应该怎样运行 | CONSTITUTION（`docs/knowledge/CONSTITUTION.md`，C2 起 canonical normative core）> 架构约束 > 子系统规格 > Waiver > 历史 |
 | Descriptive | 代码实际怎样 | source / runtime evidence / tests / git state —— 都是 scoped claims，非永恒真相 |
 | Operational | 此刻做什么 | 用户授权边界 > bootstrap > Active Task > CURRENT_STATE > System Spec > handoff |
 
@@ -126,8 +126,8 @@ source_decision: <批准该例外的决策出处>
 
 ### Route R1 — 通用冷启动 / 任意任务开始
 - REQUIRED: `docs/knowledge/CURRENT_STATE.md`
-- OPTIONAL: 任务相关子系统 spec
-- NEVER_BY_DEFAULT: 历史 handoff、旧 X/N/T prompts、research archive、Master Spec 全文
+- OPTIONAL: 任务相关子系统 spec；CONSTITUTION（判断/触碰不变量、闸语义或需架构依据时）；BACKLOG（领取/路由任务前查开环项时）；systems/tooling（涉工具链/部署操作时）
+- NEVER_BY_DEFAULT: 历史 handoff、旧 X/N/T prompts、research archive、Master Spec 全文、evidence/ 与 adr/ 默认不加载
 
 ### Route R2 — CPS（战场命令控制面收口）/ 命令归因域
 - REQUIRED: `docs/cps4-hardgate-checklist-*.md`（最新一张）、
@@ -143,12 +143,12 @@ source_decision: <批准该例外的决策出处>
 ### Route R4 — 文化 / 战术设计 / 产品级判断
 - REQUIRED: `CombatBrain_Master_Spec.md`（当前唯一产品规格；版本见其 §0，可能落后于代码）、
   对应文化/战术规格
-- OPTIONAL: CONTEXT §2 核心设计、历史战术设计
+- OPTIONAL: CONTEXT §2 核心设计、历史战术设计；CONSTITUTION（规范裁决/冲突仲裁时优先依据）
 - NEVER_BY_DEFAULT: 派单措辞、验收断言写法、施工细节
 
 ### Route R5 — 纯代码修改 / bug 修复（不涉架构）
 - REQUIRED: 目标子系统源码、CURRENT_STATE、`测试指南.md`（编译/回归/部署命令链）
-- OPTIONAL: 相关 tests
+- OPTIONAL: 相关 tests；systems/tooling（涉部署/工具链操作时；命令链仍以 测试指南 为准）
 - NEVER_BY_DEFAULT: Master Spec、architecture docs、历史设计
 
 ## 6. `_kb` 状态（Phase A Quarantine）
@@ -196,3 +196,38 @@ bootstrap → route → 最小充分上下文 → act / verify → 仅在出现�
 ```
 
 上下文不足是缺陷；过量无关上下文也是缺陷——两者都按 context-quality failure 对待。
+
+## 10. Canonical Role Map（Phase C2 建立，skeleton-only）
+
+> C2 只登记角色与路由识别；**无一本加入 REQUIRED**。正文内容迁移在 C3 执行，届时本表迁移目标生效。
+> 所有权：各文档维护 owner = Captain / Integration Owner；路由权限变更（OPTIONAL→REQUIRED、
+> NEVER_BY_DEFAULT→OPTIONAL、新增 REQUIRED、扩宽 route、削弱 Stop Condition）均属架构级，需显式 rationale/review。
+
+| 文档（logical role） | 路径 | Authority | 默认加载集 | 迁移目的地标记（C3） |
+|---|---|---|---|---|
+| CONSTITUTION（规范核心） | `docs/knowledge/CONSTITUTION.md` | NORMATIVE | OPTIONAL（R1/R4 触发） | 承接 CONTEXT §2 核心设计、反作弊闸澄清、AGENTS §2 / Master Spec 中的稳定规范文本（裁决后） |
+| NOMENCLATURE（编号/术语） | `docs/knowledge/NOMENCLATURE.md` | NORMATIVE（对标识符） | 常规 NEVER_BY_DEFAULT；引用编号时 OPTIONAL | 承接 CONTEXT 头部编号约定 + Master Spec §0.1 |
+| BACKLOG（现行开环项） | `docs/knowledge/BACKLOG.md` | OPERATIONAL | OPTIONAL（领取/路由前） | 承接 CONTEXT §4/§5 开环项、review-findings 开环（区分 OPEN/DEFERRED/BLOCKED/NEEDS_VERIFICATION） |
+| Tooling（技术/工具链事实） | `docs/systems/tooling.md` | DESCRIPTIVE | OPTIONAL（工具链/部署触发） | 承接 CONTEXT §5/§6/§8 稳定操作事实（不复制 测试指南） |
+| Evidence router | `docs/evidence/INDEX.md` | DESCRIPTIVE | NEVER_BY_DEFAULT（具体证据触发） | 承接 CONTEXT §3/§4 完结卡与 CPS 报告索引（CPS GO/ADR 闭环后） |
+| ADR（决策存档） | `docs/adr/README.md` | NORMATIVE（决策记录） | NEVER_BY_DEFAULT | 承接 CONTEXT 内决策性结论（符合 ADR 准入判据者） |
+
+引用纪律：**新 canonical 引用使用稳定语义标识**（如 `CONSTITUTION#anti-cheat-gate`、`NOMENCLATURE#S-series`），
+**不得**以 CONTEXT 行号/段落位置/重复标题作为长期引用锚（CONTEXT 行号仅是 C1 迁移定位符）。
+
+## 11. legacy CONTEXT 的未来迁移目标（Phase C 使用；现 CONTEXT 内容不变）
+
+C1 迁移映射（`CombatBrain_C1_CONTEXT_Migration_Map.md`）是迁移计划，C2 起 canonical 目的地已可寻址：
+
+```text
+CONTEXT §2 核心设计 / §4 反作弊闸澄清 → CONSTITUTION
+CONTEXT 头部编号约定          → NOMENCLATURE
+CONTEXT §4/§5 开环项          → BACKLOG
+CONTEXT §5/§6/§8 工具链事实   → systems/tooling
+CONTEXT §3/§4 完结卡与报告    → evidence/（GO/ADR 闭环后）
+CONTEXT 决策性结论            → adr/（符合准入判据者）
+```
+
+- 上述目的地登记**不改变** CONTEXT §2/§4 的现存 OPTIONAL 引用（CPS/Astra/legacy 工作流仍依赖）；
+  正式迁移时同步改写这些引用为语义标识。
+- CPS §4 与 CPS-3R 综述保持冻结，直至适用 review / GO / ADR 闭环（C2 不迁）。
