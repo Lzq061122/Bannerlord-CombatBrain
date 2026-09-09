@@ -1,9 +1,9 @@
 # CombatBrain — Current Verified State
 
-> status: pilot
-> authority: not-yet-exclusive
+> status: active
+> authority: canonical-bootstrap
 >
-> 依据：CombatBrain Knowledge Architecture v1.1 — Phase A（§12–§18 CURRENT_STATE Contract）。
+> 依据：CombatBrain Knowledge Architecture v1.1 — Traffic Cutover（Phase B 验证通过）。
 > 职责：描述当前 checkout / 当前主线**已验证**的工程状态。不是 Captain 日记、不是 task history、
 > 不是 Master Spec、不是 team.json 镜像。
 
@@ -56,7 +56,7 @@ active_task: none             # 无进行中实现任务（有外部验证在途
 ## Known Blockers
 
 1. **Astra re-review 未回**（CPS3R Route A，`a879688` 未部署 = 未最终验证）。
-2. **`docs/` 目录未纳入 Git tracking**（规范断言已实测确认：`git ls-files docs` 为空）。Phase A 将新增 3 个 canonical 文件纳入 tracking，既有 CPS 报告是否入库待决策（不属 Phase A）。
+2. ~~`docs/` 目录未纳入 Git tracking~~ → 已解决：`AGENTS.md` + `docs/knowledge/` 三个 canonical 文件已纳入 tracking（commit `62502e9`、`d5743dd` 及 Traffic Cutover commit）。既有 CPS 报告是否入库仍待决策（不属本 cutover）。
 
 ## Known Engineering Debt
 

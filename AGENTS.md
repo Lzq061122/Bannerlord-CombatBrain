@@ -1,11 +1,11 @@
 # CombatBrain — Repo Agent Bootstrap
 
-> status: pilot
-> authority: not-yet-exclusive
+> status: active
+> authority: canonical-bootstrap
 >
-> 依据：CombatBrain Knowledge Architecture v1.1 — Phase A（受控试点）。
+> 依据：CombatBrain Knowledge Architecture v1.1 — Traffic Cutover（Phase B 验证通过，2026-09-09）。
 > 本文件是 Codex / 从本仓启动的 Agent 的标准入口，不是知识中心。
-> 在 Phase B cold-start 验证通过前，新架构不具独占权威。
+> legacy `CombatBrain_CONTEXT.md` 仅按 INDEX 路由或具体未决依赖加载（LEGACY_COMPATIBILITY）。
 
 ## 1. Project Identity
 

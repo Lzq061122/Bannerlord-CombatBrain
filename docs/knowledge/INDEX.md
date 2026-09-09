@@ -1,11 +1,11 @@
 # CombatBrain Knowledge INDEX — Context Router
 
-> status: pilot
-> authority: not-yet-exclusive
+> status: active
+> authority: canonical-bootstrap
 >
-> 依据：CombatBrain Knowledge Architecture v1.1 — Phase A。
+> 依据：CombatBrain Knowledge Architecture v1.1 — Traffic Cutover（Phase B 验证通过）。
 > 本文件是 **Context Router**，不是目录清单。它决定 Agent 冷启动后加载什么、不加载什么。
-> Phase A：旧文档物理位置不变；legacy `CombatBrain_CONTEXT.md` 仍对旧 Harness 权威（见 §24 规范）。
+> legacy `CombatBrain_CONTEXT.md` 角色 = LEGACY_COMPATIBILITY：物理不变，仅路由要求或具体未决依赖时读。
 
 ## 0. 稳定地址约定
 
@@ -163,14 +163,15 @@ DO NOT edit canonical project knowledge through _kb.
 `_kb` 可能经 hard link 直接改到 source，也可能因 atomic save 断链静默分叉。
 若 `_kb` 与 source 内容不同 → 相信 source。
 
-## 7. CONTEXT.md 当前角色
+## 7. CONTEXT.md 角色（LEGACY_COMPATIBILITY）
 
 ```text
-CombatBrain_CONTEXT.md: KEEP / UNCHANGED / AUTHORITATIVE FOR LEGACY BOOTSTRAP
-（Harness 旧工作流继续全文读取；新架构不再把它设计成长期知识中心。）
+CombatBrain_CONTEXT.md: KEEP / UNCHANGED / LEGACY_COMPATIBILITY
+（物理不变；不再是默认引导。仅当 INDEX 路由显式要求或存在具体未决依赖时加载，
+不得仅为完整性加载。新架构不把它设计成长期知识中心。）
 ```
 
-Phase A 期间不瘦身、不 redirect、不删 section、不修引用。
+不瘦身、不 redirect、不删 section、不修引用；历史 / legacy 工作流仍可读。
 
 ## 8. Route 设计规则（新增 / 修订 route 时）
 
