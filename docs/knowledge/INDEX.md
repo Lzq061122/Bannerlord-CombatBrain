@@ -27,6 +27,58 @@ project_id: CombatBrain   ← canonical identity，与物理路径解耦
 加载纪律：不默认全读 docs 树；二级引用不自动追踪；archive/evidence 默认不加载；
 Router 的目的是**减少 context**，不是把全读变成层层跳转后仍全读。
 
+## 1.1 Context Budget Contract（最小充分上下文契约）
+
+依据：manager 侧 `Context Budget Patch`（2026-09-09）。语义优先，不设数字 token 上限。
+加载目标不是「最小 token」，而是 **最小充分上下文 + 保持正确性**：上下文不足是缺陷，过量无关上下文同样是缺陷。
+
+三种集合的补充判据：
+
+### REQUIRED
+- 安全开始本任务**必需**的知识；刻意保持小。
+- 仅凭「偶尔可能有用」不得放入 REQUIRED。
+
+### OPTIONAL
+- 仅当任务出现具体触发条件才加载。触发示例：涉 command 所有权、运行期行为与离线证据冲突、触碰兼容边界、改动产品级行为、需要历史理由。
+
+### NEVER_BY_DEFAULT
+- 日常加载排除项：历史 handoff、已完结任务 prompt、被取代的规格、旧 Captain 输出、research archive、旧进度快照、`_kb`、legacy `CombatBrain_CONTEXT.md` 全文。
+- 不等于禁止：加载前必须有**明确的任务相关性理由**。
+
+### Context Expansion Rule
+- 追加加载任何来源前必须能回答：`当前任务里哪个具体不确定性需要这份来源？`
+- 答不出具体不确定性 → 不加载。
+
+### Historical Context Rule
+- 历史材料仅在回答「为何这样选型 / 是否故意变更 / 早先实现是什么 / 现行规则是否取代旧决定 / 是否回归已知历史缺陷」时可加载。
+- **加载 ≠ 成为现行指令**：历史材料不得只因被加载就变成当前要求。
+
+### Route Expansion Policy
+- Route 不是递归授权。默认行为：
+
+```text
+Route → REQUIRED → 相关源码 → stop
+```
+
+- 禁止默认走：`REQUIRED → 每个链接文档 → 每个子系统 → Master Spec → evidence archive → 历史 handoff → 全项目`。
+- 二次引用默认不自动成为当前上下文。
+
+### Stop Condition
+- 当前加载足以回答以下 6 问即停止扩展：
+  ① 当前已验证项目状态 ② 我被要求做什么 ③ 适用哪些约束 ④ 行为归哪个子系统 ⑤ 相关源文件 ⑥ 完成前需要哪些证据。
+- 6 问全部可答 → 额外项目上下文仅 OPTIONAL，直到新不确定性出现。
+
+### Context Expansion Audit
+- 加载超出 Route REQUIRED 时，应能报告三行：
+
+```text
+Additional source:
+Reason loaded:
+Uncertainty resolved:
+```
+
+- 仅用于 validation 与复杂任务期间的可观测性，不成为常驻项目文档。
+
 ## 2. Bootstrap Contract（所有 Agent 最终进入这里）
 
 ```text
@@ -119,3 +171,27 @@ CombatBrain_CONTEXT.md: KEEP / UNCHANGED / AUTHORITATIVE FOR LEGACY BOOTSTRAP
 ```
 
 Phase A 期间不瘦身、不 redirect、不删 section、不修引用。
+
+## 8. Route 设计规则（新增 / 修订 route 时）
+
+1. REQUIRED 应包含最小的安全起点集合。
+2. 优先用条件 OPTIONAL 触发器，而不是堆更多 REQUIRED 文档。
+3. NEVER_BY_DEFAULT 吸收历史与低频材料。
+4. 一条 route 若常规需要项目知识库的大部分 → 路由设计 smell，应拆分。
+5. 大文档不得因「拆分尚未完成」而成为 REQUIRED。
+
+## 9. 防回归
+
+本架构禁止复活 legacy 失败模式：
+
+```text
+"Read everything first so nothing is missed."
+```
+
+正确模型：
+
+```text
+bootstrap → route → 最小充分上下文 → act / verify → 仅在出现缺失上下文证据时扩展
+```
+
+上下文不足是缺陷；过量无关上下文也是缺陷——两者都按 context-quality failure 对待。

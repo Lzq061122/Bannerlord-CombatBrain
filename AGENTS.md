@@ -41,12 +41,15 @@ docs/knowledge/CURRENT_STATE.md ← 需要当前状态判断时读（先核对 l
 - 合法例外必须走 Explicit Waiver（契约见 INDEX.md），禁止任务卡偷偷绕过。
 - 冲突无法调和：`STOP → record mismatch → escalate`，禁止自己挑一个喜欢的文档。
 
-## 5. Context Loading Discipline
+## 5. Context Budget Discipline（最小充分上下文）
 
-- 不默认读整个 docs 树；不因文档互相链接就自动全文追踪；二级引用默认不加载。
-- archive 与 evidence 默认不加载；Master Spec 仅在产品 / 架构判断时加载。
+- 加载目标：**最小充分上下文 + 保持正确性**。上下文不足与过量无关上下文都是缺陷。
+- 追加加载前自问：当前任务里哪个具体不确定性需要这份来源？答不出 → 不加载。
+- 默认链路：`Route → REQUIRED → 相关源码 → stop`。不递归追链接、不默认读 archive/evidence/Master Spec；
+  历史材料只用于回答「为何选型 / 是否故意变更 / 早先实现 / 是否取代旧决定 / 是否回归已知缺陷」，**加载 ≠ 成为现行指令**。
+- 能回答「当前状态 / 任务 / 约束 / 所属子系统 / 相关源码 / 所需证据」6 问即停止扩展。
+- 详细契约（REQUIRED/OPTIONAL/NEVER_BY_DEFAULT 判据、停止条件、扩展审计）见 `docs/knowledge/INDEX.md` §1.1。
 - 结束时能说明本次实际读取了哪些知识源。
-- Router 必须减少 context，而不是把「全读」变成「层层跳转后还是全读」。
 
 ## 6. Bootstrap Failure
 
