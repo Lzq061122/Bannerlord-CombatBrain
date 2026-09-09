@@ -24,7 +24,7 @@
 | `H<n>` | 历史战术设计概念（H1–H4，S 系列的母设计） | 出处：combatbrain_historical_tactics_design.md |
 | `P<n>` | 优先级 / 改进方案编号（P0–P3 序列） | 出处：combatbrain_improvement_plan.md |
 | `T<n>-01` | GPT《战术 AI 增强清单》任务项（T0–T39，40 项） | 映射见 GPT清单-T0-T39-现状映射.md |
-| `X<n>` | 观感补强任务项（X0–X7） | 2026-09-04 新增；已完成，状态归属历史 |
+| `X<n>` | 观感补强任务项（X0–X7） | 2026-09-04 新增；实现记录属 evidence/历史，不在本表列状态 |
 | `B<n>` | Luna 评审落地批次（B0–B6） | **注意**：与「战局状态机 B 系列」派单编号撞名（Master Spec §5.1 C5 未决） |
 | `t<n>` | 团队（agent-teams）任务编号 | 编排层任务，非产品编号 |
 | `G<n>` | 博弈层落地阶段（G0–G3） | 并入 P/X 序列 |
@@ -36,7 +36,8 @@
 2. 引用历史材料时注明其当时编号体系（如 .bak 文件中「流水线 F1–F4」按 §2 改名映射解释为 S1–S4）。
 3. 问题引用用「标题」不重编号（review-findings 口径），避免重编号漂移。
 
-## 4. 来源与去重（C3）
+## 4. C4A 验证记录与去重（C3/C4 后续）
 
-- CONTEXT 头部「编号约定」（L6–13）与 Master Spec §0.1 目前并存且 Master Spec 更全（含 T/X/B/G）。
-- C3：CONTEXT 头部与 Master Spec §0.1 各自改为指向本文件；本文件成为唯一正文。
+- 与 legacy CONTEXT 头部「编号约定」、Master Spec §0.1 逐项比对：F/S/H/P/T/X/B/t/G 及 CPS 命名**一致**（F10 全名以本表「反制+套路记忆」为准，两源同义）。
+- 本文件为编号/术语的 **canonical 家**；legacy 两源在 legacy 工作流退役前保持临时重复，不做同步编辑。
+- C4B+ 候选：CONTEXT 头部 / Master Spec §0.1 改为指向本文件；B 系列撞名（Luna B0-B6 vs 战局状态机 B 系列）待人工裁决后在本表登记唯一语义。

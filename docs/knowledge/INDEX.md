@@ -126,7 +126,7 @@ source_decision: <批准该例外的决策出处>
 
 ### Route R1 — 通用冷启动 / 任意任务开始
 - REQUIRED: `docs/knowledge/CURRENT_STATE.md`
-- OPTIONAL: 任务相关子系统 spec；CONSTITUTION（判断/触碰不变量、闸语义或需架构依据时）；BACKLOG（领取/路由任务前查开环项时）；systems/tooling（涉工具链/部署操作时）
+- OPTIONAL: 任务相关子系统 spec；CONSTITUTION（判断/触碰不变量、闸语义或需架构依据时）；BACKLOG（领取/路由任务前查开环项时）；NOMENCLATURE（引用/解释 F/S/H/P/T/X/B/t/G/CPS 编号体系时）；systems/tooling（涉工具链/部署操作时）
 - NEVER_BY_DEFAULT: 历史 handoff、旧 X/N/T prompts、research archive、Master Spec 全文、evidence/ 与 adr/ 默认不加载
 
 ### Route R2 — CPS（战场命令控制面收口）/ 命令归因域
@@ -199,7 +199,8 @@ bootstrap → route → 最小充分上下文 → act / verify → 仅在出现�
 
 ## 10. Canonical Role Map（Phase C2 建立，skeleton-only）
 
-> C2 只登记角色与路由识别；**无一本加入 REQUIRED**。正文内容迁移在 C3 执行，届时本表迁移目标生效。
+> C2 建立骨架，无一本加入 REQUIRED；正文按阶段入住（C3=CORE → CONSTITUTION；C4A=OPERATIONAL/SYSTEM → BACKLOG/NOMENCLATURE/tooling/测试指南；
+> evidence/ 与 adr/ 待后续阶段）。迁移目标见本表末列。
 > 所有权：各文档维护 owner = Captain / Integration Owner；路由权限变更（OPTIONAL→REQUIRED、
 > NEVER_BY_DEFAULT→OPTIONAL、新增 REQUIRED、扩宽 route、削弱 Stop Condition）均属架构级，需显式 rationale/review。
 
