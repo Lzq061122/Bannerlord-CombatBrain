@@ -14,7 +14,10 @@
 - 本机路径只是 Machine-local Project Locator，不是项目恒定身份。
   长期 canonical 文档不得把绝对路径描述为项目身份。
 
-## 2. Immutable Invariants（摘要；完整权威见 Master Spec，由 INDEX 路由）
+## 2. Immutable Invariants（摘要；完整权威见 docs/knowledge/CONSTITUTION.md，由 INDEX 路由）
+
+> 摘要仅用于快速自检，**不高于** CONSTITUTION；Manager 侧 Master Spec 是产品/设计规格源，不构成更高规范。
+> 语义锚：`CONSTITUTION#hard-invariants` / `#anti-cheat-gate` / `#command-ownership` / `#performance-discipline`。
 
 1. 拟人而非全知：禁全图、禁读指针、禁零延迟（反作弊闸：先问「它拿到了不该拿的信息吗」）。
 2. 性能预算：事件驱动 > 低频周期 > 每帧；聚合 > 个体遍历。

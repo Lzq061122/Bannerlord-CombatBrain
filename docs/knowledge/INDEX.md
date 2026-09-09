@@ -132,12 +132,12 @@ source_decision: <批准该例外的决策出处>
 ### Route R2 — CPS（战场命令控制面收口）/ 命令归因域
 - REQUIRED: `docs/cps4-hardgate-checklist-*.md`（最新一张）、
   `CombatBrain/Coordination/CommandProvenance.cs`、当前派单卡所在区
-- OPTIONAL: `docs/cps3*-*.md` 运行期报告、CONTEXT §4 CPS 条目
+- OPTIONAL: `docs/cps3*-*.md` 运行期报告、CONTEXT §4 CPS 条目、CONSTITUTION#command-ownership（归因/冻结/写入权限裁决时）
 - NEVER_BY_DEFAULT: 已关闭的 PoC 路线报告（cps2-route-a-research.md 等，除非对比需要）
 
 ### Route R3 — Formation / command-control 实现任务
 - REQUIRED: CURRENT_STATE、当前 active task、formation/coordination 源与规格
-- OPTIONAL: command-control spec（若涉所有权）、相关 evidence
+- OPTIONAL: command-control spec（若涉所有权）、相关 evidence、CONSTITUTION#command-ownership（涉命令所有权/写入纪律时）
 - NEVER_BY_DEFAULT: 历史 handoffs、旧 prompts、research archive、Master Spec 全文
 
 ### Route R4 — 文化 / 战术设计 / 产品级判断
