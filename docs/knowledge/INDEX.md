@@ -143,7 +143,7 @@ source_decision: <批准该例外的决策出处>
 ### Route R4 — 文化 / 战术设计 / 产品级判断
 - REQUIRED: `CombatBrain_Master_Spec.md`（当前唯一产品规格；版本见其 §0，可能落后于代码）、
   对应文化/战术规格
-- OPTIONAL: CONTEXT §2 核心设计、历史战术设计；CONSTITUTION（规范裁决/冲突仲裁时优先依据）
+- OPTIONAL: 历史战术设计；CONSTITUTION#architecture-principles / #hard-invariants / #anti-cheat-gate（架构/不变量/闸语义裁决时优先依据；原 legacy CONTEXT §2 指针已由 CONSTITUTION 取代）
 - NEVER_BY_DEFAULT: 派单措辞、验收断言写法、施工细节
 
 ### Route R5 — 纯代码修改 / bug 修复（不涉架构）
