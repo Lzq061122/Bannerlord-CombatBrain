@@ -1,52 +1,53 @@
 # CombatBrain ADR — Architecture Decision Records
 
 > status: active
-> authority: canonical-bootstrap (Phase C2 建立)
-> 依据：CombatBrain Knowledge Architecture — Phase C2。
-> 本文件定义 **ADR 准入标准**。ADR 正文在 C3 起按需写入 `docs/adr/NNNN-<slug>.md`。
+> authority: canonical-bootstrap
+> 依据：CombatBrain Knowledge Architecture — Phase C4B（Evidence & ADR Canonicalization）。
+> 职责：登记**持久决策**的 rationale/alternatives/consequences。ADR 解释「为何」，CONSTITUTION 陈述「现行规则」；
+> 若未来 ADR 改变规范，**必须显式更新 CONSTITUTION**，ADR 不静默覆盖。
 
 ---
 
 ## 1. Role Contract
 
-- **Authority axis**：NORMATIVE（对已决决策的存档）。
-- **职责**：记录**持久决策** —— 未来维护者需要知道：决定了什么、为什么、拒绝了哪些替代方案、后果。
-- **必须不含**：把每个任务 / bug 修复 / 实现卡都变成 ADR。
-- **维护 owner**：Captain / Integration Owner（ADR 采纳需 rationale，等同架构级变更）。
+- **Authority axis**：NORMATIVE（决策存档域；规则本体仍在 CONSTITUTION）。
+- **ADR 是**：持久、跨切面/架构级、未来维护者很可能追问「为什么」、且需要 alternatives 与 rationale 的决策。
+- **ADR 不是**：任务日志 / bug 修复报告 / commit 日记 / 测试记录 / CURRENT_STATE 替代。
+- **维护 owner**：Captain / Integration Owner；ADR 采纳需 rationale（架构级变更）。
 
-## 2. ADR 准入判据（全部满足才写 ADR）
+## 2. Admission Criteria（每档必答）
 
-1. **持久性**：决策影响未来多个迭代/维护者的理解或选择；
-2. **有取舍**：存在被拒绝的替代方案，且未来可能重新被提出；
-3. **不可从代码自明**：光读源码无法还原「为何如此」；
-4. **非纯施工**：不是普通实现卡/bug 修复/断言调整。
+1. 持久性（影响多迭代/多维护者的理解或选择）？
+2. 有取舍（被拒替代方案未来可能被重提）？
+3. 代码不可自明（读源码无法还原「为何」）？
+4. 非纯施工（不是实现卡/bug 修复/断言调整）？
+不满足 → 属于 evidence 或 backlog，不写 ADR。
 
-不满足 → 属于 evidence（做完了什么）或 backlog（待办），不写 ADR。
+## 3. Status
 
-## 3. 状态
+`proposed → accepted（或 rejected）→ superseded（注明被谁取代）`。
 
-`proposed` → `accepted`（或 `rejected`）→ `superseded`（注明被哪个 ADR/决策取代）。
+## 4. Format（每档字段）
 
-## 4. 推荐模板（C3 起用）
+Status / Date / Deciders / Context / Decision / Alternatives Considered / Rationale / Consequences /
+Related Canonical Rules（`CONSTITUTION#...`）/ Related Evidence / Supersedes / Superseded by。
 
-```text
-# ADR-NNNN: <标题>
+约束：**不嵌入动态项目状态**（当前 HEAD、当前断言数）；历史 commit 仅作 evidence 引用，不作现行状态。
 
-status: <proposed|accepted|rejected|superseded>
-date: <yyyy-mm-dd>
-deciders: <谁>
+## 5. Register
 
-## Context        （背景与问题）
-## Decision       （决定）
-## Alternatives   （拒绝的替代方案 + 拒绝理由）
-## Consequences   （后果 / 代价 / 后续影响）
-## Supersedes/Superseded by （相关决策链）
-```
+| ADR | 主题 | Status | 关联 Canonical | 关联 Evidence |
+|---|---|---|---|---|
+| ADR-0001 | 三层两横切分层架构 | accepted | CONSTITUTION#architecture-principles / #design-principles(P2) | MS §2/§4.1；CONTEXT §2 |
+| ADR-0002 | 反作弊闸语义模型 | accepted | CONSTITUTION#anti-cheat-gate / #hard-invariants(IL-1) | X0/X7 记录；CONTEXT §4 澄清 |
+| ADR-0003 | TerrainStub→TerrainSampler | accepted（已实施） | CONSTITUTION P1（信息公平） | 代码注释；review-findings #7 |
+| ADR-0004 | 命令所有权与归因纪律 | accepted | CONSTITUTION#command-ownership；INDEX §4 | CommandProvenance.cs；CPS 报告（指针） |
 
-## 5. C3 候选 ADR（仅登记，C2 不写正文；CPS 相关等待 GO/ADR 闭环）
+## 6. Deferred Candidates（未到准入时机，不创建）
 
-- CPS 命令仲裁：唯一仲裁 + 双路线 PoC 的取舍；
-- CPS 条件 5 替代路径：路线 B（租约战斗中段样本）→ 路线 A（忠实执行证明）的正式转向；
-- 反作弊闸语义边界（两层可关 / 第三层永不开放）统一表述；
-- TerrainStub 合成假地形 → TerrainSampler 的删除决策；
-- 工具教训类（MCM `Dropdown<string>` 离线加载限制、Harmony 参数名绑定）—— 符合准入判据才转 ADR，否则入 lessons-log。
+| 候选 | 原因 |
+|---|---|
+| CPS Route A vs Route B / 条件 5 替代路径 | CPS review/GO 链仍开放（C4B 明确禁止此时成档） |
+| 租约/ForceLease 结构性限制结论（ATC-5R → CPS 转向） | 属 CPS 历史，等闭环后随 CPS 证据一并处理 |
+| MCM `Dropdown<string>` 离线加载限制 / Harmony 参数名绑定等工具教训 | 多为 lessons 而非跨切面决策——符合准入判据者后续转 ADR，否则入 lessons-log |
+| 编号体系（F/S/H/P/T/X/B/t/G/CPS）唯一化 | 等 B 系列撞名人工裁决后以 NOMENCLATURE 登记，无需 ADR |

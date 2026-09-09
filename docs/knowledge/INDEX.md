@@ -200,7 +200,7 @@ bootstrap → route → 最小充分上下文 → act / verify → 仅在出现�
 ## 10. Canonical Role Map（Phase C2 建立，skeleton-only）
 
 > C2 建立骨架，无一本加入 REQUIRED；正文按阶段入住（C3=CORE → CONSTITUTION；C4A=OPERATIONAL/SYSTEM → BACKLOG/NOMENCLATURE/tooling/测试指南；
-> evidence/ 与 adr/ 待后续阶段）。迁移目标见本表末列。
+> C4B=EVIDENCE → 登记 non-CPS 闭合证据组、ADR → 0001–0004；CPS 域待闭环）。迁移目标见本表末列。
 > 所有权：各文档维护 owner = Captain / Integration Owner；路由权限变更（OPTIONAL→REQUIRED、
 > NEVER_BY_DEFAULT→OPTIONAL、新增 REQUIRED、扩宽 route、削弱 Stop Condition）均属架构级，需显式 rationale/review。
 
@@ -215,6 +215,10 @@ bootstrap → route → 最小充分上下文 → act / verify → 仅在出现�
 
 引用纪律：**新 canonical 引用使用稳定语义标识**（如 `CONSTITUTION#anti-cheat-gate`、`NOMENCLATURE#S-series`），
 **不得**以 CONTEXT 行号/段落位置/重复标题作为长期引用锚（CONTEXT 行号仅是 C1 迁移定位符）。
+
+Evidence/ADR 触发（默认仍 NEVER_BY_DEFAULT，仅以下动机加载）：
+verification / diagnosis / regression analysis / GO-NO-GO / historical rationale ——
+经 `docs/evidence/INDEX.md`（路由器）与 `docs/adr/README.md`（决策存档）进入，不整库加载。
 
 ## 11. legacy CONTEXT 的未来迁移目标（Phase C 使用；现 CONTEXT 内容不变）
 
