@@ -119,9 +119,12 @@ namespace CombatBrain.Settings
             return mode == Cps3Mode.E_RouteA;
         }
 
+        // G-1（CB-REPAIR-0003，用户裁决）：恢复链路（外部覆盖检测→边沿重试→持续覆盖释放）依赖 SetOrderObserver
+        //   观测；无观测时落地 Route A 命令会使覆盖恢复整链静默失效、产生无法验证的样本——故硬依赖 ObserverEnabled：
+        //   E 模式无观测 → Route A 不执行（fail-safe）。
         public static bool RouteAExecutionEnabled()
         {
-            return Enabled && Mode == Cps3Mode.E_RouteA && Cps2PoCSettings.RouteAEnabled;
+            return Enabled && Mode == Cps3Mode.E_RouteA && Cps2PoCSettings.RouteAEnabled && ObserverEnabled;
         }
 
         // t32 repair（cps3-mcm-switches 下拉切换失效）：MCMv5 对 Dropdown 引用类型可能直接改实例 SelectedIndex

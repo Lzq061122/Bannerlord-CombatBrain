@@ -289,17 +289,25 @@ namespace OfflineTests
             revision = stamp.Update(f, snapshot); snapshot.Vector.Moral = .01f;
             Check(stamp.Update(f, snapshot) != revision, "routeA real morale-vector change breaks no-change chain");
             Cps3Mode oldMode = Cps3RuntimeSettings.Mode; bool oldFlag = Cps2PoCSettings.RouteAEnabled;
-            bool oldEnabled = Cps3RuntimeSettings.Enabled;
+            bool oldEnabled = Cps3RuntimeSettings.Enabled; bool oldObserver = Cps3RuntimeSettings.ObserverEnabled;
             Cps3RuntimeSettings.Enabled = true;
+            Cps3RuntimeSettings.ObserverEnabled = true;
             Cps3RuntimeSettings.Mode = Cps3Mode.A_NativeBaseline;
             Cps3RuntimeSettings.Mode = Cps3Mode.E_RouteA;
             Check(Cps2PoCSettings.RouteAEnabled && Cps3RuntimeSettings.RouteAExecutionEnabled(), "routeA entering E automatically arms dedicated switch");
+            // G-1 硬约束：E 模式无观测 → Route A 不执行（fail-safe；覆盖恢复链依赖 SetOrderObserver）。
+            Cps3RuntimeSettings.ObserverEnabled = false;
+            Check(Cps2PoCSettings.RouteAEnabled && !Cps3RuntimeSettings.RouteAExecutionEnabled(),
+                "routeA armed in E without observer never executes (fail-safe)");
+            Cps3RuntimeSettings.ObserverEnabled = true;
+            Check(Cps2PoCSettings.RouteAEnabled && Cps3RuntimeSettings.RouteAExecutionEnabled(),
+                "routeA observer restored re-enables execution");
             Cps2PoCSettings.RouteAEnabled = false; Cps3RuntimeSettings.Mode = Cps3Mode.E_RouteA;
             Check(!Cps2PoCSettings.RouteAEnabled && !Cps3RuntimeSettings.RouteAExecutionEnabled(), "routeA unchanged E selection cannot undo hot close");
             Cps2PoCSettings.RouteAEnabled = true; Cps3RuntimeSettings.Mode = Cps3Mode.C_ArbiterCoexist;
             Check(!Cps3RuntimeSettings.RouteAExecutionEnabled(), "routeA leaving E overrides a still-enabled dedicated switch");
             Cps3RuntimeSettings.Mode = oldMode; Cps2PoCSettings.RouteAEnabled = oldFlag;
-            Cps3RuntimeSettings.Enabled = oldEnabled;
+            Cps3RuntimeSettings.Enabled = oldEnabled; Cps3RuntimeSettings.ObserverEnabled = oldObserver;
         }
     }
 }
