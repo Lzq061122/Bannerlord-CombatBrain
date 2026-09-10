@@ -188,7 +188,8 @@ namespace CombatBrain.Coordination
         {
             Stats s = Get(id); if (s == null) return;
             s.Active = false; s.Pending = false;
-            if (s.FirstExternalAt != 0f) s.ExternalDuration = Math.Max(0f, now - s.FirstExternalAt);
+            // F-1 口径统一：以最后一次外部覆盖时间结算，不用退出时刻——无关原因退出不夸大 Observed 时长。
+            if (s.FirstExternalAt != 0f) s.ExternalDuration = Math.Max(0f, s.LastExternalAt - s.FirstExternalAt);
             s.ExitSeq = Record(id, RouteAEventKind.Exit, now, reason: reason);
         }
         public void EdgeRetry(int id, float now)

@@ -192,16 +192,23 @@ namespace CombatBrain.Coordination
         private void OnExternalWriteObserved(int id, bool replaced, float now)
         {
             if (Target == null || id != IdentityId) return;
-            if (replaced && !_externalRetryUsed)
+            if (replaced)
             {
-                // One edge-triggered retry only. Invalidate the dedupe receipt without changing
-                // tactical revision/activation; the next real selected callback may write once.
-                _externalRetryArmed = true;
-                _externalRetryUsed = true;
-                _writtenRevision = _writtenActivation = -1;
+                if (!_externalRetryUsed)
+                {
+                    // One edge-triggered retry only. Invalidate the dedupe receipt without changing
+                    // tactical revision/activation; the next real selected callback may write once.
+                    _externalRetryArmed = true;
+                    _externalRetryUsed = true;
+                    _writtenRevision = _writtenActivation = -1;
+                    return;
+                }
+                // 重试已消耗后再次 replaced=true 覆盖 = 持续覆盖 → 立即 Release。
+                Release(RouteAExit.ExternalOverridePersisted, now);
                 return;
             }
-            Release(RouteAExit.ExternalOverridePersisted, now);
+            // replaced=false（ExternalWhileActive）：独立外部写入，明确不算「持续覆盖」——
+            // 不 Release、不消耗重试；仅由证据层计数 ExternalWhileActive。
         }
 
         public void Release(RouteAExit reason, float now)

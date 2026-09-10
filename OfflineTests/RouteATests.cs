@@ -202,14 +202,48 @@ namespace OfflineTests
             c.BeginSession(new object(), 224f); e.SetterCompleted(late, true, 225f);
             Check(e.AppliedFor(id) == 0 && e.ReplacedFor(id) == 0 && e.Count == 0, "routeA prior-session completion cannot contaminate new session");
 
-            // 外部在边沿回调到来前继续写：不能等下一次 0.5s Tick，也不能发出重试。
+            // F-2 语义：重试消费前的 replaced=false 写入不算持续覆盖——不释放、不重试、仅计数。
             c = RouteController(); f = new RouteFake(); Arm(c, f); e = c.Evidence; id = c.IdentityId;
             ObservedRouteWrite(e, f, 400, 300f); c.Applied(300f, true);
             e.SetterCompleted(e.SetterBeginning(f, CommandDomain.Movement, CommandSource.ExternalUnknown, 401, 5, 301f), true, 301f);
             e.SetterCompleted(e.SetterBeginning(f, CommandDomain.Movement, CommandSource.ExternalUnknown, 402, 5, 301.5f), true, 301.5f);
-            Check(!c.Owns(f) && f.Original && e.BuildSummary(id).Contains("externalWhileActive=1")
+            Check(c.Owns(f) && !f.Original && e.BuildSummary(id).Contains("externalWhileActive=1")
                 && e.BuildSummary(id).Contains("edgeRetries=0") && e.BuildSummary(id).Contains("externalDuration=0.500s"),
-                "routeA continuous external overwrite releases before retry without high-frequency resend");
+                "routeA replaced=false writes while active neither release nor retry (no 0.5s churn)");
+            // 重试消费后再次 replaced=true → 立即 Release；此后连续外部写不再产生替换/重试。
+            c.TrySelect(f, f.Behaviors[0], f.Behaviors[0], RouteEligible(), true, 301.6f);
+            ObservedRouteWrite(e, f, 403, 301.6f); c.Applied(301.6f, true);
+            e.SetterCompleted(e.SetterBeginning(f, CommandDomain.Movement, CommandSource.ExternalUnknown, 404, 5, 302f), true, 302f);
+            Check(!c.Owns(f) && f.Original && e.BuildSummary(id).Contains("edgeRetries=1"),
+                "routeA second replaced=true after retry fires immediate release");
+            for (int i = 0; i < 200; i++)
+                e.SetterCompleted(e.SetterBeginning(f, CommandDomain.Movement, CommandSource.ExternalUnknown, 405 + i, 5, 302f + i), true, 302f + i);
+            Check(e.ReplacedFor(id) == 2 && e.BuildSummary(id).Contains("edgeRetries=1"),
+                "routeA post-release external writes create no extra replacements or retries");
+
+            // F-1 口径：Exit 落账 ExternalDuration = LastExternalAt − FirstExternalAt，与 Active 期一致。
+            c = RouteController(); f = new RouteFake(); Arm(c, f); e = c.Evidence; id = c.IdentityId;
+            ObservedRouteWrite(e, f, 500, 100f); c.Applied(100f, true);
+            e.SetterCompleted(e.SetterBeginning(f, CommandDomain.Movement, CommandSource.ExternalUnknown, 501, 5, 110f), true, 110f);
+            e.SetterCompleted(e.SetterBeginning(f, CommandDomain.Movement, CommandSource.ExternalUnknown, 502, 5, 112f), true, 112f);
+            c.Release(RouteAExit.Disabled, 120f);
+            Check(!c.Owns(f) && e.BuildSummary(id).Contains("externalDuration=2.000s"),
+                "routeA exit duration settles at last external write (Last-First), not exit time");
+
+            // F-2 语义：独立 replaced=false 写入不 Release、不消耗重试、仅计数；重试槽仍可用。
+            c = RouteController(); f = new RouteFake(); Arm(c, f); e = c.Evidence; id = c.IdentityId;
+            ObservedRouteWrite(e, f, 600, 200f); c.Applied(200f, false);
+            e.SetterCompleted(e.SetterBeginning(f, CommandDomain.Movement, CommandSource.ExternalUnknown, 601, 5, 201f), true, 201f);
+            Check(c.Owns(f) && !f.Original && e.BuildSummary(id).Contains("externalWhileActive=1")
+                && e.BuildSummary(id).Contains("edgeRetries=0"),
+                "routeA standalone replaced=false write does not release or consume retry");
+            ObservedRouteWrite(e, f, 602, 201.5f); c.Applied(201.5f, true);
+            e.SetterCompleted(e.SetterBeginning(f, CommandDomain.Movement, CommandSource.ExternalUnknown, 603, 5, 202f), true, 202f);
+            Check(c.Owns(f) && c.TrySelect(f, f.Behaviors[0], f.Behaviors[0], RouteEligible(), true, 202.1f),
+                "routeA retry slot survives standalone replaced=false writes and fires once");
+            ObservedRouteWrite(e, f, 604, 202.1f); c.Applied(202.1f, true);
+            Check(!c.TrySelect(f, f.Behaviors[0], f.Behaviors[0], RouteEligible(), true, 202.2f),
+                "routeA no steady-tick resend after retry fired");
 
             c = RouteController(); f = new RouteFake(); Arm(c, f); e = c.Evidence;
             e.ExpectSetter(f);
