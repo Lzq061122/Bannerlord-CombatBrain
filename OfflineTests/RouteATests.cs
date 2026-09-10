@@ -161,14 +161,34 @@ namespace OfflineTests
             Check(e.ReplacedFor(id) == 0, "routeA skipped setter is not an external replacement");
             e.SetterCompleted(e.SetterBeginning(f, CommandDomain.Movement, CommandSource.ExternalUnknown, 14, 9, 8f), true, 8f);
             Check(e.ReplacedFor(id) == 1 && e.StableFor(id) == 0, "routeA actual external write replaces outstanding Applied even beyond old one-second window");
+            Check(c.TrySelect(f, f.Behaviors[0], f.Behaviors[0], RouteEligible(), true, 8.1f),
+                "routeA first external overwrite invalidates dedupe for one edge retry");
+            ObservedRouteWrite(e, f, 15, 8.1f); c.Applied(8.1f, true);
+            Check(!c.TrySelect(f, f.Behaviors[0], f.Behaviors[0], RouteEligible(), true, 8.2f),
+                "routeA edge retry is not resent on steady selected ticks");
+            e.SetterCompleted(e.SetterBeginning(f, CommandDomain.Movement, CommandSource.ExternalUnknown, 16, 9, 9f), true, 9f);
+            Check(!c.Owns(f) && f.Original, "routeA continued external overwrite releases ownership and restores weights immediately");
+            var winner = new FormationCommandProposal { Domain = CommandDomain.Movement, Kind = CommandKind.Hold };
+            var status = new FormationCommandExecutor.FormationStatus { Valid = true, FieldBattle = true,
+                LeaseOk = true, RouteAMovementOwned = c.Owns(f) };
+            int resumed = 0;
+            Check(FormationCommandExecutor.ExecuteWinner(winner, status, default(FormationCommandExecutor.LastDomainWrite),
+                5f, .2f, p => resumed++, null, false) && resumed == 1,
+                "routeA persistent overwrite release restores ordinary executor immediately");
+            string conflictSummary = e.BuildSummary(id);
+            Check(conflictSummary.Contains("externalWhileActive=0") && conflictSummary.Contains("edgeRetries=1")
+                && conflictSummary.Contains("externalDuration=1.000s"),
+                "routeA summary reports active overwrite count, edge retries, and overwrite duration with unit");
+            // After release, further engine writes are restoration activity, never high-frequency Route A retries.
             for (int i = 0; i < 200; i++)
-                e.SetterCompleted(e.SetterBeginning(f, CommandDomain.Movement, CommandSource.ExternalUnknown, 15 + i, 9, 9f + i), true, 9f + i);
-            Check(e.ReplacedFor(id) == 1, "routeA repeated external writes replace one Applied only once; >128 events retain history");
-            ObservedRouteWrite(e, f, 215, 220f); c.Applied(220f, true);
+                e.SetterCompleted(e.SetterBeginning(f, CommandDomain.Movement, CommandSource.ExternalUnknown, 17 + i, 9, 10f + i), true, 10f + i);
+            Check(e.ReplacedFor(id) == 2, "routeA repeated external writes after release do not create retries or replacements");
+            ObservedRouteWrite(e, f, 217, 220f); c.Applied(220f, true);
             c.Release(RouteAExit.Disabled, 221f);
             e.SetterCompleted(e.SetterBeginning(f, CommandDomain.Movement, CommandSource.ExternalUnknown, 216, 9, 222f), true, 222f);
-            Check(e.AppliedFor(id) == 2 && e.ReplacedFor(id) == 1 && e.StableFor(id) == 1,
+            Check(e.AppliedFor(id) == 2 && e.ReplacedFor(id) == 2 && e.StableFor(id) == 0,
                 "routeA external setter after Exit is restoration, not a new replacement");
+
             long exit = 0, afterExit = 0, replaced = 0, prevSeq = 0; bool strict = true; RouteAEvent item;
             while (e.TryRead(out item))
             {
@@ -181,6 +201,15 @@ namespace OfflineTests
             RouteASetterToken late = e.SetterBeginning(f, CommandDomain.Movement, CommandSource.ExternalUnknown, 300, 9, 223f);
             c.BeginSession(new object(), 224f); e.SetterCompleted(late, true, 225f);
             Check(e.AppliedFor(id) == 0 && e.ReplacedFor(id) == 0 && e.Count == 0, "routeA prior-session completion cannot contaminate new session");
+
+            // 外部在边沿回调到来前继续写：不能等下一次 0.5s Tick，也不能发出重试。
+            c = RouteController(); f = new RouteFake(); Arm(c, f); e = c.Evidence; id = c.IdentityId;
+            ObservedRouteWrite(e, f, 400, 300f); c.Applied(300f, true);
+            e.SetterCompleted(e.SetterBeginning(f, CommandDomain.Movement, CommandSource.ExternalUnknown, 401, 5, 301f), true, 301f);
+            e.SetterCompleted(e.SetterBeginning(f, CommandDomain.Movement, CommandSource.ExternalUnknown, 402, 5, 301.5f), true, 301.5f);
+            Check(!c.Owns(f) && f.Original && e.BuildSummary(id).Contains("externalWhileActive=1")
+                && e.BuildSummary(id).Contains("edgeRetries=0") && e.BuildSummary(id).Contains("externalDuration=0.500s"),
+                "routeA continuous external overwrite releases before retry without high-frequency resend");
 
             c = RouteController(); f = new RouteFake(); Arm(c, f); e = c.Evidence;
             e.ExpectSetter(f);

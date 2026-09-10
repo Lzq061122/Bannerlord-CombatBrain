@@ -4,7 +4,8 @@ namespace CombatBrain.Coordination
     using System.Globalization;
 
     public enum RouteAEventKind { Intent, BehaviorSelected, OrderApplied, UnverifiedApply, SetterBegin,
-        SetterCompleted, SetterSkipped, ExternalReplaced, ExternalWhileActive, ExternalAfterExit, Exit, Restore }
+        SetterCompleted, SetterSkipped, ExternalReplaced, ExternalWhileActive, ExternalAfterExit,
+        EdgeRetry, Exit, Restore }
 
     public struct RouteAEvent
     {
@@ -35,10 +36,12 @@ namespace CombatBrain.Coordination
         {
             public WeakReference Object;
             public int Team, Formation;
-            public long Intents, Selected, Applied, Replaced, Unverified, LastApplied, ExitSeq, Revision;
+            public long Intents, Selected, Applied, Replaced, ExternalWhileActive, EdgeRetries,
+                Unverified, LastApplied, ExitSeq, Revision;
             public int Changes, Flaps;
             public float X, Y;
             public bool Active, Pending;
+            public float FirstExternalAt, LastExternalAt, ExternalDuration;
             public Cps2RouteAIntent Intent;
         }
         public const int IdentityCapacity = 64;
@@ -71,6 +74,7 @@ namespace CombatBrain.Coordination
         public int Count { get { return _count; } }
         public int Identities { get { return _identities; } }
         public bool DirectCompleted { get { return _directCompleted; } }
+        public Action<int, bool, float> ExternalWriteObserved;
 
         public void BeginSession()
         {
@@ -148,8 +152,13 @@ namespace CombatBrain.Coordination
             {
                 bool replaced = s.Pending;
                 if (replaced) { s.Replaced++; s.Pending = false; }
+                else s.ExternalWhileActive++;
+                if (s.FirstExternalAt == 0f) s.FirstExternalAt = now;
+                s.LastExternalAt = now;
                 Record(token.Identity, replaced ? RouteAEventKind.ExternalReplaced : RouteAEventKind.ExternalWhileActive,
                     now, token.Seq, s.LastApplied, source: token.Source, orderType: token.OrderType, observer: token.ObserverSeq);
+                Action<int, bool, float> notify = ExternalWriteObserved;
+                if (notify != null) notify(token.Identity, replaced, now);
             }
             else if (s.ExitSeq != 0)
                 Record(token.Identity, RouteAEventKind.ExternalAfterExit, now, token.Seq, s.ExitSeq,
@@ -179,7 +188,14 @@ namespace CombatBrain.Coordination
         {
             Stats s = Get(id); if (s == null) return;
             s.Active = false; s.Pending = false;
+            if (s.FirstExternalAt != 0f) s.ExternalDuration = Math.Max(0f, now - s.FirstExternalAt);
             s.ExitSeq = Record(id, RouteAEventKind.Exit, now, reason: reason);
+        }
+        public void EdgeRetry(int id, float now)
+        {
+            Stats s = Get(id); if (s == null) return;
+            s.EdgeRetries++;
+            Record(id, RouteAEventKind.EdgeRetry, now, revision: s.Revision);
         }
         public void Restored(int id, RouteAExit reason, float now, int failures)
         { Record(id, RouteAEventKind.Restore, now, reason: reason, signal: failures); }
@@ -211,8 +227,10 @@ namespace CombatBrain.Coordination
         {
             Stats s = Get(id); if (s == null) return "";
             return string.Format(CultureInfo.InvariantCulture,
-                "session={0} identity={1} team={2} f={3} domain=Movement intent={4} selected={5} applied={6} replaced={7} stableSoFar={8} unverified={9} dropped={10} intentChange={11} weightFlap={12}",
+                "session={0} identity={1} team={2} f={3} domain=Movement intent={4} selected={5} applied={6} replaced={7} externalWhileActive={8} edgeRetries={9} externalDuration={10:F3}s stableSoFar={11} unverified={12} dropped={13} intentChange={14} weightFlap={15}",
                 Session, id, s.Team, s.Formation, s.Intents, s.Selected, s.Applied, s.Replaced,
+                s.ExternalWhileActive, s.EdgeRetries,
+                s.Active && s.FirstExternalAt != 0f ? Math.Max(0f, s.LastExternalAt - s.FirstExternalAt) : s.ExternalDuration,
                 s.Applied - s.Replaced, s.Unverified, Dropped, s.Changes, s.Flaps);
         }
     }

@@ -15,7 +15,8 @@ namespace CombatBrain.Coordination
     {
         None, Disabled, ModeChanged, MissionEnding, Replaced, EmptyOrInvalid,
         PlayerOwned, LostAIControl, NotFieldBattle, NotInfantry, InvalidCommand,
-        NavigationFailed, InitializationFailed, AdapterFailed, EvidenceCapacity, ForcedTick
+        NavigationFailed, InitializationFailed, AdapterFailed, EvidenceCapacity, ForcedTick,
+        ExternalOverridePersisted
     }
 
     public struct RouteAEligibility
@@ -54,8 +55,14 @@ namespace CombatBrain.Coordination
         private float _firstChangeAt;
         private int _chainSignal;
         private bool _hasChange;
+        private bool _externalRetryArmed, _externalRetryUsed;
         public int IntentChanges { get; private set; }
         public int Flaps { get; private set; }
+
+        public RouteAControl()
+        {
+            Evidence.ExternalWriteObserved = OnExternalWriteObserved;
+        }
 
         public void BeginSession(object mission, float now)
         {
@@ -68,6 +75,8 @@ namespace CombatBrain.Coordination
             Revision = _activation = 0;
             _signal = _chainSignal = 0;
             _writtenRevision = _writtenActivation = -1;
+            _externalRetryArmed = false;
+            _externalRetryUsed = false;
         }
 
         public bool Owns(object identity) { return Target != null && ReferenceEquals(Target.Identity, identity); }
@@ -105,6 +114,8 @@ namespace CombatBrain.Coordination
                 Intent = Cps2RouteAIntent.None;
                 _hasChange = false;
                 _writtenRevision = _writtenActivation = -1;
+                _externalRetryArmed = false;
+                _externalRetryUsed = false;
                 Evidence.Activate(id);
             }
             bool changed = intent != Intent || Math.Abs(x - _x) >= 5f || Math.Abs(y - _y) >= 5f;
@@ -162,7 +173,13 @@ namespace CombatBrain.Coordination
                 || !ReferenceEquals(behavior, Target.Behavior((int)Intent - 1)))
             { Release(RouteAExit.InvalidCommand, now); return false; }
             Evidence.Selected(IdentityId, Revision, now);
-            return _writtenRevision != Revision || _writtenActivation != _activation;
+            bool shouldWrite = _writtenRevision != Revision || _writtenActivation != _activation;
+            if (shouldWrite && _externalRetryArmed)
+            {
+                _externalRetryArmed = false;
+                Evidence.EdgeRetry(IdentityId, now);
+            }
+            return shouldWrite;
         }
 
         public void Applied(float now, bool verified, float? x = null, float? y = null)
@@ -170,6 +187,21 @@ namespace CombatBrain.Coordination
             if (Target == null) return;
             _writtenRevision = Revision; _writtenActivation = _activation;
             Evidence.Applied(IdentityId, Revision, now, verified, x ?? _x, y ?? _y);
+        }
+
+        private void OnExternalWriteObserved(int id, bool replaced, float now)
+        {
+            if (Target == null || id != IdentityId) return;
+            if (replaced && !_externalRetryUsed)
+            {
+                // One edge-triggered retry only. Invalidate the dedupe receipt without changing
+                // tactical revision/activation; the next real selected callback may write once.
+                _externalRetryArmed = true;
+                _externalRetryUsed = true;
+                _writtenRevision = _writtenActivation = -1;
+                return;
+            }
+            Release(RouteAExit.ExternalOverridePersisted, now);
         }
 
         public void Release(RouteAExit reason, float now)
@@ -188,6 +220,8 @@ namespace CombatBrain.Coordination
             Intent = Cps2RouteAIntent.None;
             IdentityId = 0;
             _hasChange = false;
+            _externalRetryArmed = false;
+            _externalRetryUsed = false;
         }
 
         public void EndSession(float now)
