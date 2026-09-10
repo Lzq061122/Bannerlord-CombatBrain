@@ -1,3 +1,18 @@
+<!-- PROMPT META
+Name: CombatBrain Repo Agent Bootstrap
+Version: 1.0
+Author Role: Project Governance Maintainer
+Model: GPT-5
+Created: 2026-09-09
+Updated: 2026-09-10
+Target: Codex / Agents starting from the code repo
+Scope: CombatBrain / Repo Bootstrap
+-->
+
+<!-- CHANGE LOG (newest first, keep last 3)
+v1.0 2026-09-10 21:20 | role=Project Governance Maintainer | model=DeepSeek V4.1 Flash | editor=manager | note=触碰时迁移补齐题头；新增 §7 提交署名（Editor-* trailer）
+-->
+
 # CombatBrain — Repo Agent Bootstrap
 
 > status: active
@@ -62,3 +77,13 @@ docs/knowledge/CURRENT_STATE.md ← 需要当前状态判断时读（先核对 l
 - 根据历史 handoff 猜当前状态；用旧 CONTEXT 状态表冒充当前事实。
 
 原则：Fail explicitly, never silently fall back to stale knowledge.
+
+## 7. 提交署名（Editor trailer）
+
+本机没有全局 `user.name`，人工与所有 AI 会话的提交共用同一 Git 身份，`git log` **看不出是谁改的**。因此：
+
+- 含 Prompt 内容变更的提交，必须在 commit body 末尾携带 `Editor-Role` / `Editor-Model` / `Editor-Team`，三者与文件内 CHANGE LOG 行一致；
+- 纯代码 / 构建类提交建议至少写 `Editor-Team`，便于后续区分执行方；
+- 不得依赖 `git config user.name` 作为身份来源。
+
+规则出处：`E:\MBmod\manager\Prompt 题头元数据规范.md` §16。
