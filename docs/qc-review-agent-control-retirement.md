@@ -190,3 +190,27 @@ CombatAI/AGENTS.md → repo AGENTS.md → docs/knowledge/INDEX.md（bootstrap）
 ### 12.5 Round-2 verdict
 
 **pass（增量范围）**——t11 三项验收全部独立成立、四命令全绿、账目闭合、无误伤、无新 finding 立项（残余观察 1 条 low 不阻断不回流）。本结论仅覆盖 t11 增量及其与 1ed91e1 锚点的一致性；整体任务链状态仍为 §0 的 **pass-with-runtime-debt**（游戏内 A/B 未闭环前不得升级为无条件 pass）。
+
+### 12.6 对抗性探针（应 captain 18:0x 点名项 3：分类规则可绕过性与元测试自证循环）
+
+QC 以门禁同构逻辑（复制收信者正则+名单，独立运行，不跑开发者的脚本本体）实测 10 类样本：
+
+| 样本形态 | 结果 | 判定 |
+|---|---|---|
+| `this.Agent.SetControlledByAI(…)` | 命中 1 | 属性链末端 `Agent` 被收（正则取点前最后标识符） |
+| `someField.Agent.SetControlledByAI(…)` | 命中 1 | 链式同上，不可借前缀绕过 |
+| `agent⏎ .AddAiBehavior(…)`（跨行） | 命中 1 | `\s*` 覆盖换行 |
+| `a.SetControlledByAI(…)` | 命中 1 | `a` 在名单 |
+| `formation.`/`f.AI.` | 命中 0 | L2/L3 保留语义正确放行 |
+| `var x = agent; x.…` / `ai.` / `aI.` | 命中 0 | **理论绕过面存在**，但见下「三层防御」分析 |
+
+**三层防御分析（结论：残余面不构成缺陷）**：
+1. **主战场无绕过面**：真正危险的四类逐兵 API（SetMovementDirection/SetTargetAgent/EnforceShieldUsage/TryToWieldWeaponInSlot）+ AgentDrivenProperties 写入 + SetScriptedFlags 用的是**裸模式、不区分收信者一律拦截**——别名/链式/任何命名都必命中，且带「retired fully removed」双重断言。
+2. **收信者规则保护的是编译期不存在的调用**：按审计表 §2.10 J3/J7（v1.4.8 反编译核验），`SetControlledByAI` 是 `Formation` 级、`AddAiBehavior` 是 `FormationAI` 级——Agent 类型上不存在这两个成员，`agent.SetControlledByAI` 形态当前**根本无法编译**；该规则是防「引擎升版后 Agent 出现同名 API」的**前瞻回归哨兵**，命名启发式的固有近似成立。
+3. **元测试非自证循环**：正/负样本为手写常量字符串 + 期望硬编码计数（2/0），正向样本同串混排 `agent.*` 与 `f.*` 证明的是**规则内判别力**而非规则复读；其作用是「未来改名单/改正则时立刻报警」（篡改检测），生产扫描断言（空命中）才是对当前分支的独立证据——两层证据源不同，结构成立。
+
+**探针总结论**：§12.5 的 pass 维持；残余观察（命名启发式）从 low 精确化定性为「前瞻哨兵的固有近似，当前不可利用」，不立项、不回流。
+
+### 12.7 锚点后漂移登记（如实报告，不改写基准）
+
+round-2 代码基准锁定 `31823b6`；其后分支新增两个 **docs-only** 提交：`c89276a`（本报告 §12）与 `eb74170`（Captain t11/t12 收尾登记：审计表 M12→resolved、final-report §5 台账同步）。产品代码与测试代码零变化，无需重新基准化复核；QC 核对 eb74170 内容与实测一致（M12 行、:410 台账行），**唯一措辞滞留**：final-report :127 风险第 5 条仍把 `DiagnosticCounters` 哨兵计数与 `SoldierTier` 死枚举列为「既有残留（承接任务）——已登记」，而两者已分别以 t11 执行/设计保留闭环——trivial（:112/:114 明细行已是正确状态），提请 captain 下次文档触碰时顺带收齐，不单独立项。F-3（BracePlan 死参数注释）的「登记不动」处置确认**可接受**：f6634f7 前既有、非行为缺陷、不在 t11 契约 inScope，追溯改动反而违反最小范围；已正确留痕于 final-report F-3 行。
