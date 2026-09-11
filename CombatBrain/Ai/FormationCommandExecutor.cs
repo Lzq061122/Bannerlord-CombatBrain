@@ -377,6 +377,8 @@ namespace CombatBrain.Ai
                     f.SetArrangementOrder(MapArrangementOrder(winner.ReasonCode));
                     break;
             }
+            // CB-PROMPT-0038 §九：临时只读诊断计数①（Formation 级写入；计数不改变任何行为）
+            DiagnosticCounters.CountFormationWrite();
         }
 
         /// <summary>

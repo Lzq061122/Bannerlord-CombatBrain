@@ -20,7 +20,8 @@ namespace CombatBrain.Mcm
         public override string FolderName { get; } = "CombatBrain";
         public override string FormatType { get; } = "json";
 
-        [SettingPropertyBool("玩家队豁免", RequireRestart = false)]
+        [SettingPropertyBool("玩家队豁免（全控制面）", RequireRestart = false,
+            HintText = "开＝对玩家队零主动写入：不改编队命令/编队行为权重、不改士兵移动方向、不强制格挡/换防/选敌/换武器、不改 AI 士兵战斗能力数值、不释放阵框；玩家队里的 AI 士兵同样在内，仅允许只读观测。关＝CombatBrain 只以军队级/编队级接管（不复活任何已退役的逐兵控制）")]
         [SettingPropertyGroup("通用")]
         public bool PlayerTeamExemptionEnabled
         {

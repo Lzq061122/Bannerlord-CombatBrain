@@ -57,14 +57,15 @@ namespace CombatBrain.Formations
         public System.Collections.Generic.List<AgentRoleEntry> Agents;      // 活跃 agent（胶水层喂）
         public System.Collections.Generic.List<SlotAssignment> Last;        // 上一拍指派（防抖动）
         public float Integrity;                                            // 编队完整度（走 Grade() 分流）
-        public System.Collections.Generic.HashSet<int> FrameDisabledAgents; // X4 解阵跳过集（可 null）
+        // CB-PROMPT-0038 §五.7：X4 解阵跳过集（FrameDisabledAgents）已删除——
+        //   它只服务于已退役的「逐兵向 Slot 目标移动」执行腿；解阵框现在是一次性 latch（见 FrameReleaseGlue.cs）。
     }
 
     public static class SlotAssigner
     {
         /// <summary>
         /// 指派：稳定保持（上一拍）+ 就近占位（未指派）。Full 严格同 Rank 补位；Slight 允许 |rank差|≤1。
-        /// 已解阵 agent 全程跳过。空输入返回空列表。只产出 assignments，不下移动命令。
+        /// 空输入返回空列表。只产出 assignments（编队级观察性绑定表），不下任何移动命令、无 Agent 写入。
         /// </summary>
         public static System.Collections.Generic.List<SlotAssignment> Assign(SlotAssignInput input)
         {
@@ -88,14 +89,13 @@ namespace CombatBrain.Formations
             var assignedAgents = new System.Collections.Generic.HashSet<int>();
             var takenSlots = new System.Collections.Generic.HashSet<int>();
 
-            // ① 稳定保持：上一拍 agent 存活、未解阵、slot 有效、角色匹配、未被占用 → 保持
+            // ① 稳定保持：上一拍 agent 存活、slot 有效、角色匹配、未被占用 → 保持
             if (input.Last != null)
             {
                 for (int i = 0; i < input.Last.Count; i++)
                 {
                     SlotAssignment prev = input.Last[i];
                     if (!roleByAgent.ContainsKey(prev.AgentIndex)) continue;               // 死亡/移除
-                    if (IsFrameDisabled(input, prev.AgentIndex)) continue;                 // X4 解阵跳过
                     if (prev.SlotIndex < 0 || prev.SlotIndex >= input.Slots.Count) continue; // slot 失效
                     if (takenSlots.Contains(prev.SlotIndex)) continue;                     // 已被他人占用
                     FormationSlot slot = input.Slots[prev.SlotIndex];
@@ -113,7 +113,6 @@ namespace CombatBrain.Formations
             {
                 AgentRoleEntry a = input.Agents[i];
                 if (assignedAgents.Contains(a.AgentIndex)) continue;
-                if (IsFrameDisabled(input, a.AgentIndex)) continue;
 
                 int prevRank = PreviousRank(input, a.AgentIndex); // -1 = 新兵（任意 Rank 可占）
                 int best = -1;
@@ -141,12 +140,6 @@ namespace CombatBrain.Formations
                 }
             }
             return result;
-        }
-
-        // X4 解阵跳过判定（消费 FrameRelease 判定语义：已 SetFormationFrameDisabled 的 agent 从刷新跳过）
-        private static bool IsFrameDisabled(SlotAssignInput input, int agentIndex)
-        {
-            return input.FrameDisabledAgents != null && input.FrameDisabledAgents.Contains(agentIndex);
         }
 
         // 上一拍该 agent 的 slot Rank（无上一拍 → -1 = 新兵）

@@ -12,11 +12,15 @@
     <Compile Include="..\CombatBrain\VecMath.cs" Link="VecMath.cs" />
     <Compile Include="..\CombatBrain\CombatBrainSettings.cs" Link="CombatBrainSettings.cs" />
     <Compile Include="..\CombatBrain\Combat\FighterProfile.cs" Link="Combat\FighterProfile.cs" />
-    <Compile Include="..\CombatBrain\Movement\MovementController.cs" Link="Movement\MovementController.cs" />
-    <Compile Include="..\CombatBrain\Survival\SurvivalInstinct.cs" Link="Survival\SurvivalInstinct.cs" />
+    <!-- CB-PROMPT-0038 §五.2：Movement/MovementController.cs（F6 逐兵走位决策内核）已退役删除，不再 link。
+         §五.5：Survival/SurvivalInstinct.cs 的个体判定已删除（仅保留退役说明注释）；
+         编队级重整信号 CasualtyReformSignal 迁至 Ai/CasualtyReformSignal.cs（命名空间仍为 CombatBrain.Survival），
+         此处显式 link 以便离线断言其窗口/阈值契约。 -->
+    <Compile Include="..\CombatBrain\Ai\CasualtyReformSignal.cs" Link="Ai\CasualtyReformSignal.cs" />
+    <Compile Include="..\CombatBrain\Ai\DiagnosticCounters.cs" Link="Ai\DiagnosticCounters.cs" />
     <Compile Include="..\CombatBrain\Cavalry\CavalryWaveFSM.cs" Link="Cavalry\CavalryWaveFSM.cs" />
     <Compile Include="..\CombatBrain\Ranged\RangedBrain.cs" Link="Ranged\RangedBrain.cs" />
-    <Compile Include="..\CombatBrain\Compliance\DecisionJitter.cs" Link="Compliance\DecisionJitter.cs" />
+    <!-- CB-PROMPT-0038 §五.4：Compliance/DecisionJitter.cs（F12 个体抖动纯逻辑）已退役删除，不再 link -->
     <Compile Include="..\CombatBrain\Morale\MoralePropagation.cs" Link="Morale\MoralePropagation.cs" />
     <Compile Include="..\CombatBrain\Morale\PhasedRetreat.cs" Link="Morale\PhasedRetreat.cs" />
     <Compile Include="..\CombatBrain\Experience\CounterMatrix.cs" Link="Experience\CounterMatrix.cs" />

@@ -109,9 +109,8 @@ namespace CombatBrain.Ai
 
         private readonly Dictionary<int, TeamState> _states = new Dictionary<int, TeamState>();
         private readonly Dictionary<int, LodLevel> _agentLod = new Dictionary<int, LodLevel>();
-        private readonly Dictionary<int, FighterProfile> _profiles = new Dictionary<int, FighterProfile>();
-        // F4 退役（CB-PROMPT-0038）：逐兵攻击方向统计字典已删除（预测式格挡无消费者）。
-        //   兵种素质 _profiles 仍为 F6/F7 走位与求生提供真实兵种分类（t3 退役）。
+        // F5 兵种素质 _profiles（FighterProfile 派生链）已随 CB-PROMPT-0038 §五.4/§五.2 消费者退役删除
+        //   （裁决 R3 消费者归零即删）；Mission 结束清理由 ClearMissionStaticState 负责（§八.10）。
 
         private readonly CombatEventBus _bus = new CombatEventBus();
         private ReplayRecorder _replay;
@@ -171,10 +170,10 @@ namespace CombatBrain.Ai
         // 用 static readonly 而非 const：const false 会让编译器报 CS0162 不可达代码警告，质量门要求 0 警。
         private static readonly bool PerceptionEnabled = true;
 
-        // F6 走位/绕侧胶水：0.2s 低频周期 + LOD 剧场效应 + 跳帧聚合（见 MovementGlue.cs）
-        private readonly MovementGlue _movement = new MovementGlue();
+        // F6 走位/绕侧：已整链退役（CB-PROMPT-0038 §五.2）——不再有 MovementGlue 实例与逐兵走位段。
 
-        // F7 求生/重整胶水：0.3s 低频周期，濒死靠拢友军 + 编队重伤重整信号（见 SurvivalGlue.cs）
+        // F7 编队级重整信号胶水：0.3s 低频周期，只统计重伤事件 → IntentType.Reform（见 SurvivalGlue.cs）；
+        //   单兵求生腿（自行寻友军 + SetMovementDirection 后撤）已随 §五.5 退役。
         private readonly SurvivalGlue _survival = new SurvivalGlue();
 
         // F9 远程编队级弹药快照胶水：0.3s 低频周期（CB-PROMPT-0038 §五.6 退役后形态）。
@@ -185,7 +184,8 @@ namespace CombatBrain.Ai
         // F8 骑兵波次胶水：0.5s 编队级周期，冲锋→回撤→重整→再冲（见 CavalryGlue.cs）
         private readonly CavalryGlue _cavalry = new CavalryGlue();
 
-        // X5-6 槽位布局胶水：0.5s 编队级，串联 X5-1..5 全链（归类→分流→布局→地形→纪律→指派→L3 个体补位）
+        // X5-6 编队级槽位快照胶水：0.5s 编队级（归类→分流→布局→地形→纪律→绑定表；零 Agent 写入，
+        //   逐兵补位执行腿已随 CB-PROMPT-0038 §五.7 退役）
         private readonly FormationSlotGlue _formationSlots = new FormationSlotGlue();
 
         // T5 骑射游击胶水：0.5s 编队级周期，骑射消耗/游击/夹击（绝不冲锋；见 SkirmishGlue.cs）
@@ -201,8 +201,10 @@ namespace CombatBrain.Ai
         // F10 反制矩阵/套路记忆胶水：纯事件驱动（IntentSwitched 反制换招 + 跨战役套路落盘，见 ExperienceGlue.cs）
         private readonly ExperienceGlue _experience = new ExperienceGlue();
 
-        // F12 个体抖动横切已退役（CB-PROMPT-0038 §五.4）：格挡决策点（F4）与走位/求生/远程的逐兵抖动
-        //   一并在本任务/后续卡退役，不再有 _jitterBlock / _lastBlockJitter 个体状态。
+        // F12 个体抖动（犹豫/延迟/疲劳/走形）已整链退役（CB-PROMPT-0038 §五.4）：
+        //   DecisionJitterGlue.cs、Compliance/DecisionJitter.cs、DecisionDelay.ScaleProfile 与
+        //   全部逐 Agent 抖动状态（_jitterBlock/_lastBlockJitter）已删除；
+        //   保留的指挥层迟滞只有 DecisionDelay.HoldTime/SwitchMargin（意图切换防抖，TeamState 构造处）。
 
         // F2 对手建模胶水：0.5s 编队级事件聚合（8 信号 → 敌方意图信念）+ 新 4 维填充
         // （EnemCav/FlankEx/Gap/Skirm，t11 A1）；读不懂 → belief=null 不注入（见 OpponentModelGlue.cs）
@@ -443,9 +445,8 @@ namespace CombatBrain.Ai
             TickFrameRelease(mission, dt);
             _bench.EndSection("framerelease");
 
-            _bench.BeginSection("movement");
-            TickMovement(mission, dt);
-            _bench.EndSection("movement");
+            // F6 逐兵走位段（movement）已整链退役（CB-PROMPT-0038 §五.2）：不再有逐兵 SetMovementDirection
+            // 决策段；编队去哪由编队级 MovementOrder / Formation Mission / Route A 表达。
 
             _bench.BeginSection("survival");
             TickSurvival(mission, dt);
@@ -508,6 +509,13 @@ namespace CombatBrain.Ai
                 //   供战斗后读日志判定（E_RouteA 模式或 RouteAEnabled 时输出）
                 // 即使已经退出 E 也排空 Exit/Restore；无诊断事件时不构造日志字符串。
                 CbRouteAPoC.FlushEvidence();
+
+                // CB-PROMPT-0038 §九：六类主动写入 + FrameRelease 只读计数（5s 汇总，零行为影响）。
+                //   Agent 侧五类恒为 0 = 「被退役的 Agent 主动写入全部为零」的运行期证据；
+                //   FrameRelease 单列输出写入次数/去重 agent 数/首末时刻/重复抢写标记。
+                CombatLog.Log(DiagnosticCounters.BuildWriteSummary());
+                string frameReleaseSummary = DiagnosticCounters.BuildFrameReleaseSummary();
+                if (frameReleaseSummary.Length > 0) CombatLog.Log(frameReleaseSummary);
             }
 
             _bench.EndFrame(dt, agentCount);
@@ -1438,19 +1446,18 @@ namespace CombatBrain.Ai
             return VecMath.Clamp01(rate * 2f);
         }
 
-        // ---------- F6 走位/绕侧（t3 退役范围；F9 后撤态查询已随个体远程腿删除） ----------
+        // ---------- F6 走位/绕侧：已整链退役（CB-PROMPT-0038 §五.2） ----------
+        //   退役内容：逐兵 Advance/StepBack/Strafe/RetreatToAllies/Hold 与个体走形扰动、
+        //   Agent.SetMovementDirection 写入、MovementGlue 与 MovementController 逐兵决策内核、
+        //   _lastJitterTime/_lastRetreatTime 等逐 Agent 状态。
+        //   编队去哪改由编队级 MovementOrder / Formation Mission / Route A 表达；个体怎么走交原版 AI。
 
-        private void TickMovement(Mission mission, float dt)
-        {
-            // F7 求生撤退中的兵跳过走位（求生优先级高于走位）
-            _movement.Tick(mission, dt, _elapsed, GetLod, GetProfile, GetMorale, _survival.IsRetreating);
-        }
-
-        // ---------- F7 求生本能 + 重整信号 ----------
+        // ---------- F7 编队级重整信号（个体求生腿已退役，CB-PROMPT-0038 §五.5） ----------
 
         private void TickSurvival(Mission mission, float dt)
         {
-            _survival.Tick(mission, dt, _elapsed, GetLod, GetProfile, GetMorale, _bus.Publish);
+            // 只统计编队级重伤事件 → IntentType.Reform 信号；无任何 Agent 写入。
+            _survival.Tick(mission, dt, _elapsed, GetLod, _bus.Publish);
         }
 
         // ---------- F9 远程目标/弹药取舍（逐兵腿已退役；仅编队级只读快照） ----------
@@ -1558,12 +1565,9 @@ namespace CombatBrain.Ai
                     Id2 = affectorAgent != null ? affectorAgent.Index : -1
                 });
                 _agentLod.Remove(affectedAgent.Index);
-                _profiles.Remove(affectedAgent.Index);
-                _movement.RemoveAgent(affectedAgent.Index);
                 _survival.Remove(affectedAgent.Index);
                 // F9 编队级快照无 per-agent 状态（逐兵腿退役）→ 无 RemoveAgent 清理项
                 _frameReleaseCooldown.Remove(affectedAgent.Index); // X4 解阵框冷却随 Agent 生命周期清理
-                _formationSlots.RemoveAgent(affectedAgent.Index); // X5-6 个体补位冷却随 Agent 生命周期清理
                 _morale.RecordCasualty(affectedAgent.Formation, _elapsed); // F11 脱阵窗口（事件驱动）
             }
         }
@@ -1595,9 +1599,13 @@ namespace CombatBrain.Ai
         // atc4-state-lifecycle P1-4 / atc4-snapshot-optimization OPT-4：跨 Mission 静态状态幂等清理入口
         //   （OnMissionStateFinalized/OnClearScene 双钩子共用，先聚合后清理；逻辑已拆至 MissionStateLifecycle；
         //   ATC-5R 租约 ReleaseAll 一并纳入——Mission 结束幂等交还原生 AI）
+        // CB-PROMPT-0038 §八.10 / R7：Mission 结束必须清空每 Agent 状态字典（不只依赖 OnAgentRemoved——
+        //   战场结束时大量存活 agent 不会触发 removed 回调，索引复用会继承旧 LOD；§八.10 要求无残留）。
         private void ClearMissionStaticState()
         {
             MissionStateLifecycle.ClearStatic(_opponent, _leaseGlue, Mission);
+            // 保留的每 Agent 状态（LOD 闸门字典，非控制写入；见 I11）——Mission 结束显式清空
+            _agentLod.Clear();
         }
 
         // T38-01 遥测事件分发：仅映射已有事件 → 计数（各计数点的详细调用留给后续 feature 各自补，
@@ -1681,10 +1689,10 @@ namespace CombatBrain.Ai
             return FormationArrangementKind.Other;
         }
 
-        // X5-6 槽位布局胶水（0.5s 编队级，TickFormationTactics 之后）：X5 全链落地——TroopClassifier 归类
+        // X5-6 编队级槽位快照胶水（0.5s 编队级，TickFormationTactics 之后）：TroopClassifier 归类
         // → TroopComposition 分流 → SlotLayout 生成 → TerrainWarp 形变 → Discipline 四态门控 →
-        // SlotAssigner 指派 → L3 个体补位（X4 冷却模式）。MCM 总开关 + 玩家豁免 + Bench 回退闸在
-        // FormationSlotGlue 内（X5Enabled/IndividualLegEnabled 静态开关，无 MCM 静默默认开）。
+        // SlotAssigner 绑定表（编队级观察性）。CB-PROMPT-0038 §五.7：逐兵补位执行腿已退役，
+        // 本层零 Agent 写入；MCM 总开关 + 玩家队豁免在 FormationSlotGlue 内（X5Enabled，无 MCM 静默默认开）。
         // 反作弊闸：只读己方编队聚合 + 公开地形；不 SetArrangementOrder（红线 1）/不新增解阵（红线 2）。
         private void TickFormationSlots(Mission mission, float dt)
         {
@@ -1692,7 +1700,7 @@ namespace CombatBrain.Ai
             if (_formationSlotsTimer > 0f) return;
             _formationSlotsTimer = 0.5f;
 
-            _formationSlots.Tick(mission, dt, _elapsed, GetLod, GetFormationIntegrity, _terrain);
+            _formationSlots.Tick(mission, dt, _elapsed, GetFormationIntegrity, _terrain);
         }
 
         // 编队完整度（Discipline 门控输入；与 TickFormationTactics L949-951 同口径，纯聚合）
@@ -2065,7 +2073,9 @@ namespace CombatBrain.Ai
                     // ③ 规模闸门 + 距离闸门（纯逻辑）
                     if (!FrameReleaseRules.ShouldReleaseFormation(true, dist, f.CountOfUnits)) continue;
 
-                    // 逐 agent 执行（本项为个体遍历例外：L3 闸门 + 冷却字典压规模）
+                    // 逐 agent 执行。产品裁决（CB-PROMPT-0038 K1/D1）：本项定性为**编队级统一接战政策**，
+                    //   逐兵调用只是引擎 API 形态（无编队级批量入口），本层不做任何逐兵战术判断：
+                    //   仅保留非战术门控——存活/人型/LOD/原版逃跑态/已在释放态(latch)/冷却。
                     foreach (IFormationUnit unit in f.Arrangement.GetAllUnits())
                     {
                         Agent agent = unit as Agent;
@@ -2074,17 +2084,17 @@ namespace CombatBrain.Ai
                         // 剧场闸门（硬性）：仅 L3（玩家可见区），L0-L2 交原版
                         if (!FrameReleaseRules.IsReleaseLod((int)GetLod(agent.Index))) continue;
 
-                        // F7 求生 / 原版逃跑态跳过（求生优先于散开）；
-                        // F9「远程后撤态」已随逐兵远程腿退役（CB-PROMPT-0038 §五.6），该跳过条件不复存在 → 传 false。
-                        if (FrameReleaseRules.ShouldSkipAgent(
-                            _survival.IsRetreating(agent.Index),
-                            false,
-                            agent.IsRunningAway)) continue;
+                        // ③ 非战术门控 + 一次性 latch：原版逃跑态跳过；已在释放态（IsFormationFrameEnabled
+                        //    == false，Agent.cs:1444 只读属性）→ 不重复写。恢复边界由原版 AI 每帧重建帧框
+                        //    （HumanAIComponent.ParallelUpdateFormationMovement，见 FrameReleaseGlue.cs 文件头核验）。
+                        if (FrameReleaseRules.ShouldSkipAgent(agent.IsRunningAway, !agent.IsFormationFrameEnabled)) continue;
 
-                        // 逐 agent 冷却限频（SetFormationFrameDisabled 一次性状态切换，冷却窗内不重发）
+                        // ④ 逐 agent 冷却限频（一次性状态切换，冷却窗内不重发）
                         if (!_frameReleaseCooldown.CanRelease(agent.Index, _elapsed)) continue;
 
-                        agent.SetFormationFrameDisabled(); // Agent.cs:2306-2308 已核实
+                        // 临时只读诊断计数（§九）：FrameRelease 单列——写入次数 / 去重 agent 数 / 时间分布
+                        DiagnosticCounters.CountFrameReleaseWrite(_elapsed, agent.Index);
+                        agent.SetFormationFrameDisabled(); // Agent.cs:2305-2311 已核实
                         _frameReleaseCooldown.MarkReleased(agent.Index, _elapsed);
                     }
                 }
@@ -2372,66 +2382,10 @@ namespace CombatBrain.Ai
         // P2-② 原 FindNearestEnemyAgent（L3 列表内 O(n²) 扫描，攻击者须为 L3）已删除；
         // 其唯一消费者 TickBlock（F4 预测式格挡）已随 CB-PROMPT-0038 §五.3 整链退役。
 
-        private FighterProfile GetProfile(Agent agent)
-        {
-            if (agent == null) return FighterProfileFactory.Create(SoldierTier.Soldier); // 兜底
-            int agentIndex = agent.Index;
-            FighterProfile p;
-            if (!_profiles.TryGetValue(agentIndex, out p))
-            {
-                // F5 分类：真实兵种数据（等级/护甲/老兵旗标），不再用 agentIndex 伪随机
-                p = FighterProfileFactory.Create(FighterProfileFactory.Classify(BuildSoldierInput(agent)));
-                _profiles[agentIndex] = p;
-            }
-            return p;
-        }
-
-        // 从可观察的兵种信息构造分类输入：骑乘→骑兵（骑射归并）、有远程武器→射手、否则步兵；
-        // 等级取 CharacterObject.Level；护甲取 SpawnEquipment 身体甲材质（None→Cloth 对齐 ArmorGrade）；
-        // 老兵旗标 = 英雄 或 等级≥4（久战折算）。
-        private static SoldierInput BuildSoldierInput(Agent agent)
-        {
-            var input = new SoldierInput();
-            if (agent.HasMount) input.Kind = SoldierKind.Cavalry;
-            else if (HasRangedWeapon(agent)) input.Kind = SoldierKind.Ranged;
-            else input.Kind = SoldierKind.Infantry;
-
-            input.Level = agent.Character != null ? agent.Character.Level : 3; // Classify 内 clamp 1-6
-            input.Armor = ClassifyArmorGrade(agent);
-            input.IsVeteran = (agent.Character != null && agent.Character.IsHero) || input.Level >= 4;
-            return input;
-        }
-
-        private static bool HasRangedWeapon(Agent agent)
-        {
-            for (EquipmentIndex i = EquipmentIndex.WeaponItemBeginSlot; i < EquipmentIndex.NumAllWeaponSlots; i++)
-            {
-                MissionWeapon w = agent.Equipment[i];
-                if (w.IsEmpty || w.CurrentUsageItem == null) continue;
-                if (w.CurrentUsageItem.IsRangedWeapon) return true;
-            }
-            return false;
-        }
-
-        private static ArmorGrade ClassifyArmorGrade(Agent agent)
-        {
-            try
-            {
-                EquipmentElement body = agent.SpawnEquipment[EquipmentIndex.Body];
-                if (body.IsEmpty || body.Item == null || body.Item.ArmorComponent == null)
-                    return ArmorGrade.Cloth; // 无甲视为布
-                switch (body.Item.ArmorComponent.MaterialType)
-                {
-                    case ArmorComponent.ArmorMaterialTypes.Plate: return ArmorGrade.Plate;
-                    case ArmorComponent.ArmorMaterialTypes.Chainmail: return ArmorGrade.Chainmail;
-                    case ArmorComponent.ArmorMaterialTypes.Leather: return ArmorGrade.Leather;
-                    default: return ArmorGrade.Cloth; // None / Cloth
-                }
-            }
-            catch
-            {
-                return ArmorGrade.Cloth;
-            }
-        }
+        // 注：原 GetProfile / _profiles（F5 兵种素质派生链）已随 CB-PROMPT-0038 §五.4（F12 纪律输入）与
+        //   §五.2（F6 绕侧意识）的消费者退役一并删除（裁决 R3「消费者归零即删」）：
+        //   四个字段的生产读取点（PredictConf@DecisionJitterGlue、FlankAware@MovementGlue）随模块删除归零，
+        //   FeintRate/Shakiness 在 t2 后即无读取者。X5-1 的兵种分类由 FormationSlotGlue.BuildSoldierInput
+        //   独立提供；其输入结构 SoldierInput 仍定义在 Combat/FighterProfile.cs（该文件归范围修正）。
     }
 }

@@ -15,6 +15,8 @@ namespace CombatBrain.Coordination
         {
             CommandProvenance.Instance.Clear();
             CombatBrain.Ai.InGameFeedback.ClearAll();
+            // CB-PROMPT-0038 §九：只读诊断计数跨 Mission 复位（Agent/Formation 索引复用不得继承旧计数）
+            CombatBrain.Ai.DiagnosticCounters.Reset();
             if (opponent != null) opponent.ClearAll();
             if (leaseGlue != null) leaseGlue.ReleaseAll(mission, LeaseReleaseReason.MissionEnding); // ATC-5R 租约幂等释放
         }

@@ -20,6 +20,87 @@
 | E/F/G/H/I（X5/F6/F12/F7 逐兵写入与个体态） | 删除/上收 | **未动（属 t3）** | 门禁以「t3 范围外」允许名单登记三处 `SetMovementDirection`（MovementGlue/SurvivalGlue/FormationSlotGlue），t3 完成后必须移除条目并使门禁全绿 |
 | 静态门禁 | 任务卡要求新增 | **已实施** | `OfflineTests/AgentWriteStaticChecks.ps1`（99 个生产文件扫描；允许名单逐文件逐符号 + 逐条理由；t2 退役 API 零容忍断言） |
 
+## 0b. 实施进度回填（t3）与断言映射
+
+### 0b.1 t3 实施状态
+
+| 审计条目 | t1 结论 | t3 实施状态 | 证据 |
+|---|---|---|---|
+| E1/E2/E5（X5 逐兵补位执行腿 + 冷却 + L3 腿开关） | 删除执行腿 | **已实施** | `Ai/FormationSlotGlue.cs`：删除 `RunIndividualLeg`（唯一 `agent.SetMovementDirection`）、`X5SlotCooldown`、`_slotCooldown`、`IndividualLegEnabled`、`ByIndex` 个体腿查表；`Formation/X5ExecutionPolicy.cs`：删除 `ShouldRunIndividualLeg`/`IsIndividualOverBudget`/`X5SlotCooldown`，仅保留 `ShouldRefreshSlots` |
+| E3/E4（编队构成/职责/布局/纪律/观察性 Slot 数据） | 保留 | **已实施** | `FormationSlotGlue.Tick` 保留归类→分流→`SlotLayout.Generate`→`TerrainWarp.Warp`→`FormationDisciplineController.Evaluate`→`SlotAssigner.Assign` 编队级快照（零 Agent 写入） |
+| E 连带（`FrameDisabledAgents` 跳过集） | 消费者随执行腿消失 | **已实施删除** | `Formation/SlotAssigner.cs`：删除 `SlotAssignInput.FrameDisabledAgents` 与 `IsFrameDisabled`；解阵框改为一次性 latch（见 D1） |
+| F1-F4（F6 逐兵走位 + 逐 Agent 态） | 删除 | **已实施** | 删除 `Ai/MovementGlue.cs`（唯一 `SetMovementDirection`）、`_movement` 字段/`TickMovement`/`movement` bench 段、`_lastJitterTime`/`_lastRetreatTime`/`_phase`/直方图 |
+| G1-G5（F12 个体抖动） | 删除个体语义 | **已实施** | 删除 `Ai/DecisionJitterGlue.cs`、`Compliance/DecisionJitter.cs`、`DecisionDelay.ScaleProfile`；`_jitterBlock`/`_lastBlockJitter` 已于 t2 删除；`DecisionDelay.HoldTime`/`SwitchMargin`（指挥层意图防抖）保留 |
+| H1-H3（F7 单兵求生腿 + 个体态） | 删除 | **已实施** | `Ai/SurvivalGlue.cs` 重写为**编队级事件累计**（无 `Agent` 写入）：只读公开血量 → `CasualtyReformSignal`（5s 窗/阈值 8）→`IntentType.Reform`；删除 `ApplyRetreat`/`IsRetreating`/`_retreating`/`_lastJitterTime`/敌情与友军扫描 |
+| H4（F7 编队级重整信号） | 保留 | **已实施** | `CasualtyReformSignal` 迁至 `Ai/CasualtyReformSignal.cs`（命名空间保持 `CombatBrain.Survival`），消费者为 `SurvivalGlue`；统计口径＝事件累计（非逐拍逐兵比例） |
+| I2/I3/I4/I10（逐 Agent 状态字典） | 删除 | **已实施** | `SurvivalGlue` 仅剩 `_wasCritical`（濒死边沿簿记，随 `Remove`/Mission 收尾清理）；F6/F12/X5 全部逐 Agent 字典删除 |
+| D1/K1（X4 阵框释放） | 待裁决 | **保留（产品裁决：编队级统一接战政策）** | 见 §2.4.1 与 §0b.3：一次性 latch（`!agent.IsFormationFrameEnabled`）+ 5s 冷却 + 玩家队编队层前置豁免 + 删除 F7/F9 跳过条件 |
+| §六 玩家队豁免 | 全控制面 | **已实施** | 逐兵 6 条路径随退役消失（未加任何 `IsPlayerTeam` 单点补丁）；MCM 文案改为「玩家队豁免（全控制面）」+ 明确 HintText |
+| §九 只读诊断计数 | 新增 | **已实施** | `Ai/DiagnosticCounters.cs`（六类写入 + FrameRelease 单列）+ `FormationCommandExecutor.ApplySetOrder` 计数① + 5s 汇总日志 + `MissionStateLifecycle` 复位 |
+
+### 0b.2 断言变更映射（t2 基线 1210 → t3 后 1162，−48；逐条）
+
+| # | 被删断言（名称/位置） | 条数 | 对应退役模块 | 归属 |
+|---|---|---|---|---|
+| 1 | `IdealGap(1,1)=1.3`；`far target -> Advance`（+2 伴随）；`too close -> StepBack`（+1）；`in gap + flank aware -> StrafeLeft`；`in gap + unaware -> Hold`（+2）；`surrounded -> RetreatToAllies`（+1） | 12 | `Movement/MovementController.cs`（`Decide`/`IdealGap`/`MoveAction`）+ `Ai/MovementGlue.cs` | t3 |
+| 2 | `low hp + focused + exposed -> RetreatToAllies`；`low hp + safe behind -> Hold`；`healthy -> Fight` | 3 | `Survival/SurvivalInstinct.cs`（`SurvivalInstinct.Decide`） | t3 |
+| 3 | `x56 L3 normal/L2/exempted/frame-disabled/budget over -> …` | 5 | `Formation/X5ExecutionPolicy.ShouldRunIndividualLeg` | t3 |
+| 4 | `x56 avgAi 4.9/5.1/5.0ms -> …` | 3 | `Formation/X5ExecutionPolicy.IsIndividualOverBudget`（个体腿 Bench 回退闸） | t3 |
+| 5 | `x56 cooldown initial/window/boundary/after Remove/per-agent` | 5 | `Formation/X5ExecutionPolicy.X5SlotCooldown` | t3 |
+| 6 | `x54 frame-disabled agent skipped`；`x54 frame-disabled agent2 not assigned` | 2 | `Formation/SlotAssigner.FrameDisabledAgents`/`IsFrameDisabled` | t3 |
+| 7 | F12 DecisionJitter 块（`perfect/worst/lo-hi/good-bad/clamped/never/always/same seed` 全部子断言） | 15 | `Compliance/DecisionJitter.cs` + `Ai/DecisionJitterGlue.cs` | t3 |
+| 8 | `decisiondelay strength 0/1/0.5 -> jitter …` | 3 | `Ai/DecisionDelay.ScaleProfile` | t3 |
+
+**合计 12+3+5+3+5+2+15+3 = 48**，与 1210→1162 的差额**逐条对齐**，无与退役无关的断言静默消失。
+替换/保留（非删除）说明：`ShouldSkipAgent` 断言由 3 参改 2 参（同 4 条改为 latch 语义，条数不变）；
+`ShouldRefreshSlots` 3 条保留（仅改注释「交原版」）；`x56 stopped -> skip refresh` 措辞更新；`CasualtyReformSignal` 5 条保留。
+
+### 0b.3 阵框释放（K1/D1）产品裁决与 v1.4.8 API 核验
+
+**产品裁决（2026-09-11，最高 operational 权威）**：**保留**，定性为「**编队级统一接战政策**」；引擎无编队级批量入口，逐兵调用 `SetFormationFrameDisabled()` 属 API 形态，不构成逐兵决策；禁止附带逐兵目标/移动/人格决策；刷新频率与恢复语义必须实证；运行期振荡风险记运行期验证债。
+
+**API 核验证据**（反编译 `TaleWorlds.MountAndBlade.dll` → 类型 `TaleWorlds.MountAndBlade.Agent`，本机 `bin\Win64_Shipping_Client`；行号＝ilspycmd 输出行）：
+
+| API | 签名 | 语义 | CB 侧用法 |
+|---|---|---|---|
+| `Agent.IsFormationFrameEnabled` | `public bool IsFormationFrameEnabled { get; private set; }`（:1444） | 只读帧框状态 | **一次性 latch**：`!agent.IsFormationFrameEnabled` 才写（`CombatAiMissionLogic.cs:2088`） |
+| `Agent.SetFormationFrameDisabled()` | `public void SetFormationFrameDisabled()`（:2305） | 禁用帧框（内部 `if (IsFormationFrameEnabled)` 才翻 false） | 唯一写入点（每 agent 至多一次 + 5s 冷却） |
+| `Agent.SetFormationFrameEnabled(...)` | `public void SetFormationFrameEnabled(WorldPosition position, Vec2 direction, Vec2 positionVelocity, float formationDirectionEnforcingFactor)`（:2315） | 重新建立帧框 | **CB 不调用**（恢复交原版） |
+| `Agent.TrySetFormationFrame(...)` | `public bool TrySetFormationFrame(in WorldPosition formationPosition, in Vec2 formationDirection)`（:3891） | position 有效→Enable，无效→Disable | CB 不调用（原版路径） |
+| `Agent.GetBaseFormationFrame(...)` | `public bool GetBaseFormationFrame(out WorldPosition formationPosition, out Vec2 formationDirection)`（:2051） | 取编队基准帧 | CB 不调用（原版路径） |
+
+**谁在什么时机重新建立阵框（恢复边界证据）**：
+`Agent.ForceUpdateCachedAndFormationValues`（:3707）→ AI 士兵分支 `ParallelUpdateCachedAndFormationValuesForAIAgent`（:3737）→
+`HumanAIComponent.ParallelUpdateFormationMovement()`（:3743）；非 AI 士兵走 `GetBaseFormationFrame` + `TrySetFormationFrame`（:3725-3726）。
+即 **阵框由原版 AI/引擎每帧按编队槽位重建**，CB 的一次性禁用会被原版行为自然覆盖（不会永久 skip），CB 无需 Reset 调用；
+`Agent.Tick`（:4745-4760）在位置变化时经 `TeamAI.OnFormationFrameChanged(isFrameEnabled:…)` 上报，满足「有激活/恢复/生命周期边界」。
+另：`SlotAssigner` 的逐兵「已解阵跳过集」已删除，编队级绑定表不再消费逐兵解阵状态 → 无永久 skip 路径。
+
+**4 项硬条件对照**：① 编队级触发（Charge/ChargeToTarget + ≤25m + >25 人）成立；② 5s/agent 冷却 + latch（禁止每拍/每 0.5s 重复写）成立；
+③ 玩家队零写入（编队层 `FrameReleaseRules.ShouldExempt` 前置，`CombatAiMissionLogic.cs:2151` 同口径）成立；
+④ ⑥「动作振荡」离线不可证 → **运行期验证债**，由 §九 A/B + 只读计数（FrameRelease 单列）闭环；若观测到重复抢写/振荡 → 回报 Captain 再议，不静默退役或放宽。
+
+### 0b.4 范围差异与已知未退役残留（SCOPE-AMEND；如实登记）
+
+**A. 已声明的连带路径归属**（t2 提交 6a33df4/7fc07bb 中的变更，不在 t2 最初 inScope）：
+`CombatBrain/Ranged/`、`CombatBrain/Combat/` 由 **t7**（SCOPE-AMEND-1）承接；
+`CombatBrain/CombatBrainSettings.cs` 由 **t8**（SCOPE-AMEND-2）承接；
+4 个 `CombatBrain/Ai/` 注释/观测文件（DecisionObservatory/DecisionJitterGlue/FrameReleaseGlue/MovementGlue）归 **t3**；
+ADR-0005 正式化归 **t5**。此为 inScope 契约过窄，非隐蔽越界。
+
+**B. t3 期间发现的已知未退役残留**（不在 t3 inScope，已按纪律上报 Captain，裁决前不越界删除）：
+
+| 残留 | 状态 | 证据 | 归属建议 |
+|---|---|---|---|
+| `CombatBrain/Movement/MovementController.cs` | **死代码**：F6 逐兵决策内核（`MoveAction`/`MovementContext`/`MovementController.Decide`/`IdealGap`），唯一消费者 `Ai/MovementGlue.cs` 已删除 | `AgentWriteStaticChecks.ps1` 断言「零生产引用 MovementController/MovementContext/MoveAction」PASS；文件仍在盘上（未删除） | 加入 t3 inScope 后整文件删除，门禁恢复硬断言 |
+| `CombatBrain/Combat/FighterProfile.cs` | **部分死**：`FighterProfile` 四字段（`PredictConf`/`FeintRate`/`FlankAware`/`Shakiness`）生产读取点已归零（t3 删 `_profiles`/`GetProfile` 后）；`FighterProfileFactory.Create/Classify` 生产消费者为零（仅离线断言用）；`SoldierInput`/`PrimaryWeaponClass`/`ArmorGrade` **仍被 `FormationSlotGlue.BuildSoldierInput` + `TroopClassifier` 消费** | §0b.1 I12 行、§6 M10 行；`grep GetProfile|FighterProfileFactory|SoldierInput` 结果 | 加入 t3 inScope 后：删除 `FighterProfile` 四字段与 `FighterProfileFactory`，保留 `SoldierInput` 结构（迁至 `Formation/` 或保留原位） |
+| `CombatBrain/Survival/SurvivalInstinct.cs` | **已按 R3 处理**：个体判定（`SurvivalAction`/`SurvivalContext`/`SurvivalInstinct.Decide`）已删除，文件仅剩退役说明注释；`CasualtyReformSignal` 迁至 `Ai/CasualtyReformSignal.cs`（命名空间保持 `CombatBrain.Survival`） | §0b.1 H1/H3/H4 行 | 该文件（路径）不在 t3 inScope；保留为「空占位 + 说明」，或按范围修正删除 |
+
+**C. 玩家队豁免现状（§六口径）**：开启时 **7 项全控制面零写入** —— 编队命令/编队行为权重（唯一执行器 + 各 Glue 前置豁免）、士兵移动方向、格挡/换防/选敌/换武器、AI 士兵战斗能力属性、阵框释放（编队层 `ShouldExempt` 前置）。
+逐兵 6 条路径（原 MovementGlue:223 / SurvivalGlue:197 / RangedGlue:187/197/232 / CombatAiMissionLogic:1605）**随退役消失，未加任何 `IsPlayerTeam` 单点补丁**（符合派单 §二）。豁免关闭时：编队/军队级接管恢复，但已退役的逐兵系统**不复活**（源码中写入点已不存在，且有门禁 ②–⑥ 零容忍断言）。
+
+
+
 
 ---
 
@@ -309,10 +390,10 @@ MCM 文案现状：`CombatBrainMcmSettings.cs:23` `[SettingPropertyBool("玩家�
 | M4 | 明确玩法能力数值不属于 CombatBrain 职责 | `CONSTITUTION.md:48`「不改玩法数值」已有近似条款；需明确覆盖「AI 单兵战斗能力参数（格挡/招架/攻击概率/射击误差/防守方向随机化）」 | `CONSTITUTION` §3.2（扩充语义） |
 | M5 | 本次方向变化登记为正式 ADR | 本任务交付 `docs/adr/ADR-0005-individual-control-plane-retirement.md`（**草案**，status=proposed） | `docs/adr/README.md` §5 Register（登记属架构级权限） |
 | M6 | F4/F6/F7/F9/F12/X2/X5 退役部分标 `RETIRED` 或重新定义 | `NOMENCLATURE.md:22` 现列「F4 预测式格挡 / F6 走位 / F7 求生重整 / F9 远程 / F12 决策抖动」为现行功能 | `docs/knowledge/NOMENCLATURE.md` |
-| M7 | 阵框释放（K1）保留或退役的**产品裁决** | §2.4.1：条件 ⑥ 未证明、条件 ④ 恢复边界缺失 | 影响 CONSTITUTION 新禁令的边界（M2）与 `FrameReleaseGlue` 存废 |
+| M7 | 阵框释放（K1）保留或退役的**产品裁决** | **resolved（产品裁决：保留，编队级统一接战政策）** —— 附 v1.4.8 API 核验（§0b.3：类型 `TaleWorlds.MountAndBlade.Agent`，`SetFormationFrameDisabled`/`SetFormationFrameEnabled`/`IsFormationFrameEnabled`/`TrySetFormationFrame` 的签名与调用方）＋ 4 项硬条件（编队级触发 / 一次性 latch+5s 冷却 / 玩家队零写入 / 运行期计数实证）＋ 运行期验证债（动作振荡与恢复时机由 §九 A/B + FrameRelease 单列计数闭环，观测异常则回报 Captain 再议） | 执行落点：`docs/agent-control-retirement-ab-checklist.md` §3/§4；规范层影响见 M2 |
 | M8 | CPS 功能冻结令冲突处理与合并时点 | 冻结令禁「新主动移动 Glue / 新状态机 / 新直接 SetOrder 调用点」（`CONSTITUTION.md:159`）；本任务是**退役**（减写者面），与冻结令目标同向，但仍属架构级变更 | CONSTITUTION §7.2 + 需要 Integration Owner 记录 Waiver / architecture decision（INDEX §4） |
-| M9 | MCM 文案与死开关清理 | `CombatBrainMcmSettings.cs:23` 无 HintText；`CombatBrainSettings.cs:25` `HandSkillStrength` 无 MCM 项（死开关） | MCM 描述属产品文案；`HandSkillStrength` 退役随 t2 |
-| M10 | `_profiles`/`FighterProfile` 是否整表退役（I12） | 退役 F4/F6/F12 后消费者可能归零 | 属实现裁决（t2/t3），但影响「无消费者状态不得保留」口径的一致性，建议 Captain 明确 |
+| M9 | MCM 文案与死开关清理 | `HandSkillStrength` 死开关已随 t2 删除（t8 承接声明）；MCM「玩家队豁免」文案已改为「玩家队豁免（全控制面）」+ 全控制面 HintText（`CombatBrainMcmSettings.cs:23-30`，t3） | 文字/设置层已落地；规范层无剩余待裁决项 |
+| M10 | `_profiles`/`FighterProfile` 是否整表退役（I12） | **resolved（按 R3「消费者归零即删」执行）** —— t3 已删除 `_profiles` 字典与 `GetProfile`（`CombatAiMissionLogic.cs`）；四个字段的生产读取点（`DecisionJitterGlue.cs:47` 读 `PredictConf`、`MovementGlue.cs:160` 读 `FlankAware`）随模块退役归零，`FeintRate`/`Shakiness` 在 t2 后即无读取者；**残留**：`Combat/Combat/FighterProfile.cs`（数据结构本体）不在 t3 inScope，已上报 Captain；其唯一生产引用是 `FormationSlotGlue.BuildSoldierInput`（X5-1 版本，定义在该 glue 内），`FighterProfileFactory.Create/Classify` 现无生产消费者（仅离线断言使用） | 待范围修正后整文件退役（同下节「已知未退役残留」） |
 
 ---
 

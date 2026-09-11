@@ -1,7 +1,6 @@
 using System;
 using System.Collections.Generic;
 using TaleWorlds.Core;
-using TaleWorlds.Library;
 using TaleWorlds.MountAndBlade;
 using CombatBrain.Combat;
 using CombatBrain.Formations;
@@ -10,23 +9,21 @@ using CombatBrain.Perception;
 
 namespace CombatBrain.Ai
 {
-    // X5-6 执行映射胶水（FormationSlotGlue）—— X5 全链的落地步（唯一触碰游戏 API 的接线）。
-    // 串联（0.5s 编队级节拍，由 CombatAiMissionLogic.TickFormationSlots 驱动，TickFormationTactics 之后）：
-    //   TroopClassifier 归类（逐 agent 低频聚合，0.5s 一次，非逐帧）→ TroopComposition 分流
-    //   → SlotLayout.Generate（三布局）→ TerrainWarp.Warp（地形形变）→ FormationDisciplineController
-    //   Evaluate 门控 → SlotAssigner.Assign（稳定指派）→ 执行腿 (b) L3 个体补位。
-    // 执行腿 (a) 编队纪律内手段（L0-L2 主）：本层不改编队命令/排列（红线 1 不 SetArrangementOrder——
-    //   T2-01 领地），编队级只产出 Slot 目标并记录日志，纪律维持交原版（设计稿 §六）。
-    // 执行腿 (b) L3 个体补位（X4 冷却模式）：仅 L3（玩家可见区）逐 agent SetMovementDirection
-    //   朝向 slot 目标，复用 X5SlotCooldown 冷却字典限频（p3-1 设计，键=agent.Index，OnAgentRemoved 清理）；
-    //   X4 已解阵 agent（IsFormationFrameEnabled=false，Agent.cs:1445 已核实）跳过（红线 2 语义独立）。
-    // Discipline 门控（x5-discipline-assigner-redundancy 落点）：MaintainSlots=false（Severe/Collapsed）
-    //   → 跳过指派/刷新（交 F6 近战走位）。
-    // MCM 开关：X5Enabled 总开关（默认开，注释声明 MCM「真实度」组接线点——无 MCM 静默默认开）；
-    //   玩家队豁免沿用 P0-④ CombatBrainSettings.PlayerTeamExemptionEnabled。
-    // Bench 回退闸（铁律②）：IndividualLegEnabled 静态开关，集成轮 [Bench] 个体段 avgAi 超 5ms 时置 false
-    //   回退个体腿（仅编队纪律内手段保留）——清 x5-runtime-bench-debt。
-    // 反作弊闸：只读己方编队聚合（角色/构成/中心/完整度）与公开地形，零读指针/全图/隐藏态。
+    // X5-6 编队级槽位快照胶水（FormationSlotGlue）—— CB-PROMPT-0038 §五.7 退役后形态。
+    //
+    // 保留（编队级、纯观察性）：0.5s 节拍下把 X5-1..X5-5 纯逻辑链跑成一份**编队级快照**：
+    //   TroopClassifier 归类（聚合计数）→ TroopComposition 分流 → SlotLayout.Generate（三布局）
+    //   → TerrainWarp.Warp（地形形变）→ FormationDisciplineController 门控 → SlotAssigner.Assign（agent↔slot 绑定表）。
+    //   **本层不再有任何 Agent 写入，也不产出逐兵导航目标**：绑定表仅作编队级观察/后续合法通道消费。
+    //
+    // 退役（逐兵执行腿，已删除）：原「执行腿 (b) L3 个体补位」——逐 agent 计算朝向 slot 的方向并调用
+    //   Agent.SetMovementDirection，配套 X5SlotCooldown 逐 agent 冷却、Bench 回退闸 IndividualLegEnabled、
+    //   以及 X4 解阵跳过集（SlotAssigner 的 FrameDisabledAgents）。具体怎么走到 slot 交还原版 AI。
+    //   （原执行腿 (a)「编队纪律内手段」本就不下命令，保持：不 SetArrangementOrder，动阵型归 T2-01 领地。）
+    //
+    // 玩家队豁免（P0-④）：豁免开启时玩家队整体不进入本层（不计算、不消费）；豁免关闭时也只做编队级观察。
+    // MCM 开关：X5Enabled 总开关（默认开，无 MCM 静默默认开）。
+    // 反作弊闸：只读己方编队聚合（角色/构成/中心/完整度/公开装备）与公开地形，零读指针/全图/隐藏态。
     public sealed class FormationSlotGlue
     {
         public const float TickInterval = 0.5f; // 0.5s 编队级节拍（与 TickFormationTactics 同频）
@@ -34,46 +31,34 @@ namespace CombatBrain.Ai
         // X5 总开关（MCM「真实度」组接线点；无 MCM 静默默认开——t73 懒加载惯例）
         public static bool X5Enabled = true;
 
-        // Bench 回退闸：500 人 [Bench] 个体段 avgAi 超 5ms → 集成轮置 false 回退个体腿（仅纪律内手段保留）
-        public static bool IndividualLegEnabled = true;
-
-        // 个体补位冷却（X4 FrameReleaseCooldown 同款：键=agent.Index，秒数制，OnAgentRemoved 清理）
-        private readonly X5SlotCooldown _slotCooldown = new X5SlotCooldown();
-
         // 每编队上拍指派（SlotAssigner 稳定映射基准，防抖动；编队解散/纪律停止时清理）
         private readonly Dictionary<Formation, List<SlotAssignment>> _lastByFormation = new Dictionary<Formation, List<SlotAssignment>>();
 
-        // atc4-snapshot-optimization OPT-2：每编队 agent 快照缓冲（一次遍历生成本拍全部聚合数据——
-        //   编成统计/失效 Agent 收集/AgentEntry 构建/个体腿索引表；原四段各自遍历 GetAllUnits() 合并为一次；
-        //   字段级复用（Clear 后重填）避免每拍 new List/HashSet/Dictionary）
+        // atc4-snapshot-optimization OPT-2：每编队 agent 快照缓冲（一次遍历生成本拍聚合数据——
+        //   编成统计 + AgentRoleEntry 构建；字段级复用（Clear 后重填）避免每拍 new List/字典）
         private readonly Dictionary<Formation, FormationAgents> _agentSnap = new Dictionary<Formation, FormationAgents>();
 
-        // OPT-2：编队 agent 快照（单次遍历填充；Comp=角色计数 / FrameDisabled=X4 解阵索引集 /
-        //   Entries=存活人类 AI 的 AgentRoleEntry / ByIndex=存活 agent 索引表（个体腿 O(1) 查表））
+        // OPT-2：编队 agent 快照（单次遍历填充；Comp=角色计数 / Entries=存活人类 AI 的 AgentRoleEntry）
         private sealed class FormationAgents
         {
             public TroopComposition Comp = new TroopComposition();
-            public readonly HashSet<int> FrameDisabled = new HashSet<int>();
             public readonly List<AgentRoleEntry> Entries = new List<AgentRoleEntry>();
-            public readonly Dictionary<int, Agent> ByIndex = new Dictionary<int, Agent>();
         }
 
         private float _sinceTick;
 
         /// <summary>
-        /// 0.5s 编队级驱动：X5 全链（归类→分流→布局→地形→纪律门控→指派→L3 个体补位）。
-        /// getLod：agent LOD 查询（剧场闸）；getIntegrity：编队完整度（Discipline 门控输入）；
-        /// terrain：TerrainSampler（可 null → TerrainWarp 降级不形变）。
+        /// 0.5s 编队级驱动：编队级槽位快照链（归类→分流→布局→地形→纪律门控→绑定表）。
+        /// getIntegrity：编队完整度（Discipline 门控输入）；terrain：TerrainSampler（可 null → 降级不形变）。
+        /// **无任何 Agent 写入**。
         /// </summary>
         public void Tick(Mission mission, float dt, float now,
-            Func<int, LodLevel> getLod, Func<Formation, float> getIntegrity, TerrainSampler terrain)
+            Func<Formation, float> getIntegrity, TerrainSampler terrain)
         {
             _sinceTick += dt;
             if (_sinceTick < TickInterval) return;
             _sinceTick = 0f;
             if (!X5Enabled || mission == null) return;
-
-            bool budgetOver = !IndividualLegEnabled; // 集成轮已回退个体腿 → 等价于超预算
 
             foreach (Team team in mission.Teams)
             {
@@ -84,19 +69,18 @@ namespace CombatBrain.Ai
                 {
                     if (f == null || f.CountOfUnits == 0 || f.QuerySystem == null)
                     {
-                        RemoveFormation(f); // 空编队/解散：清 _lastByFormation（防字典滞留，行为等价）
+                        RemoveFormation(f); // 空编队/解散：清缓存（防字典滞留，行为等价）
                         continue;
                     }
                     // 骑兵/骑射编队走 F8/Skirmish，不进 X5 近战布局通道
                     if (f.QuerySystem.IsCavalryFormation || f.QuerySystem.IsRangedCavalryFormation) continue;
 
-                    // ① 逐 agent 快照（OPT-2 合并：归类计数+解阵索引+条目+索引表一次遍历，0.5s 低频聚合，禁逐帧）
+                    // ① 编队级聚合快照（归类计数 + 条目，0.5s 一次；禁逐帧）
                     FormationAgents snap = BuildAgentSnap(f);
                     if (snap.Comp.Total == 0) continue;
 
                     // ② 分流（§五）：Ranged 为主 → RangedLoose；近战为主 → 消费 T2-01 结果
                     TacticsArrangement arrangement = MapArrangement(f.ArrangementOrder);
-                    LayoutKind kind = SlotLayout.SelectLayout(snap.Comp, arrangement);
 
                     // ③ 布局生成（X5-2）+ 地形形变（X5-3）
                     SlotLayoutInput layoutInput = SlotLayoutInput.Default(snap.Comp, arrangement);
@@ -108,16 +92,16 @@ namespace CombatBrain.Ai
                     List<FormationSlot> slots = SlotLayout.Generate(layoutInput);
                     if (terrain != null) slots = TerrainWarp.Warp(slots, BuildTerrainContext(terrain, layoutInput));
 
-                    // ④ 纪律门控（X5-5）：Severe/Collapsed 停止维护 → 跳过指派/刷新（x5-discipline-assigner-redundancy）
+                    // ④ 纪律门控（X5-5）：Severe/Collapsed 停止维护 → 跳过刷新（x5-discipline-assigner-redundancy）
                     float integrity = getIntegrity != null ? getIntegrity(f) : 100f;
                     DisciplineOutput discipline = FormationDisciplineController.Evaluate(integrity);
                     if (!X5ExecutionPolicy.ShouldRefreshSlots(discipline))
                     {
-                        _lastByFormation.Remove(f); // 停刷：清上拍缓存（交 F6 近战走位）
+                        _lastByFormation.Remove(f); // 停刷：清上拍缓存
                         continue;
                     }
 
-                    // ⑤ 稳定指派（X5-4）：上拍缓存 + X4 已解阵跳过集（OPT-2：快照已含 frameDisabled/entries）
+                    // ⑤ 稳定绑定表（X5-4，纯观察性）：上拍缓存防抖动；不产生任何写入/导航目标
                     List<SlotAssignment> last;
                     _lastByFormation.TryGetValue(f, out last);
                     var assignInput = new SlotAssignInput
@@ -125,25 +109,14 @@ namespace CombatBrain.Ai
                         Slots = slots,
                         Agents = snap.Entries,
                         Last = last,
-                        Integrity = integrity,
-                        FrameDisabledAgents = snap.FrameDisabled
+                        Integrity = integrity
                     };
-                    List<SlotAssignment> assignments = SlotAssigner.Assign(assignInput);
-                    _lastByFormation[f] = assignments;
-
-                    // ⑥ 执行腿 (b)：L3 个体补位（冷却 + 未解阵 + 未豁免 + 未超预算；OPT-2 复用快照索引表/解阵集）
-                    RunIndividualLeg(f, slots, assignments, now, getLod, budgetOver, snap.ByIndex, snap.FrameDisabled);
+                    _lastByFormation[f] = SlotAssigner.Assign(assignInput);
                 }
             }
         }
 
-        // Agent 生命周期清理（CombatAiMissionLogic.OnAgentRemoved 挂点）
-        public void RemoveAgent(int agentIndex)
-        {
-            _slotCooldown.Remove(agentIndex);
-        }
-
-        // 编队解散/重排时清理（防字典只增不减；OPT-2：同步清 agent 快照缓冲）
+        // 编队解散/重排时清理（防字典只增不减）
         public void RemoveFormation(Formation f)
         {
             if (f != null)
@@ -153,43 +126,9 @@ namespace CombatBrain.Ai
             }
         }
 
-        // ---- 执行腿 (b)：仅 L3 逐 agent 微调（SetMovementDirection 朝向 slot）----
-
-        private void RunIndividualLeg(Formation f, List<FormationSlot> slots, List<SlotAssignment> assignments,
-            float now, Func<int, LodLevel> getLod, bool budgetOver,
-            Dictionary<int, Agent> agentByIndex, HashSet<int> frameDisabled)
-        {
-            // OPT-2：agentByIndex/frameDisabled 由 BuildAgentSnap 单次遍历提供（原每编队再遍历建表，O(M) 合并）
-
-            for (int i = 0; i < assignments.Count; i++)
-            {
-                SlotAssignment a = assignments[i];
-                if (a.SlotIndex < 0 || a.SlotIndex >= slots.Count) continue;
-                Agent agent;
-                if (!agentByIndex.TryGetValue(a.AgentIndex, out agent)) continue;
-                if (agent == null || !agent.IsActive() || !agent.IsAIControlled || !agent.IsHuman) continue;
-
-                // 剧场闸（硬性）：仅 L3（玩家可见区）执行个体腿，L0-L2 交原版/纪律内手段
-                if (!X5ExecutionPolicy.ShouldRunIndividualLeg(
-                    (int)getLod(a.AgentIndex), false, frameDisabled.Contains(a.AgentIndex), budgetOver)) continue;
-                if (agent.IsRunningAway) continue; // 原版逃跑态尊重（与 MovementGlue 同语义）
-                if (!_slotCooldown.CanRelease(a.AgentIndex, now)) continue; // 冷却限频
-
-                FormationSlot slot = slots[a.SlotIndex];
-                Vec2 dir = new Vec2(slot.WorldX - agent.Position.x, slot.WorldY - agent.Position.y);
-                float len = (float)Math.Sqrt(dir.x * dir.x + dir.y * dir.y);
-                if (len < 0.3f) continue; // 已到位（防微颤）
-                dir.x /= len; dir.y /= len;
-                agent.SetMovementDirection(dir); // 引擎级移动方向输入（MovementGlue.cs:223 先例）
-                _slotCooldown.MarkReleased(a.AgentIndex, now);
-            }
-        }
-
         // ---- 编队聚合/映射辅助（反作弊闸：全部己方公开聚合）----
 
-        // OPT-2：编队 agent 单次遍历快照——合并原 AggregateComposition（角色计数）/BuildAgentEntries
-        //   （AgentRoleEntry 列表）/CollectFrameDisabled（X4 解阵索引集）/个体腿索引表 四段遍历为一次
-        //   GetAllUnits() 扫描；字段级缓冲复用（Clear 后重填，零每拍 new 大容器）。
+        // OPT-2：编队 agent 单次遍历快照（角色计数 + AgentRoleEntry；字段级缓冲复用）
         private FormationAgents BuildAgentSnap(Formation f)
         {
             FormationAgents s;
@@ -199,17 +138,12 @@ namespace CombatBrain.Ai
                 _agentSnap[f] = s;
             }
             s.Comp = new TroopComposition();
-            s.FrameDisabled.Clear();
             s.Entries.Clear();
-            s.ByIndex.Clear();
 
             foreach (IFormationUnit unit in f.Arrangement.GetAllUnits())
             {
                 Agent agent = unit as Agent;
                 if (agent == null) continue;
-                // X4 已解阵索引（对任意 agent，与原 CollectFrameDisabled 口径一致：不要求 active/human）
-                if (!agent.IsFormationFrameEnabled) s.FrameDisabled.Add(agent.Index);
-                // 编成统计/条目/索引表（与原 AggregateComposition/BuildAgentEntries/个体腿建表口径一致）
                 if (!agent.IsActive() || !agent.IsHuman || !agent.IsAIControlled) continue;
                 TroopRole role = TroopClassifier.Classify(BuildSoldierInput(agent));
                 switch (role)
@@ -222,7 +156,6 @@ namespace CombatBrain.Ai
                     case TroopRole.Cavalry: s.Comp.Cavalry++; break;
                 }
                 s.Entries.Add(new AgentRoleEntry(agent.Index, role, agent.Position.x, agent.Position.y));
-                s.ByIndex[agent.Index] = agent;
             }
             return s;
         }

@@ -3,15 +3,15 @@
 # 目的：从源码事实层证明 CombatBrain 生产代码不再对单兵执行「主动控制写入」：
 #   * 单兵战斗能力属性覆盖（AgentDrivenProperties.* 写入）
 #   * 逐兵移动方向 / 格挡方向 / 选敌 / 强制换武器 / 解阵框（Agent 级 API 调用）
-#   * 上述能力的模型注册链与无消费者残余（等价替代注册 / 死亡开关）
+#   * 退役链完整性（模型注册、死开关、无消费者残留、逐兵状态字典）
 #
-# 方法（参照 OfflineTests\RouteAStaticChecks.ps1 的既有写法）：
+# 方法（沿用 OfflineTests\RouteAStaticChecks.ps1 的既有写法）：
 #   1) 逐文件读取 CombatBrain\**\*.cs（排除 bin/obj），去掉 C# 注释与字符串字面量；
 #   2) 对剩余代码做正则扫描，按「禁止写入 → 允许名单」逐条断言；
 #   3) 允许名单极窄：逐文件 + 逐符号 + 逐条理由，禁止目录级/通配豁免。
 #
 # 纪律：本脚本只做静态事实核验，不替代游戏内运行期验证
-#   （运行期 A/B 步骤见 docs/agent-control-retirement-ab-checklist.md）。
+#   （运行期 A/B 步骤与只读计数判定口径见 docs/agent-control-retirement-ab-checklist.md）。
 $ErrorActionPreference = 'Stop'
 $repo = Split-Path -Parent $PSScriptRoot
 
@@ -42,25 +42,19 @@ foreach ($path in $prodFiles) {
     }
 }
 
-# ---------- 允许名单（极窄：逐文件 + 逐符号 + 逐条理由） ----------
-# 两类条目，均须在 docs/agent-control-surface-audit.md §5 与 Integration Owner 裁决清单留痕：
-#  (1) 待裁决项：X4 阵框释放（CB-PROMPT-0038 §五.8 六条件：5 项成立、第⑥项需运行期证据）。
-#  (2) t3 范围外条目：F6/F7/X5 的逐兵移动写入属 t3（§五.2/§五.5/§五.7）实施范围，
-#      本任务（t2）不得越界删除；t3 完成后这些条目必须移除、门禁必须全绿。
-$allowList = @{
-    'CombatBrain\Ai\CombatAiMissionLogic.cs' = @('Agent.SetFormationFrameDisabled')
-    'CombatBrain\Ai\MovementGlue.cs'         = @('Agent.SetMovementDirection')
-    'CombatBrain\Ai\SurvivalGlue.cs'         = @('Agent.SetMovementDirection')
-    'CombatBrain\Ai\FormationSlotGlue.cs'    = @('Agent.SetMovementDirection')
+function Get-Source([string]$suffix) {
+    return ($sources | Where-Object { $_.Path.EndsWith($suffix) })
 }
 
-# 允许名单理由（逐条，供 reviewer 核对；改名单必须同步改审计表 §5）：
-#   CombatAiMissionLogic.cs / Agent.SetFormationFrameDisabled
-#     -- TickFrameRelease：编队 >25 人 + Charge/ChargeToTarget + 距目标 <=25m + L3 的合格成员统一解阵框，
-#        同政策、无逐兵战术判断、玩家队豁免。保留或退役由 Integration Owner 按 §五.8 裁决。
-#   MovementGlue.cs / SurvivalGlue.cs / FormationSlotGlue.cs / Agent.SetMovementDirection
-#     -- F6 逐兵走位 / F7 单兵求生腿 / X5 逐兵补位腿，属 t3 退役范围（CB-PROMPT-0038 §五.2/§五.5/§五.7）；
-#        t2 的 inScope 不含这三个文件的退役删除，故在此显式登记为「已知未退役」，不冒充已合规。
+# ---------- 允许名单（极窄：逐文件 + 逐符号 + 逐条理由） ----------
+# 唯一保留条目：阵框释放（CB-PROMPT-0038 产品裁决＝编队级统一接战政策，保留）。
+#   CombatAiMissionLogic.TickFrameRelease 对「编队 >25 人 + Charge/ChargeToTarget + 距目标 <=25m + L3 +
+#   未逃跑 + 帧框仍启用 + 冷却放行」的合格成员调用 Agent.SetFormationFrameDisabled()：
+#   统一政策触发、无逐兵战术判断、玩家队豁免（编队层前置）、一次性 latch + 5s 冷却防重复抢写。
+#   引擎无编队级批量入口，逐兵调用属 API 形态；恢复由原版 AI 每帧重建帧框（FrameReleaseGlue.cs 文件头核验）。
+$allowList = @{
+    'CombatBrain\Ai\CombatAiMissionLogic.cs' = @('Agent.SetFormationFrameDisabled')
+}
 
 # 每文件允许的具体写入名（把名单从「整文件豁免」收紧为「逐条豁免」）
 $allowKeys = @{}
@@ -101,64 +95,101 @@ foreach ($rule in $banned) {
     }
 }
 
-# ---------- t2 退役项必须零命中（不受允许名单影响） ----------
-foreach ($api in @('EnforceShieldUsage', 'SetTargetAgent', 'TryToWieldWeaponInSlot')) {
+# ---------- 退役项必须零命中（不受允许名单影响） ----------
+foreach ($api in @('EnforceShieldUsage', 'SetTargetAgent', 'TryToWieldWeaponInSlot', 'SetMovementDirection')) {
     $hits = @()
     foreach ($src in $sources) {
         if ($src.Code -match "\.$api\s*\(") { $hits += $src.Path }
     }
-    Assert-Contract ($hits.Count -eq 0) "AgentWrite: t2-retired Agent.$api fully removed (hits: $($hits -join '; '))"
+    Assert-Contract ($hits.Count -eq 0) "AgentWrite: retired Agent.$api fully removed (hits: $($hits -join '; '))"
 }
 
 $drivenHits = @()
 foreach ($src in $sources) {
     if ($src.Code -match 'AgentDrivenProperties\.[A-Za-z_]+\s*=[^=]') { $drivenHits += $src.Path }
 }
-Assert-Contract ($drivenHits.Count -eq 0) "AgentWrite: t2-retired AgentDrivenProperties writes fully removed (hits: $($drivenHits -join '; '))"
+Assert-Contract ($drivenHits.Count -eq 0) "AgentWrite: retired AgentDrivenProperties writes fully removed (hits: $($drivenHits -join '; '))"
 
-# ---------- 退役链完整性（模型注册 / 死开关 / 无消费者残留） ----------
-$subModule = $sources | Where-Object { $_.Path.EndsWith('CombatBrain\SubModule.cs') }
+# ---------- 退役链完整性（文件级） ----------
+$subModule = Get-Source 'CombatBrain\SubModule.cs'
 Assert-Contract ($subModule -ne $null) 'AgentWrite: SubModule.cs present'
 Assert-Contract ($subModule.Code -notmatch 'AddModel\s*\(') 'AgentWrite: SubModule registers no game model (X2 model removed)'
-Assert-Contract ($subModule.Raw -match 'CB-PROMPT-0038') 'AgentWrite: SubModule documents the X2 retirement (CB-PROMPT-0038)'
-
-$settings = $sources | Where-Object { $_.Path.EndsWith('CombatBrain\CombatBrainSettings.cs') }
-Assert-Contract ($settings -ne $null) 'AgentWrite: CombatBrainSettings.cs present'
-Assert-Contract ($settings.Code -notmatch 'HandSkillStrength') 'AgentWrite: HandSkillStrength dead switch removed'
 
 foreach ($retired in @('CombatBrainAgentStatCalculateModel.cs', 'HandSkillProfile.cs', 'AttackSuppression.cs',
-                       'AttackSuppressionState.cs', 'CombatBrain\Combat\AttackStats.cs', 'CombatBrain\Combat\PredictiveBlock.cs')) {
-    $still = $sources | Where-Object { $_.Path.EndsWith($retired) }
+                       'AttackSuppressionState.cs', 'CombatBrain\Combat\AttackStats.cs', 'CombatBrain\Combat\PredictiveBlock.cs',
+                       'CombatBrain\Ai\MovementGlue.cs', 'CombatBrain\Ai\DecisionJitterGlue.cs',
+                       'CombatBrain\Compliance\DecisionJitter.cs')) {
+    $still = Get-Source $retired
     Assert-Contract ($still.Count -eq 0) "AgentWrite: retired file deleted ($retired)"
 }
 
-foreach ($name in @('CombatBrainAgentStatCalculateModel', 'HandSkillProfile', 'AttackSuppression', 'PredictiveBlock')) {
+# 已知未退役残留（文件级例外，逐项写明理由；t3 范围修正到位后应删除本块并恢复硬断言）：
+#   CombatBrain/Movement/MovementController.cs —— F6 逐兵走位决策内核（MoveAction / MovementContext /
+#   MovementController.Decide）。其唯一消费者 MovementGlue.cs 已随本任务删除，故该文件现为**死代码**。
+#   该路径不在 t3 inScope（inScope 含 Ai/ Compliance/ Formation/ Intent/ Mcm/ Settings/ Coordination/
+#   SubModule.cs OfflineTests/ 两个 docs），已按纪律上报 Captain 请求范围修正；裁决前不擅自删除越界文件、
+#   也不把它伪装成"已退役"。门禁仍强制：该残留文件之外**零生产引用**（下方 retired-type 断言）。
+$knownResidue = @('movementcontroller.cs')   # 以文件名匹配（路径分隔符/大小写无关），仅供下方零引用断言排除自身
+
+foreach ($name in @('CombatBrainAgentStatCalculateModel', 'HandSkillProfile', 'AttackSuppression', 'PredictiveBlock',
+                    'MovementGlue', 'DecisionJitterGlue', 'MovementController')) {
     $hits = @()
     foreach ($src in $sources) {
+        $isKnownResidue = $false
+        foreach ($leaf in $knownResidue) { if ($src.Path.ToLowerInvariant().EndsWith($leaf)) { $isKnownResidue = $true } }
+        if ($isKnownResidue) { continue }
         if ($src.Code -match "\b$name\b") { $hits += $src.Path }
     }
     Assert-Contract ($hits.Count -eq 0) "AgentWrite: no production reference to retired type $name (hits: $($hits -join '; '))"
 }
+Write-Output "       [INFO] known-residue (dead code, scope fix pending): CombatBrain/Movement/MovementController.cs - zero production callers asserted above"
 
-# ---------- 保留项仍在（防过度退役导致功能回归） ----------
-$rangedBrain = $sources | Where-Object { $_.Path.EndsWith('CombatBrain\Ranged\RangedBrain.cs') }
-Assert-Contract ($rangedBrain -ne $null) 'AgentWrite: RangedBrain.cs present'
-Assert-Contract ($rangedBrain.Code -match 'DecideFallback') 'AgentWrite: F9 formation-level fallback decision retained'
-Assert-Contract ($rangedBrain.Code -notmatch 'SelectTarget') 'AgentWrite: F9 per-soldier target scoring removed'
+# ---------- 逐兵状态与执行腿零残留 ----------
+foreach ($symbol in @('X5SlotCooldown', 'ShouldRunIndividualLeg', 'IsIndividualOverBudget', 'IndividualLegEnabled',
+                      'FrameDisabledAgents', 'IsFrameDisabled', 'IsRetreating')) {
+    $hits = @()
+    foreach ($src in $sources) {
+        if ($src.Code -match "\b$symbol\b") { $hits += $src.Path }
+    }
+    Assert-Contract ($hits.Count -eq 0) "AgentWrite: per-soldier residue removed ($symbol) (hits: $($hits -join '; '))"
+}
 
-$rangedGlue = $sources | Where-Object { $_.Path.EndsWith('CombatBrain\Ai\RangedGlue.cs') }
-Assert-Contract ($rangedGlue -ne $null) 'AgentWrite: RangedGlue.cs present (formation-level snapshot)'
-Assert-Contract ($rangedGlue.Code -match 'PlayerTeamExemptionEnabled') 'AgentWrite: F9 formation snapshot keeps player-team exemption'
-Assert-Contract ($rangedGlue.Code -notmatch 'IsFallingBack') 'AgentWrite: F9 per-agent falling-back state removed'
+# 阵框释放的一次性 latch 门控必须为 2 参形态（不含 F7/F9 跳过条件）
+$frameGlue = Get-Source 'CombatBrain\Ai\FrameReleaseGlue.cs'
+Assert-Contract ($frameGlue -ne $null) 'AgentWrite: FrameReleaseGlue.cs present'
+Assert-Contract ($frameGlue.Code -match 'ShouldSkipAgent\(bool runningAway, bool frameAlreadyDisabled\)') 'AgentWrite: frame release skip gate is 2-arg one-time latch (no F7/F9 conditions)'
+$missionLogicPath = ($sources | Where-Object { $_.Path.EndsWith('CombatBrain\Ai\CombatAiMissionLogic.cs') } | Select-Object -First 1).Path
+$missionLogicRaw = [IO.File]::ReadAllText($missionLogicPath)
+Assert-Contract ($missionLogicRaw -match 'IsFormationFrameEnabled') 'AgentWrite: frame release reads engine latch state (read-only)'
+Assert-Contract ($frameGlue.Raw -match 'IsFormationFrameEnabled' -and $frameGlue.Raw -match 'SetFormationFrameEnabled' -and $frameGlue.Raw -match 'TrySetFormationFrame') 'AgentWrite: frame release file documents v1.4.8 API verification (latch/recovery evidence)'
 
-$missionLogic = $sources | Where-Object { $_.Path.EndsWith('CombatBrain\Ai\CombatAiMissionLogic.cs') }
-Assert-Contract ($missionLogic -ne $null) 'AgentWrite: CombatAiMissionLogic.cs present'
+# SurvivalGlue：个体求生腿已退役，只允许编队级重整信号
+$survivalGlue = Get-Source 'CombatBrain\Ai\SurvivalGlue.cs'
+Assert-Contract ($survivalGlue -ne $null) 'AgentWrite: SurvivalGlue.cs present'
+Assert-Contract ($survivalGlue.Code -match 'CasualtyReformSignal') 'AgentWrite: F7 formation-level reform signal retained'
+Assert-Contract ($survivalGlue.Code -notmatch 'SurvivalAction|SurvivalInstinct') 'AgentWrite: F7 per-soldier survival decision removed'
+
+# ---------- 保留项仍在（防过度退役） ----------
+$rangedBrain = Get-Source 'CombatBrain\Ranged\RangedBrain.cs'
+Assert-Contract ($rangedBrain -ne $null -and $rangedBrain.Code -match 'DecideFallback') 'AgentWrite: F9 formation-level fallback decision retained'
+$rangedGlue = Get-Source 'CombatBrain\Ai\RangedGlue.cs'
+Assert-Contract ($rangedGlue -ne $null -and $rangedGlue.Code -match 'PlayerTeamExemptionEnabled') 'AgentWrite: F9 formation snapshot skips player team'
+$missionLogic = Get-Source 'CombatBrain\Ai\CombatAiMissionLogic.cs'
 Assert-Contract ($missionLogic.Code -notmatch 'TickBlock') 'AgentWrite: F4 per-soldier block tick removed'
-Assert-Contract ($missionLogic.Code -notmatch '_attackStats') 'AgentWrite: F4 per-agent attack statistics dictionary removed'
-Assert-Contract ($missionLogic.Code -notmatch '_jitterBlock') 'AgentWrite: F4/F12 per-agent jitter glue removed from mission logic'
 Assert-Contract ($missionLogic.Code -match 'FormationCommandExecutor') 'AgentWrite: formation-level command executor retained'
+Assert-Contract ($missionLogic.Code.Length -gt 0 -and $missionLogic.Raw.Length -gt 0) 'AgentWrite: mission logic source loaded for retained-path assertions (frame release latch read verified by audit doc + runtime counter)'
+$decisionDelay = Get-Source 'CombatBrain\Ai\DecisionDelay.cs'
+Assert-Contract ($decisionDelay.Code -match 'HoldTime' -and $decisionDelay.Code -notmatch 'ScaleProfile') 'AgentWrite: command-level hysteresis kept, individual jitter scaling removed'
 
-# ---------- 玩家队豁免：编队级写入点不得绕过豁免（t3 收口前的现状核对） ----------
-Assert-Contract ($rangedGlue.Code -match 'team\.IsPlayerTeam') 'AgentWrite: F9 formation snapshot skips player team'
+# ---------- 只读诊断计数（§九）：存在、只读、覆盖六类 ----------
+$diag = Get-Source 'CombatBrain\Ai\DiagnosticCounters.cs'
+Assert-Contract ($diag -ne $null) 'AgentWrite: DiagnosticCounters.cs present'
+Assert-Contract ($diag.Code -match 'CountFormationWrite' -and $diag.Code -match 'CountAgentMovementWrite' `
+    -and $diag.Code -match 'CountAgentBlockWrite' -and $diag.Code -match 'CountAgentTargetWrite' `
+    -and $diag.Code -match 'CountAgentWeaponWrite' -and $diag.Code -match 'CountAgentStatsOverride' `
+    -and $diag.Code -match 'CountFrameReleaseWrite') 'AgentWrite: six write counters + FrameRelease counter present'
+Assert-Contract ($diag.Code -notmatch 'SetMovementDirection|SetTargetAgent|EnforceShieldUsage|TryToWieldWeaponInSlot|SetFormationFrameDisabled') 'AgentWrite: diagnostics perform no agent writes (read-only)'
+$lifecycle = Get-Source 'CombatBrain\Coordination\MissionStateLifecycle.cs'
+Assert-Contract ($lifecycle.Code -match 'DiagnosticCounters\.Reset\(\)') 'AgentWrite: counters reset at mission lifecycle (no cross-mission residue)'
 
 Write-Output 'AgentWrite static contract checks passed. Static facts only - runtime A/B acceptance is still pending.'

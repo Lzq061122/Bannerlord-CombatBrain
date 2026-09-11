@@ -2,11 +2,12 @@ using System;
 using System.Collections.Generic;
 using CombatBrain;
 using CombatBrain.Combat;
-using CombatBrain.Movement;
+// CB-PROMPT-0038 退役：CombatBrain.Movement（F6 走位内核）与 CombatBrain.Compliance（F12 个体抖动）
+//   已整链删除，不再 using；CombatBrain.Survival 仅剩编队级重整信号，已迁至 Ai/CasualtyReformSignal.cs
+//   （命名空间保持 CombatBrain.Survival，经该文件 link 编译进本测试程序集）。
 using CombatBrain.Survival;
 using CombatBrain.Cavalry;
 using CombatBrain.Ranged;
-using CombatBrain.Compliance;
 using CombatBrain.Morale;
 using CombatBrain.Experience;
 using CombatBrain.Intent;
@@ -47,16 +48,15 @@ namespace OfflineTests
 
             Console.WriteLine("== F0 FighterProfile ==");
             TestFighterProfile();
-            Console.WriteLine("== F6 MovementController ==");
-            TestMovement();
-            Console.WriteLine("== F7 SurvivalInstinct ==");
+            // F6 MovementController 断言已随 §五.2 退役删除（见 TestMovement 处的映射说明）
+            Console.WriteLine("== F7 编队级重整信号 ==");
             TestSurvival();
             Console.WriteLine("== F8 CavalryWaveFSM ==");
             TestCavalry();
             Console.WriteLine("== F9 RangedBrain ==");
             TestRanged();
-            Console.WriteLine("== F12 DecisionJitter ==");
-            TestCompliance();
+            // F12 DecisionJitter 断言已随 CB-PROMPT-0038 §五.4 退役删除（个体抖动不设保留：
+            //   被删断言 ↔ 退役模块 的逐条映射见 docs/agent-control-surface-audit.md §0b）
             Console.WriteLine("== F11 MoralePropagation ==");
             TestMorale();
             Console.WriteLine("== F11 PhasedRetreat ==");
@@ -325,48 +325,20 @@ namespace OfflineTests
                 "feint rate monotonic Soldier<Veteran");
             Check(FighterProfileFactory.Create(SoldierTier.Elite).FlankAware > FighterProfileFactory.Create(SoldierTier.Recruit).FlankAware,
                 "flank aware monotonic Recruit<Elite");
+            // CB-PROMPT-0038 §五.4：F12 抖动退役后纪律/素质派生链已无消费者；以上 3 条为**纯数据结构单调性**
+            //   断言（不涉及任何个体决策），随 FighterProfile 表存废一并复核（R3：消费者归零即删）。
         }
 
-        private static void TestMovement()
-        {
-            CheckApprox(MovementController.IdealGap(1f, 1f), 1.3f, "IdealGap(1,1)=1.3");
-
-            var far = new MovementContext { OwnX = 0f, OwnY = 0f, TargetX = 10f, TargetY = 0f, OwnReach = 1f, TargetReach = 1f };
-            var d = MovementController.Decide(far);
-            Check(d.Action == MoveAction.Advance, "far target -> Advance");
-            CheckApprox(d.MoveX, 1f, "Advance moves toward target X");
-            CheckApprox(d.MoveY, 0f, "Advance Y=0");
-
-            var near = new MovementContext { OwnX = 0f, OwnY = 0f, TargetX = 0.5f, TargetY = 0f, OwnReach = 1f, TargetReach = 1f };
-            d = MovementController.Decide(near);
-            Check(d.Action == MoveAction.StepBack, "too close -> StepBack");
-            CheckApprox(d.MoveX, -1f, "StepBack away from target");
-
-            var inGap = new MovementContext { OwnX = 0f, OwnY = 0f, TargetX = 1.3f, TargetY = 0f, OwnReach = 1f, TargetReach = 1f, FlankAware = 0.6f, OffHandSide = 1f };
-            d = MovementController.Decide(inGap);
-            Check(d.Action == MoveAction.StrafeLeft, "in gap + flank aware -> StrafeLeft");
-
-            inGap.FlankAware = 0.1f;
-            d = MovementController.Decide(inGap);
-            Check(d.Action == MoveAction.Hold, "in gap + unaware -> Hold");
-            CheckApprox(d.MoveX, 0f, "Hold X=0");
-            CheckApprox(d.MoveY, 0f, "Hold Y=0");
-
-            var surrounded = new MovementContext { OwnX = 0f, OwnY = 0f, TargetX = 10f, TargetY = 0f, OwnReach = 1f, TargetReach = 1f, IsSurrounded = true, AllyX = 0f, AllyY = 5f };
-            d = MovementController.Decide(surrounded);
-            Check(d.Action == MoveAction.RetreatToAllies, "surrounded -> RetreatToAllies");
-            CheckApprox(d.MoveY, 1f, "retreat toward ally");
-        }
+        // F6 逐兵走位决策（MovementController.Decide/IdealGap）断言已随 CB-PROMPT-0038 §五.2 整块删除：
+        //   被删断言 ↔ 退役模块（MovementController + MovementGlue）逐条映射见
+        //   docs/agent-control-surface-audit.md §0b。
 
         private static void TestSurvival()
         {
-            Check(SurvivalInstinct.Decide(new SurvivalContext { HpRatio = 0.1f, BeingFocused = true, SafeBehind = false }) == SurvivalAction.RetreatToAllies,
-                "low hp + focused + exposed -> RetreatToAllies");
-            Check(SurvivalInstinct.Decide(new SurvivalContext { HpRatio = 0.1f, BeingFocused = true, SafeBehind = true }) == SurvivalAction.Hold,
-                "low hp + safe behind -> Hold");
-            Check(SurvivalInstinct.Decide(new SurvivalContext { HpRatio = 0.5f, BeingFocused = false, SafeBehind = false }) == SurvivalAction.Fight,
-                "healthy -> Fight");
-
+            // F7 个体求生判定（SurvivalInstinct.Decide）断言已随 CB-PROMPT-0038 §五.5 退役删除：
+            //   逐兵「低血 → 自行退向友军」决策不再是 CombatBrain 职责（3 条断言 →
+            //   CombatBrain/Survival/SurvivalInstinct.cs 的 SurvivalInstinct.Decide）。
+            // 保留：编队级重整信号（事件累计窗口契约）。
             var sig = new CasualtyReformSignal();
             int i;
             for (i = 0; i < 7; i++)
@@ -423,46 +395,10 @@ namespace OfflineTests
             Check(RangedBrain.DecideFallback(1f, true) == RangedFallback.KeepShooting, "f9 full ammo + melee -> still KeepShooting (ammo dominates)");
         }
 
-        private static void TestCompliance()
-        {
-            var perfect = DecisionJitter.ComputeProfile(1f, 0f, 1f);
-            CheckApprox(perfect.DelayBase, 0f, "perfect: no delay");
-            CheckApprox(perfect.HesitateProb, 0f, "perfect: no hesitation");
-            CheckApprox(perfect.Wobble, 0f, "perfect: no wobble");
-
-            var worst = DecisionJitter.ComputeProfile(0f, 1f, 0f);
-            CheckApprox(worst.DelayBase, 1f, "worst: max delay");
-            CheckApprox(worst.HesitateProb, 1f, "worst: always hesitate");
-            CheckApprox(worst.Wobble, 1f, "worst: max wobble");
-
-            var lo = DecisionJitter.ComputeProfile(0.5f, 0f, 1f);
-            var hi = DecisionJitter.ComputeProfile(0.2f, 0f, 1f);
-            Check(hi.HesitateProb > lo.HesitateProb, "lower discipline -> higher hesitate prob");
-
-            var good = DecisionJitter.ComputeProfile(1f, 0f, 1f);
-            var badMorale = DecisionJitter.ComputeProfile(1f, 0f, 0.2f);
-            Check(badMorale.Wobble > good.Wobble, "low morale -> higher wobble");
-
-            var clamped = DecisionJitter.ComputeProfile(2f, 5f, 3f);
-            CheckApprox(clamped.DelayBase, 0.4f, "out-of-range inputs clamp (delay)");
-            CheckApprox(clamped.HesitateProb, 0.25f, "out-of-range inputs clamp (hesitate)");
-            CheckApprox(clamped.Wobble, 0.3f, "out-of-range inputs clamp (wobble)");
-
-            var rng = new Random(12345);
-            var never = DecisionJitter.Apply(rng, new ComplianceProfile { DelayBase = 0.2f, HesitateProb = 0f, Wobble = 0f });
-            Check(!never.Hesitate, "p=0 never hesitates");
-            Check(never.DelaySeconds >= 0.1f - 1e-4f && never.DelaySeconds <= 0.2f + 1e-4f, "delay within [0.5,1.0] x base");
-
-            var rng2 = new Random(12345);
-            var always = DecisionJitter.Apply(rng2, new ComplianceProfile { DelayBase = 0.2f, HesitateProb = 1f, Wobble = 0f });
-            Check(always.Hesitate, "p=1 always hesitates");
-
-            var rng3 = new Random(999);
-            var a = DecisionJitter.Apply(rng3, new ComplianceProfile { DelayBase = 0.5f, HesitateProb = 0.5f, Wobble = 0.3f });
-            var rng4 = new Random(999);
-            var b = DecisionJitter.Apply(rng4, new ComplianceProfile { DelayBase = 0.5f, HesitateProb = 0.5f, Wobble = 0.3f });
-            Check(a.Hesitate == b.Hesitate && Math.Abs(a.DelaySeconds - b.DelaySeconds) <= 1e-6f, "same seed reproducible");
-        }
+        // F12 DecisionJitter（Compliance.ComputeProfile / Apply）断言已随个体抖动退役整块删除：
+        //   15 条断言（per-pillar 系数、discipline/morale 单调性、clamp、随机可复现）对应的纯逻辑
+        //   CombatBrain/Compliance/DecisionJitter.cs 与胶水 DecisionJitterGlue.cs 均已删除；
+        //   逐条映射（被删断言 ↔ 退役模块）见 docs/agent-control-surface-audit.md §0b。
 
         private static void TestMorale()
         {
@@ -1256,7 +1192,8 @@ namespace OfflineTests
             Check(FormationTactics.ShouldOverride(FormationArrangementKind.Circle, threatTarget), "takeover Circle + Threatened -> rewrite to ShieldWall");
         }
 
-        // X0 决策延迟开关（强度 0/1/0.5 的 hold/余量/抖动缩放）
+        // X0 决策延迟开关（只保留指挥层迟滞：意图 hold / 切换余量）
+        // CB-PROMPT-0038 §五.4：个体抖动缩放（ScaleProfile）断言随 DecisionJitter 退役删除（3 条）。
         private static void TestDecisionDelay()
         {
             CheckApprox(DecisionDelay.HoldTime(0f), 1.5f, "decisiondelay hold strength 0 -> 1.5s");
@@ -1264,14 +1201,6 @@ namespace OfflineTests
             CheckApprox(DecisionDelay.HoldTime(0.5f), 3.75f, "decisiondelay hold strength 0.5 -> 3.75s");
             CheckApprox(DecisionDelay.SwitchMargin(0f), 0f, "decisiondelay margin strength 0 -> 0%");
             CheckApprox(DecisionDelay.SwitchMargin(1f), 0.15f, "decisiondelay margin strength 1 -> 15%");
-
-            var p = new ComplianceProfile { HesitateProb = 0.5f, DelayBase = 0.8f, Wobble = 0.6f };
-            var zero = DecisionDelay.ScaleProfile(p, 0f);
-            Check(zero.HesitateProb == 0f && zero.DelayBase == 0f && zero.Wobble == 0f, "decisiondelay strength 0 -> no jitter");
-            var full = DecisionDelay.ScaleProfile(p, 1f);
-            Check(full.HesitateProb == 0.5f && full.DelayBase == 0.8f && full.Wobble == 0.6f, "decisiondelay strength 1 -> unchanged");
-            var half = DecisionDelay.ScaleProfile(p, 0.5f);
-            Check(half.HesitateProb == 0.25f && half.DelayBase == 0.4f && half.Wobble == 0.3f, "decisiondelay strength 0.5 -> half jitter");
         }
 
         // X1 编队级目标选择（FormationTargeting 纯逻辑）：优先级链/距离加权/威胁加权/小股过滤/无目标降级/半径/缓存/迟滞
@@ -1397,11 +1326,13 @@ namespace OfflineTests
             Check(!FrameReleaseRules.IsReleaseLod(2), "x4 L2 gate blocks");
             Check(!FrameReleaseRules.IsReleaseLod(0), "x4 L0 gate blocks");
 
-            // 4) 跳过态：F7 求生/F9 后撤/原版逃跑任一命中即跳过；全不命中才放行
-            Check(FrameReleaseRules.ShouldSkipAgent(true, false, false), "x4 survival retreat skips");
-            Check(FrameReleaseRules.ShouldSkipAgent(false, true, false), "x4 ranged fallback skips");
-            Check(FrameReleaseRules.ShouldSkipAgent(false, false, true), "x4 running away skips");
-            Check(!FrameReleaseRules.ShouldSkipAgent(false, false, false), "x4 normal agent not skipped");
+            // 4) 非战术门控 + 一次性 latch（CB-PROMPT-0038 K1/D1 产品裁决后语义）：
+            //    原版逃跑态跳过；已在释放态（IsFormationFrameEnabled=false → frameAlreadyDisabled=true）跳过；
+            //    两者都不命中才放行。已删除的 F7 求生 / F9 后撤跳过条件不得复活（其模块已退役）。
+            Check(FrameReleaseRules.ShouldSkipAgent(true, false), "x4 running away skips");
+            Check(FrameReleaseRules.ShouldSkipAgent(false, true), "x4 already-disabled frame skips (one-time latch)");
+            Check(FrameReleaseRules.ShouldSkipAgent(true, true), "x4 both gate conditions skip");
+            Check(!FrameReleaseRules.ShouldSkipAgent(false, false), "x4 normal enabled agent not skipped");
 
             // 5) 冷却字典：无记录放行；5s 窗内拦截；超窗放行；Remove 后放行（OnAgentRemoved 清理）
             var cd = new FrameReleaseCooldown();
@@ -1745,15 +1676,9 @@ namespace OfflineTests
             bool swappedToRank1 = outSlightSwap.Count == 1 && rankSlots[outSlightSwap[0].SlotIndex].Rank == 1;
             Check(swappedToRank1, "x54 slight: agent swapped to adjacent Rank1 slot");
 
-            // X4 跳过集：已解阵 agent 不参与指派
-            var frameDisabled = new System.Collections.Generic.HashSet<int>();
-            frameDisabled.Add(2);
-            var inputSkip = new SlotAssignInput { Slots = slots, Agents = agents, Last = null, Integrity = 85f, FrameDisabledAgents = frameDisabled };
-            var outSkip = SlotAssigner.Assign(inputSkip);
-            Check(outSkip.Count == 1, "x54 frame-disabled agent skipped");
-            bool noAgent2 = true;
-            foreach (var a in outSkip) if (a.AgentIndex == 2) noAgent2 = false;
-            Check(noAgent2, "x54 frame-disabled agent2 not assigned");
+            // X4 跳过集（FrameDisabledAgents）断言已随 CB-PROMPT-0038 §五.7 删除：
+            //   该跳过集只服务于已退役的逐兵补位执行腿；解阵框现在是一次性 latch（见 FrameReleaseGlue.cs），
+            //   绑定表本身不得再消费逐兵解阵状态（避免永久 skip）。2 条断言 ↔ SlotAssigner.FrameDisabledAgents。
 
             // 空输入：空 agents / 空 slots → 空列表
             var emptyAgents = new SlotAssignInput { Slots = slots, Agents = new System.Collections.Generic.List<AgentRoleEntry>(), Integrity = 85f };
@@ -1823,36 +1748,15 @@ namespace OfflineTests
                 "x55 maxRankDiff full(0) < slight/moderate(1) 与 X5-4 门控一致");
         }
 
-        // X5-6 执行策略（X5ExecutionPolicy 纯逻辑）：L3 个体腿开关/Bench 回退闸/Discipline 门控/补位冷却
+        // X5-6 编队级槽位快照门控（X5ExecutionPolicy 纯逻辑）：仅保留 Discipline 门控。
+        // CB-PROMPT-0038 §五.7：L3 个体补位开关 / Bench 回退闸 / X5SlotCooldown（共 10 条断言）随
+        //   逐兵补位执行腿退役删除；逐条映射见 docs/agent-control-surface-audit.md §0b。
         private static void TestX5ExecutionPolicy()
         {
-            // 1) L3 个体补位开关：仅 L3；玩家豁免/已解阵/超预算任一命中 → 跳过
-            Check(X5ExecutionPolicy.ShouldRunIndividualLeg(3, false, false, false), "x56 L3 normal -> run individual leg");
-            Check(!X5ExecutionPolicy.ShouldRunIndividualLeg(2, false, false, false), "x56 L2 -> skip (剧场闸)");
-            Check(!X5ExecutionPolicy.ShouldRunIndividualLeg(3, true, false, false), "x56 exempted -> skip (玩家豁免)");
-            Check(!X5ExecutionPolicy.ShouldRunIndividualLeg(3, false, true, false), "x56 frame-disabled -> skip (X4 解阵)");
-            Check(!X5ExecutionPolicy.ShouldRunIndividualLeg(3, false, false, true), "x56 budget over -> skip (Bench 回退)");
-
-            // 2) Bench 回退闸：avgAi 超 5ms → 回退个体腿（铁律② 500 人红线）
-            Check(!X5ExecutionPolicy.IsIndividualOverBudget(4.9f), "x56 avgAi 4.9ms -> keep individual leg");
-            Check(X5ExecutionPolicy.IsIndividualOverBudget(5.1f), "x56 avgAi 5.1ms -> rollback individual leg");
-            Check(!X5ExecutionPolicy.IsIndividualOverBudget(5.0f), "x56 avgAi 5.0ms boundary -> keep (≤5)");
-
-            // 3) Discipline 门控（x5-discipline-assigner-redundancy 接线）：MaintainSlots=false → 跳过刷新
+            // Discipline 门控（x5-discipline-assigner-redundancy 接线）：MaintainSlots=false → 跳过刷新
             Check(X5ExecutionPolicy.ShouldRefreshSlots(FormationDisciplineController.Evaluate(90f)), "x56 full -> refresh slots");
             Check(X5ExecutionPolicy.ShouldRefreshSlots(FormationDisciplineController.Evaluate(50f)), "x56 moderate -> refresh slots");
-            Check(!X5ExecutionPolicy.ShouldRefreshSlots(FormationDisciplineController.Evaluate(30f)), "x56 stopped -> skip refresh (交 F6)");
-
-            // 4) 补位冷却字典（X4 FrameReleaseCooldown 同款模式）：无记录放行/窗内拦截/超窗放行/Remove 清理
-            var cd = new X5SlotCooldown();
-            Check(cd.CanRelease(5, 0f), "x56 cooldown initial allows");
-            cd.MarkReleased(5, 10f);
-            Check(!cd.CanRelease(5, 11.9f), "x56 cooldown blocks within 2s window");
-            Check(cd.CanRelease(5, 12f), "x56 cooldown allows at 2s boundary");
-            cd.MarkReleased(5, 12f);
-            cd.Remove(5);
-            Check(cd.CanRelease(5, 13f), "x56 cooldown allows after Remove (agent removed)");
-            Check(cd.CanRelease(6, 20f), "x56 cooldown per-agent: unmarked other agent allows");
+            Check(!X5ExecutionPolicy.ShouldRefreshSlots(FormationDisciplineController.Evaluate(30f)), "x56 stopped -> skip refresh (交原版)");
 
             // X7 战场信息迷雾开关：默认开（拟人）；关闭=直通（PerceptionFilter 折叠恒 true）；开启=走迷雾路径
             Check(CombatBrainSettings.FogOfWarEnabled, "x7 fog default on (拟人)");
