@@ -109,9 +109,9 @@ commit message 写「14 条断言」为笔误，diff 实测 **15 条**（`Fighte
 | D-2 | 阵框释放无重复抢写/无动作振荡 + 恢复后重新整齐 | 运行期债 | `ab-checklist` §5 + `[Diag] FrameRelease` 单列；异常 → 回报 Captain |
 | D-3 | §八.7/§八.8 豁免开/关两态的运行期写入计数 | 运行期债 | 并入 D-1 采集 |
 | M8 | 合并时点与冻结令记录 | 待 Integration Owner 裁决 | 本报告 §6 + ADR-0005「实施与合并」 |
-| M12/F-7 | `CombatBrain/Enums.cs:36` `SoldierTier` 死枚举删除 + `Enums.cs:44` 注释更正 | 承接任务（已裁决按 R3 退役，不批 waiver） | 独立任务 inScope 含 `CombatBrain/Enums.cs`；验收 = 四命令复跑全绿 |
+| M12/F-7 | `CombatBrain/Enums.cs:36` `SoldierTier` 死枚举删除 + `Enums.cs:44` 注释更正 | **已执行**（t11 `31823b6`；t12 增量复核 pass，锚点 `31823b6`） | 完成；全仓零代码引用，注释指向 `Formation/TroopClassifier` |
 | MS-1 | `CombatBrain_Master_Spec.md`（manager 侧 long-form 产品规格）中的 F4/F6/F7/F9/F12/X2/X5 个体层表述同步 | 跨仓文档层（不在本仓 `docs/` 范围，本轮未改） | 由 Integration Owner / manager 侧按 ADR-0005 与 NOMENCLATURE RETIRED 语义同步（不得由本团队直接改 manager 资产） |
-| F-3/F-4/F-6 | `BracePlan.survivalRetreating` 既有死参数注释；`DiagnosticCounters` 死字段/哨兵语义标注；门禁补 Agent 级 `SetControlledByAI`/`AddAiBehavior` 禁止模式 | 后续卫生/加固 | QC 报告 §9；不阻断本次交付 |
+| F-3/F-4/F-6/F-7 | `BracePlan.survivalRetreating` 既有死参数注释（**登记不动**）；`DiagnosticCounters` 死字段清理 + 哨兵标注（**已执行** t11）；门禁补 Agent 级 `SetControlledByAI`/`AddAiBehavior` 禁止模式（**已执行** t11，68→73 条）；`SoldierTier` 死枚举退役（**已执行** t11） | 已闭环（F-3 为登记保留） | t11 `31823b6` + t12 增量复核 pass（`c89276a`）；残余观察：新禁止模式的 Agent/编队判定依赖收信者变量命名启发式（回归哨兵，非安全边界，不立项） |
 
 **纪律**：D-1~D-3 未闭环前，本任务链任何对外结论只能是 **`pass-with-runtime-debt`**。
 

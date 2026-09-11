@@ -401,13 +401,15 @@ MCM 文案现状：`CombatBrainMcmSettings.cs:23` `[SettingPropertyBool("玩家�
 | M9 | MCM 文案与死开关清理 | `HandSkillStrength` 死开关已随 t2 删除（t8 承接声明）；MCM「玩家队豁免」文案已改为「玩家队豁免（全控制面）」+ 全控制面 HintText（`CombatBrainMcmSettings.cs:23-30`，t3） | 文字/设置层已落地；规范层无剩余待裁决项 |
 | M10 | `_profiles`/`FighterProfile` 是否整表退役（I12） | **resolved（按 R3「消费者归零即删」执行完毕）** —— t3 已删除 `_profiles` 字典与 `GetProfile`（`CombatAiMissionLogic.cs`）；四个字段的生产读取点（`DecisionJitterGlue.cs:47` 读 `PredictConf`、`MovementGlue.cs:160` 读 `FlankAware`）随模块退役归零，`FeintRate`/`Shakiness` 在 t2 后即无读取者；**t9（SCOPE-AMEND-2）已删除 `FighterProfile` 四字段表与 `FighterProfileFactory`**（提交 90d2fbf，`-66`），并核实 `rg '\bFighterProfile\b'` 生产代码零命中；**保留** `SoldierInput`/`PrimaryWeaponClass`（在用消费者：`Ai/FormationSlotGlue.BuildSoldierInput` → `Formation/TroopClassifier.Classify`） | 已闭环；离线侧同步由 b0b1628 完成（`TestFighterProfile` 15 条断言随表退役删除，1162→1147） |
 | M11 | 契约文本错误更正（t9 卡「`SoldierInput` 随链退役」） | **resolved（口径更正）**：以代码实情为准——`SoldierInput`/`PrimaryWeaponClass` **保留**（活消费者 `Ai/FormationSlotGlue.cs:198` → `Formation/TroopClassifier.cs:27`）；开发12 的 finding `T9-SCOPE-2` 据此关闭 | 本审计表 + 最终报告 §2 |
-| M12 | `CombatBrain/Enums.cs:36` `SoldierTier` 无消费者死类型（F-7） | **待执行（承接任务，不在 t5 文档范围）**：厂长裁定按 R3 退役（不批 waiver）——删枚举 + 更正 `Enums.cs:44` 滞留注释（仍指向已删 `FighterProfile.Classify`）+ 复查 `OfflineTests` link 与编译链 + 四命令复跑 | `docs/qc-review-agent-control-retirement.md` §9.1（F-7 = low） |
+| M12 | `CombatBrain/Enums.cs:36` `SoldierTier` 无消费者死类型（F-7） | **resolved（已执行）**：t11 提交 `31823b6` 删除 `public enum SoldierTier`，`:44` 滞留注释更正为指向现消费者 `Formation/TroopClassifier.Classify`（X5-1）；全仓（含 OfflineTests）零代码引用；t12 增量复核 verdict=pass（锚点 `31823b6`，报告 §12，docs-only `c89276a`） | `docs/qc-review-agent-control-retirement.md` §9.1/§12 |
 
-**QC findings 消化登记（t4 报告 §9/§9.1）**：F-1（§5 K1 状态/行号漂移）→ 本表 §5 K1 行已改 `resolved` 并标注 f6634f7 时点坐标；
-F-2（ab-checklist 门禁 55→68）→ 已同步；F-3（既有 `BracePlan.survivalRetreating` 死参数注释）→ 登记为**既有残留**（非本分支引入，
-产品代码不在本轮退役范围，后续卫生提交处理）；F-4（`DiagnosticCounters` 死字段/哨兵语义）→ 登记为**后续卫生提交**，
-当前静态门禁为零写入主证据；F-5（−31 逐条名单）→ 见 QC 报告 §4（本表 §0b.2 为模块级映射，点名来源已注明）；
-F-6（门禁补 Agent 级 `SetControlledByAI`/`AddAiBehavior` 禁止模式）→ 下轮门禁加固；F-7 → 见 M12。
+**QC findings 消化登记（t4 报告 §9/§9.1 + t12 §12）**：F-1（§5 K1 状态/行号漂移）→ 本表 §5 K1 行已改 `resolved` 并标注 f6634f7 时点坐标；
+F-2（ab-checklist 门禁 55→68）→ 已同步（t11 后终值 **73 条**）；F-3（既有 `BracePlan.survivalRetreating` 死参数注释）→ **登记为既有残留、明确不动**
+（非本分支引入、非代码缺陷；产品代码不在本轮退役范围）；F-4（`DiagnosticCounters` 死字段/哨兵语义）→ **已执行**（t11 `31823b6`：删死字段 + ②–⑥ 标「哨兵·结构性恒 0」）；
+F-5（−31 逐条名单）→ 见 QC 报告 §4（本表 §0b.2 为模块级映射，点名来源已注明）；F-6（门禁补 Agent 级 `SetControlledByAI`/`AddAiBehavior` 禁止模式）→ **已执行**
+（t11 `31823b6`，68→73 条，含 2 条元测试双向锚定，编队级 L2/L3 保留项零误伤）；F-7 → 见 M12。
+**残余观察（t12 §12，low，不立项）**：新增禁止模式的 Agent/编队判定依赖收信者变量命名启发式（`agent/a/unit/soldier/defender/attacker` 拦截，`f/formation/AI` 放行）——
+属回归哨兵而非安全边界；若未来出现非常规命名，需人工复核而非依赖门禁自证。
 
 ---
 
