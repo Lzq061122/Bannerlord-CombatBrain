@@ -22,7 +22,8 @@ using CombatBrain.Settings;
 namespace CombatBrain.Ai
 {
     // 战斗AI系统本体 —— 一号项目的使命逻辑胶水层。
-    // 把游戏对象喂给各子系统，驱动感知管线 / LOD / 意图引擎 / 预测格挡 / 基准。
+    // 把游戏对象喂给各子系统，驱动感知管线 / LOD / 意图引擎 / 编队级命令 / 基准。
+    // （F4 预测式格挡已退役 CB-PROMPT-0038 §五.3，不再有逐兵格挡写入。）
     public sealed class CombatAiMissionLogic : MissionBehavior
     {
         public override MissionBehaviorType BehaviorType { get { return MissionBehaviorType.Other; } }
@@ -109,7 +110,8 @@ namespace CombatBrain.Ai
         private readonly Dictionary<int, TeamState> _states = new Dictionary<int, TeamState>();
         private readonly Dictionary<int, LodLevel> _agentLod = new Dictionary<int, LodLevel>();
         private readonly Dictionary<int, FighterProfile> _profiles = new Dictionary<int, FighterProfile>();
-        private readonly Dictionary<int, AttackStats> _attackStats = new Dictionary<int, AttackStats>();
+        // F4 退役（CB-PROMPT-0038）：逐兵攻击方向统计字典已删除（预测式格挡无消费者）。
+        //   兵种素质 _profiles 仍为 F6/F7 走位与求生提供真实兵种分类（t3 退役）。
 
         private readonly CombatEventBus _bus = new CombatEventBus();
         private ReplayRecorder _replay;
@@ -121,7 +123,6 @@ namespace CombatBrain.Ai
         private readonly RouteASituationStamp _routeASituation = new RouteASituationStamp();
         private float _lodTimer;
         private float _intentTimer;
-        private float _blockTimer;
         private float _formationLogTimer; // 日志增强：编队明细快照 5s 节拍
         private float _provenanceTimer;   // ATC-0 命令来源 5s 汇总节拍（只输出覆盖/命令变化 Formation）
         // OPT-3：_armyLogTimer 已改 per-team（TeamState.ArmyLogTimer，OnMissionTick 统一 dt 递减）——删除实例字段
@@ -156,7 +157,8 @@ namespace CombatBrain.Ai
 
         // X4 接敌解阵框：0.5s 编队级节拍（FrameReleaseGlue.cs 纯逻辑判定）+ 逐 agent 执行
         // （Agent.SetFormationFrameDisabled，Agent.cs:2306-2308 已核实）。触发=编队 Charge/ChargeToTarget
-        // 且距 X1 t93 最显著敌编队 ≤25m；剧场闸门（硬性）仅 L3；编队 ≤25 人不启用；F7/F9/逃跑态跳过；
+        // 且距 X1 t93 最显著敌编队 ≤25m；剧场闸门（硬性）仅 L3；编队 ≤25 人不启用；F7 求生/逃跑态跳过
+        // （F9 远程后撤态已随 CB-PROMPT-0038 §五.6 退役）；
         // 逐 agent 冷却字典限频（p3-1 设计，键=agent.Index，OnAgentRemoved 清理）。
         private float _frameReleaseTimer; // X4 解阵框节拍
         private readonly FrameReleaseCooldown _frameReleaseCooldown = new FrameReleaseCooldown();
@@ -175,7 +177,9 @@ namespace CombatBrain.Ai
         // F7 求生/重整胶水：0.3s 低频周期，濒死靠拢友军 + 编队重伤重整信号（见 SurvivalGlue.cs）
         private readonly SurvivalGlue _survival = new SurvivalGlue();
 
-        // F9 远程目标/弹药取舍胶水：0.3s 低频周期，远程选目标 + 弹药告罄回退（见 RangedGlue.cs）
+        // F9 远程编队级弹药快照胶水：0.3s 低频周期（CB-PROMPT-0038 §五.6 退役后形态）。
+        //   退役：逐兵 SetTargetAgent / TryToWieldWeaponInSlot / SetMovementDirection 后撤全部删除。
+        //   保留：仅编队级弹药余量快照 + RangedBrain.DecideFallback 编队级取舍（只读，无写入，见 RangedGlue.cs）。
         private readonly RangedGlue _ranged = new RangedGlue();
 
         // F8 骑兵波次胶水：0.5s 编队级周期，冲锋→回撤→重整→再冲（见 CavalryGlue.cs）
@@ -197,11 +201,8 @@ namespace CombatBrain.Ai
         // F10 反制矩阵/套路记忆胶水：纯事件驱动（IntentSwitched 反制换招 + 跨战役套路落盘，见 ExperienceGlue.cs）
         private readonly ExperienceGlue _experience = new ExperienceGlue();
 
-        // F12 决策抖动横切：格挡决策点（L3）独立实例，避免与走位共用延迟计时
-        private readonly DecisionJitterGlue _jitterBlock = new DecisionJitterGlue();
-        // P0-① 抖动时间基准：每 agent「上次调用 _jitterBlock.ShouldAct 的时刻」（now = _elapsed），
-        // 真实决策间隔 = now - last；传帧 dt 会让维持期/疲劳慢 6~20 倍。
-        private readonly Dictionary<int, float> _lastBlockJitter = new Dictionary<int, float>();
+        // F12 个体抖动横切已退役（CB-PROMPT-0038 §五.4）：格挡决策点（F4）与走位/求生/远程的逐兵抖动
+        //   一并在本任务/后续卡退役，不再有 _jitterBlock / _lastBlockJitter 个体状态。
 
         // F2 对手建模胶水：0.5s 编队级事件聚合（8 信号 → 敌方意图信念）+ 新 4 维填充
         // （EnemCav/FlankEx/Gap/Skirm，t11 A1）；读不懂 → belief=null 不注入（见 OpponentModelGlue.cs）
@@ -215,9 +216,9 @@ namespace CombatBrain.Ai
         // （0.5s 编队级低频下令，无长杆降级；见 BraceGlue.cs）
         private readonly BraceGlue _brace = new BraceGlue();
 
-        // T3 攻击抑制/恢复模式工具：供 H3/H4 复用（存原值→置 0→每帧恢复重判，见 AttackSuppression.cs）。
-        // 当前仅建立 OnAgentRemoved 生命周期清理挂点；实际抑制/恢复由 H3/H4 决策点调用。
-        private readonly AttackSuppression _attackSuppression = new AttackSuppression();
+        // F4/T3 攻击抑制与攻击方向统计已整链退役（CB-PROMPT-0038 §五.1/§五.3）：
+        //   AttackSuppression 运行期本就零 Suppress/Restore 调用（无消费者），与 CombatBrainAgentStatCalculateModel
+        //   的静态抑制集合双向耦合；两者连同 PredictiveBlock/AttackStats 一并删除。
 
         // T4 性能工具箱：编队层敌中心聚合复用缓冲（零每帧分配，BufferPool 池化；随 LOD tick 重建复用）
         private readonly Dictionary<int, List<Vec2>> _enemyCenters = new Dictionary<int, List<Vec2>>();
@@ -266,9 +267,10 @@ namespace CombatBrain.Ai
             _initialized = true;
 
             // atc4-state-lifecycle P1-4 / OPT-4：Mission 初始化幂等清理入口——CommandProvenance 为静态单例，
-            //   跨战斗残留会串场；InGameFeedback 静态去重/计数同理；_opponent/_attackSuppression 实例级也一并清
+            //   跨战斗残留会串场；InGameFeedback 静态去重/计数同理；_opponent 实例级也一并清
             //   （统一走 MissionStateLifecycle 单一入口，双保险；ATC-5R 租约 ReleaseAll 一并纳入）。
-            MissionStateLifecycle.ClearStatic(_opponent, _attackSuppression, _leaseGlue, Mission);
+            //   CB-PROMPT-0038：AttackSuppression/_suppressedAttack 已随 X2/F4 退役，不再纳入清理。
+            MissionStateLifecycle.ClearStatic(_opponent, _leaseGlue, Mission);
             CbRouteAPoC.BeginSession(Mission);
 
             // T1 观测管线：挂载决策分支计数器 + 补丁/管线活性自检（单一 CombatLog 渠道）
@@ -474,9 +476,7 @@ namespace CombatBrain.Ai
             TickBrace(mission, dt);
             _bench.EndSection("brace");
 
-            _bench.BeginSection("block");
-            TickBlock(mission, dt);
-            _bench.EndSection("block");
+            // F4 预测式格挡（block 段）已整链退役（CB-PROMPT-0038 §五.3）：不再有 0.1s 逐兵格挡决策段。
 
             // CPS-1 唯一执行器挂点（§5.3.2 执行器位于本拍所有 proposal producer 之后）：
             // 先收集（_commandProposals，迁移卡填充）→ 统一 Resolve → 再执行；
@@ -1438,13 +1438,12 @@ namespace CombatBrain.Ai
             return VecMath.Clamp01(rate * 2f);
         }
 
-        // ---------- F6 走位/绕侧 ----------
+        // ---------- F6 走位/绕侧（t3 退役范围；F9 后撤态查询已随个体远程腿删除） ----------
 
         private void TickMovement(Mission mission, float dt)
         {
-            // F7 求生撤退 / F9 远程后撤中的兵跳过走位（求生/后撤优先级高于走位）
-            _movement.Tick(mission, dt, _elapsed, GetLod, GetProfile, GetMorale,
-                i => _survival.IsRetreating(i) || _ranged.IsFallingBack(i));
+            // F7 求生撤退中的兵跳过走位（求生优先级高于走位）
+            _movement.Tick(mission, dt, _elapsed, GetLod, GetProfile, GetMorale, _survival.IsRetreating);
         }
 
         // ---------- F7 求生本能 + 重整信号 ----------
@@ -1454,11 +1453,12 @@ namespace CombatBrain.Ai
             _survival.Tick(mission, dt, _elapsed, GetLod, GetProfile, GetMorale, _bus.Publish);
         }
 
-        // ---------- F9 远程目标/弹药取舍 ----------
+        // ---------- F9 远程目标/弹药取舍（逐兵腿已退役；仅编队级只读快照） ----------
 
         private void TickRanged(Mission mission, float dt)
         {
-            _ranged.Tick(mission, dt, _elapsed, GetLod, GetProfile, GetMorale, _survival.IsRetreating);
+            // CB-PROMPT-0038 §五.6：不再逐兵选敌/换武器/后撤；本层只做编队级弹药快照（无任何写入）。
+            _ranged.Tick(mission, dt, _elapsed);
         }
 
         // ---------- F8 骑兵波次（编队级） ----------
@@ -1529,117 +1529,19 @@ namespace CombatBrain.Ai
             return 0.5f;
         }
 
-        // ---------- F4 预测式格挡 ----------
-
-        private void TickBlock(Mission mission, float dt)
-        {
-            _blockTimer -= dt;
-            if (_blockTimer > 0f) return;
-            _blockTimer = 0.1f;
-
-            // T4 零每帧分配：L3 候选列表从 [ThreadStatic] BufferPool 复用（仅本方法内使用）
-            List<Agent> l3 = BufferPool.GetAgentList(0);
-            foreach (Agent agent in mission.Agents)
-            {
-                if (agent == null || !agent.IsActive()) continue;
-                LodLevel lod;
-                if (_agentLod.TryGetValue(agent.Index, out lod) && lod == LodLevel.L3)
-                    l3.Add(agent);
-            }
-
-            for (int i = 0; i < l3.Count; i++)
-            {
-                Agent defender = l3[i];
-                // P2-② 攻击者查找改引擎空间查询：Mission.GetNearbyEnemyAgents(Vec2,float,Team,MBList<Agent>)
-                // （v1.4.8 已核实：Mission.cs L6582-6586；GetNearbyAgentsAux L2312-2333 只 Add 不清空，
-                //   故经 BufferPool.GetMBList 清空复用，与 F6/F7/F9 同款）。引擎空间哈希 O(邻域)
-                //   替代原 L3 候选列表内 O(n²) 扫描；且不再要求攻击者也是 L3——近战半径内任意敌人均
-                //   可成为预测源，L2 攻击者不再漏判。
-                if (defender.Team == null) continue; // 无队防御（与原实现等效：同队判定永远找不到攻击者）
-                MBList<Agent> nearby = BufferPool.GetMBList(1);
-                mission.GetNearbyEnemyAgents(defender.Position.AsVec2, BehaviorLodScheduler.L3MeleeRadius, defender.Team, nearby);
-
-                Agent attacker = null;
-                float bestD = float.MaxValue;
-                for (int j = 0; j < nearby.Count; j++)
-                {
-                    Agent e = nearby[j];
-                    if (e == null || !e.IsActive()) continue;
-                    float d = VecMath.DistSq(defender.Position.x, defender.Position.y, e.Position.x, e.Position.y);
-                    if (d < bestD)
-                    {
-                        bestD = d;
-                        attacker = e;
-                    }
-                }
-                if (attacker == null) continue;
-
-                AttackStats stats = GetAttackStats(attacker.Index);
-                FighterProfile defenderProfile = GetProfile(defender);
-                FighterProfile attackerProfile = GetProfile(attacker);
-
-                AttackDir predicted;
-                float confidence;
-                if (PredictiveBlock.TryPredict(stats, defenderProfile, attackerProfile.FeintRate, out predicted, out confidence))
-                {
-                    // T1 决策分支计数：产生格挡预测 = 决策分支命中
-                    DecisionObservatory.Observe(DecisionObservatory.BBlockPred);
-                    InGameFeedback.Count("格挡预测"); // 游戏内反馈：个体级聚合（防 500 人逐兵刷屏）
-
-                    // P0-① 真实决策间隔：now(_elapsed) - last（跨 0.1s 节流+跳帧空拍也在内）；
-                    // 首次近似=节流周期 0.1s；时钟异常兜底 0.1s。
-                    float now = _elapsed;
-                    float last;
-                    if (!_lastBlockJitter.TryGetValue(defender.Index, out last)) last = now - 0.1f;
-                    float elapsed = now - last;
-                    if (elapsed <= 0f) elapsed = 0.1f;
-                    _lastBlockJitter[defender.Index] = now;
-
-                    // F12 横切：犹豫/延迟维持期跳过本轮举盾（拟人化反应迟滞，不侵入纯逻辑）
-                    float signedWobble;
-                    if (_jitterBlock.ShouldAct(
-                        defender.Index, elapsed,
-                        DecisionJitterGlue.DisciplineFrom(defenderProfile),
-                        GetMorale(defender.Team), out signedWobble))
-                    {
-                        defender.EnforceShieldUsage(ToUsageDefend(predicted));
-                    }
-                    else
-                    {
-                        // T1 决策分支计数：F12 犹豫/维持期让过本轮举盾
-                        DecisionObservatory.Observe(DecisionObservatory.BBlockSkip);
-                    }
-                }
-            }
-        }
+        // ---------- F4 预测式格挡：已整链退役（CB-PROMPT-0038 §五.3） ----------
+        //   退役内容：Agent.EnforceShieldUsage 逐兵写入、预测器（PredictiveBlock）、
+        //   逐兵攻击方向统计（AttackStats）、F12 个体抖动闸门、_blockTimer/_lastBlockJitter 个体状态。
+        //   理由：CombatBrain 不再持续向单兵输入格挡方向；格挡由原版 AI 负责。
+        //   编队级防线/架枪需求由既有编队级通道表达（ProtectGlue/BraceGlue/FormationCommandExecutor）。
 
         public override void OnAgentHit(
             Agent affectedAgent, Agent affectorAgent,
             in MissionWeapon affectorWeapon, in Blow blow, in AttackCollisionData attackCollisionData)
         {
             base.OnAgentHit(affectedAgent, affectorAgent, affectorWeapon, blow, attackCollisionData);
-
-            if (affectorAgent == null || affectedAgent == null) return;
-
-            // P2-⑤ 方向源修复（review-findings P2）：改读入参 attackCollisionData.AttackDirection
-            // （碰撞时刻的方向快照）。v1.4.8 已核实：AttackCollisionData.cs L120 定义、私有 ctor L194
-            // 在碰撞数据构造时赋值；引擎同款消费 MissionCombatMechanicsHelper.cs L143（读
-            // collisionData.AttackDirection 判定方向类特性）。原读 affectorAgent.AttackDirection 是
-            // 命中回调时刻的实时原生状态（Agent.cs L714 → IMBAgent.GetAttackDirectionUsage），
-            // 攻击动作命中结算/下一拍可复位或推进 → PredictiveBlock 攻击方向统计源存在系统性
-            // 时机噪声；改用入参快照后统计源可信（评估结论：修复，不接受噪声）。
-            AttackDir dir = MapAttackDir(attackCollisionData.AttackDirection);
-            if (dir == AttackDir.None) return;
-
-            GetAttackStats(affectorAgent.Index).Record(dir);
-            _bus.Publish(new CombatEvent
-            {
-                Kind = CombatEventKind.AttackObserved,
-                Time = _elapsed,
-                Id = affectorAgent.Index,
-                Id2 = affectedAgent.Index,
-                IntValue = (int)dir
-            });
+            // CB-PROMPT-0038 §五.3：F4 退役后本回调不再记录逐兵攻击方向，也不再发布 AttackObserved
+            //   （该事件唯一消费者是已删除的预测式格挡统计；EventKind 枚举保留以不破坏既有索引）。
         }
 
         public override void OnAgentRemoved(Agent affectedAgent, Agent affectorAgent, AgentState agentState, KillingBlow killingBlow)
@@ -1659,11 +1561,7 @@ namespace CombatBrain.Ai
                 _profiles.Remove(affectedAgent.Index);
                 _movement.RemoveAgent(affectedAgent.Index);
                 _survival.Remove(affectedAgent.Index);
-                _ranged.Remove(affectedAgent.Index);
-                _jitterBlock.Remove(affectedAgent.Index);
-                _lastBlockJitter.Remove(affectedAgent.Index); // P0-① 清理时间基准
-                _attackStats.Remove(affectedAgent.Index); // P2-① 预测格挡统计随 Agent 生命周期清理（否则字典只增不减，GetAttackStats 会重建）
-                _attackSuppression.Remove(affectedAgent.Index); // T3 攻击抑制 Agent 生命周期清理
+                // F9 编队级快照无 per-agent 状态（逐兵腿退役）→ 无 RemoveAgent 清理项
                 _frameReleaseCooldown.Remove(affectedAgent.Index); // X4 解阵框冷却随 Agent 生命周期清理
                 _formationSlots.RemoveAgent(affectedAgent.Index); // X5-6 个体补位冷却随 Agent 生命周期清理
                 _morale.RecordCasualty(affectedAgent.Formation, _elapsed); // F11 脱阵窗口（事件驱动）
@@ -1699,7 +1597,7 @@ namespace CombatBrain.Ai
         //   ATC-5R 租约 ReleaseAll 一并纳入——Mission 结束幂等交还原生 AI）
         private void ClearMissionStaticState()
         {
-            MissionStateLifecycle.ClearStatic(_opponent, _attackSuppression, _leaseGlue, Mission);
+            MissionStateLifecycle.ClearStatic(_opponent, _leaseGlue, Mission);
         }
 
         // T38-01 遥测事件分发：仅映射已有事件 → 计数（各计数点的详细调用留给后续 feature 各自补，
@@ -2176,10 +2074,11 @@ namespace CombatBrain.Ai
                         // 剧场闸门（硬性）：仅 L3（玩家可见区），L0-L2 交原版
                         if (!FrameReleaseRules.IsReleaseLod((int)GetLod(agent.Index))) continue;
 
-                        // F7 求生/F9 后撤/原版逃跑态跳过（求生优先于散开）
+                        // F7 求生 / 原版逃跑态跳过（求生优先于散开）；
+                        // F9「远程后撤态」已随逐兵远程腿退役（CB-PROMPT-0038 §五.6），该跳过条件不复存在 → 传 false。
                         if (FrameReleaseRules.ShouldSkipAgent(
                             _survival.IsRetreating(agent.Index),
-                            _ranged.IsFallingBack(agent.Index),
+                            false,
                             agent.IsRunningAway)) continue;
 
                         // 逐 agent 冷却限频（SetFormationFrameDisabled 一次性状态切换，冷却窗内不重发）
@@ -2470,8 +2369,8 @@ namespace CombatBrain.Ai
             return best;
         }
 
-        // P2-② 原 FindNearestEnemyAgent（L3 列表内 O(n²) 扫描，攻击者须为 L3）已删除，
-        // 由 TickBlock 内 Mission.GetNearbyEnemyAgents 引擎空间查询取代（见该方法注释）。
+        // P2-② 原 FindNearestEnemyAgent（L3 列表内 O(n²) 扫描，攻击者须为 L3）已删除；
+        // 其唯一消费者 TickBlock（F4 预测式格挡）已随 CB-PROMPT-0038 §五.3 整链退役。
 
         private FighterProfile GetProfile(Agent agent)
         {
@@ -2533,41 +2432,6 @@ namespace CombatBrain.Ai
             {
                 return ArmorGrade.Cloth;
             }
-        }
-
-        private AttackStats GetAttackStats(int agentIndex)
-        {
-            AttackStats s;
-            if (!_attackStats.TryGetValue(agentIndex, out s))
-            {
-                s = new AttackStats(8);
-                _attackStats[agentIndex] = s;
-            }
-            return s;
-        }
-
-        private static AttackDir MapAttackDir(Agent.UsageDirection u)
-        {
-            switch (u)
-            {
-                case Agent.UsageDirection.AttackUp: return AttackDir.Up;
-                case Agent.UsageDirection.AttackDown: return AttackDir.Down;
-                case Agent.UsageDirection.AttackLeft: return AttackDir.Left;
-                case Agent.UsageDirection.AttackRight: return AttackDir.Right;
-            }
-            return AttackDir.None;
-        }
-
-        private static Agent.UsageDirection ToUsageDefend(AttackDir d)
-        {
-            switch (d)
-            {
-                case AttackDir.Up: return Agent.UsageDirection.DefendUp;
-                case AttackDir.Down: return Agent.UsageDirection.DefendDown;
-                case AttackDir.Left: return Agent.UsageDirection.DefendLeft;
-                case AttackDir.Right: return Agent.UsageDirection.DefendRight;
-            }
-            return Agent.UsageDirection.DefendAny;
         }
     }
 }

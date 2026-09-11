@@ -77,9 +77,6 @@ namespace OfflineTests
             Console.WriteLine("== T1 DecisionBranchTally ==");
             TestObservationTally();
 
-            Console.WriteLine("== T3 AttackSuppressionState ==");
-            TestAttackSuppression();
-
             Console.WriteLine("== T4 WindowCache ==");
             TestWindowCache();
 
@@ -121,9 +118,6 @@ namespace OfflineTests
 
             Console.WriteLine("== X1 FormationTargeting ==");
             TestFormationTargeting();
-
-            Console.WriteLine("== X2 HandSkillProfile ==");
-            TestHandSkillProfile();
 
             Console.WriteLine("== X3 FacingCorrection ==");
             TestFacingCorrection();
@@ -413,35 +407,20 @@ namespace OfflineTests
             Check(s == CavalryState.Setup, "reform -> setup (loop closes)");
         }
 
+        // F9 编队级远程判断（CB-PROMPT-0038 §五.6 退役后保留项）：
+        //   旧的逐兵选敌打分（RangedBrain.SelectTarget / RangedTarget / ArmorClass / AmmoKind）已随个体远程腿删除，
+        //   断言同步删除，保留并加固编队级取舍判定（是否继续射击 / 转换任务 / 整体后撤）。
         private static void TestRanged()
         {
-            var lightVsHeavy = new[]
-            {
-                new RangedTarget { Index = 0, Distance = 20f, Armor = ArmorClass.Light, Threat = 0.5f },
-                new RangedTarget { Index = 1, Distance = 20f, Armor = ArmorClass.Heavy, Threat = 0.5f }
-            };
-            Check(RangedBrain.SelectTarget(lightVsHeavy, AmmoKind.LightArrow) == 0, "light arrow prefers light armor");
-            Check(RangedBrain.SelectTarget(lightVsHeavy, AmmoKind.ArmorPiercing) == 1, "AP arrow prefers heavy armor");
-
-            var commander = new[]
-            {
-                new RangedTarget { Index = 0, Distance = 20f, Armor = ArmorClass.Heavy, Threat = 0.5f, IsCommander = true },
-                new RangedTarget { Index = 1, Distance = 20f, Armor = ArmorClass.Heavy, Threat = 0.5f }
-            };
-            Check(RangedBrain.SelectTarget(commander, AmmoKind.ArmorPiercing) == 0, "commander gets priority");
-
-            var byDistance = new[]
-            {
-                new RangedTarget { Index = 0, Distance = 50f, Armor = ArmorClass.Light, Threat = 0.5f },
-                new RangedTarget { Index = 1, Distance = 10f, Armor = ArmorClass.Light, Threat = 0.5f }
-            };
-            Check(RangedBrain.SelectTarget(byDistance, AmmoKind.LightArrow) == 1, "closer target wins tie");
-
-            Check(RangedBrain.SelectTarget(new RangedTarget[0], AmmoKind.LightArrow) == -1, "empty -> -1");
-
             Check(RangedBrain.DecideFallback(0.1f, true) == RangedFallback.SwitchToMelee, "low ammo + melee -> SwitchToMelee");
             Check(RangedBrain.DecideFallback(0.1f, false) == RangedFallback.Retreat, "low ammo + far -> Retreat");
             Check(RangedBrain.DecideFallback(0.5f, false) == RangedFallback.KeepShooting, "enough ammo -> KeepShooting");
+
+            // 阈值边界：≤0.15 判缺弹（编队级取舍触发），>0.15 继续射击
+            Check(RangedBrain.AmmoLowThreshold == 0.15f, "f9 ammo low threshold keeps 0.15 contract");
+            Check(RangedBrain.DecideFallback(0.15f, false) == RangedFallback.Retreat, "f9 ammo exactly at threshold -> Retreat");
+            Check(RangedBrain.DecideFallback(0.16f, false) == RangedFallback.KeepShooting, "f9 ammo just above threshold -> KeepShooting");
+            Check(RangedBrain.DecideFallback(1f, true) == RangedFallback.KeepShooting, "f9 full ammo + melee -> still KeepShooting (ammo dominates)");
         }
 
         private static void TestCompliance()
@@ -904,31 +883,9 @@ namespace OfflineTests
             Check(t.TotalObserved == 0 && t.DistinctObserved == 0, "Reset clears");
         }
 
-        // T3 攻击抑制/恢复核心状态（AttackSuppressionState，纯逻辑）
-        private static void TestAttackSuppression()
-        {
-            var s = new AttackSuppressionState();
-            Check(s.Count == 0 && !s.IsSuppressed(3), "init none suppressed");
-            float v;
-            Check(!s.TryRestore(3, out v), "restore unsuppressed -> false");
-
-            bool first = s.TrySave(3, 0.8f);
-            Check(first && s.IsSuppressed(3) && s.Count == 1, "save current value + suppressed");
-            Check(!s.TrySave(3, 0.5f), "re-save while suppressed -> false (keep original)");
-
-            Check(s.TryRestore(3, out v) && Math.Abs(v - 0.8f) < 1e-6f, "restore returns saved 0.8");
-            Check(!s.IsSuppressed(3) && s.Count == 0, "restored -> clear");
-
-            s.TrySave(5, 0.3f);
-            s.Clear(5);
-            Check(!s.IsSuppressed(5) && s.Count == 0, "lifecycle Remove clears entry");
-
-            s.TrySave(7, 0.9f);
-            s.TrySave(8, 0.4f);
-            Check(s.Count == 2, "two suppressed tracked");
-            s.ClearAll();
-            Check(s.Count == 0, "ClearAll empties");
-        }
+        // T3 攻击抑制/恢复核心状态（AttackSuppressionState）已随 X2/F4 退役整链删除
+        // （CB-PROMPT-0038 §五.1：运行期零消费者 + 与手活属性模型双向耦合）；对应断言一并删除，
+        // 退役后由 OfflineTests\AgentWriteStaticChecks.ps1 保证 CombatBrain 不再写入攻击决定概率。
 
         // T4 0.5s 窗口缓存（WindowCache，带锁）
         private static void TestWindowCache()
@@ -1378,44 +1335,10 @@ namespace OfflineTests
             Check(s9.HasTarget && s9.Index == 7, "x1 hysteresis >7m updates to new target");
         }
 
-        // X2 手活属性公式（HandSkillProfile 纯逻辑）：难度系数映射/格挡招架 clamp/射击误差/攻击概率/防守方向
-        private static void TestHandSkillProfile()
-        {
-            // 1) 难度系数：strength=0 → 原版系数（0.1/0.32/0.96）；strength=1 → RBM 系数（0.7/0.85/1.0）
-            CheckApprox(HandSkillProfile.DifficultyCoef(0f, 0f), 0.10f, "x2 difficulty coef strength0 low -> vanilla 0.1");
-            CheckApprox(HandSkillProfile.DifficultyCoef(0.5f, 0f), 0.32f, "x2 difficulty coef strength0 mid -> vanilla 0.32");
-            CheckApprox(HandSkillProfile.DifficultyCoef(1f, 0f), 0.96f, "x2 difficulty coef strength0 high -> vanilla 0.96");
-            CheckApprox(HandSkillProfile.DifficultyCoef(0f, 1f), 0.70f, "x2 difficulty coef strength1 low -> rbm 0.7");
-            CheckApprox(HandSkillProfile.DifficultyCoef(0.5f, 1f), 0.85f, "x2 difficulty coef strength1 mid -> rbm 0.85");
-            CheckApprox(HandSkillProfile.DifficultyCoef(1f, 1f), 1.00f, "x2 difficulty coef strength1 high -> rbm 1.0");
-
-            // 2) AI 等级：skill01×系数，clamp 0~1
-            CheckApprox(HandSkillProfile.AiLevel(0.5f, 1f, 1f), 0.5f, "x2 ai level skill01 0.5 diff1 strength1 -> 0.5");
-
-            // 3) 格挡能力：clamp(base×(1+strength), 0.3, 0.98)——RBM 口径×2 顶到上限
-            CheckApprox(HandSkillProfile.BlockAbility(0.5f, 1f), 0.98f, "x2 block ability base0.5 s1 -> capped 0.98");
-            CheckApprox(HandSkillProfile.BlockAbility(0.2f, 1f), 0.4f, "x2 block ability base0.2 s1 -> 0.4");
-            CheckApprox(HandSkillProfile.BlockAbility(0.1f, 1f), 0.3f, "x2 block ability floor 0.3");
-            CheckApprox(HandSkillProfile.BlockAbility(0.5f, 0f), 0.5f, "x2 block ability strength0 -> unchanged");
-
-            // 4) 招架能力：clamp(base×(1+strength), 0.3, 0.95)
-            CheckApprox(HandSkillProfile.ParryAbility(0.5f, 1f), 0.95f, "x2 parry ability base0.5 s1 -> capped 0.95");
-
-            // 5) 射击精度：skill01=1 → 0.008（原版值）；skill01=0 → 0.015（RBM 上限）；strength0 → 原版
-            CheckApprox(HandSkillProfile.ShooterError(1f, 1f), 0.008f, "x2 shooter error skill01 1 -> 0.008");
-            CheckApprox(HandSkillProfile.ShooterError(0f, 1f), 0.015f, "x2 shooter error skill01 0 -> 0.015");
-            CheckApprox(HandSkillProfile.ShooterError(1f, 0f), 0.008f, "x2 shooter error strength0 -> vanilla 0.008");
-
-            // 6) 攻击概率：clamp(base×(1+0.5×strength), 0.05, 1)
-            CheckApprox(HandSkillProfile.AttackChance(0.3f, 1f), 0.45f, "x2 attack chance base0.3 s1 -> 0.45");
-            CheckApprox(HandSkillProfile.AttackChance(0.9f, 1f), 1f, "x2 attack chance cap 1.0");
-            CheckApprox(HandSkillProfile.AttackChance(0.02f, 1f), 0.05f, "x2 attack chance floor 0.05");
-
-            // 7) 防守方向随机化：base×(1−0.5×strength)，下限 0
-            CheckApprox(HandSkillProfile.DefendDirectionChance(1f, 1f), 0.5f, "x2 defend dir chance 1.0 s1 -> 0.5");
-            CheckApprox(HandSkillProfile.DefendDirectionChance(0.2f, 1f), 0.1f, "x2 defend dir chance base0.2 s1 -> 0.1");
-            CheckApprox(HandSkillProfile.DefendDirectionChance(0f, 1f), 0f, "x2 defend dir chance floor 0");
-        }
+        // X2 手活属性公式（HandSkillProfile）已随 X2/F4 退役整链删除（CB-PROMPT-0038 §五.1）：
+        //   退役后 CombatBrain 不再修改单兵格挡/招架/攻击决定概率/射击误差/随机防守方向，
+        //   因此不存在可断言的公式；取而代之的守门断言在 OfflineTests\AgentWriteStaticChecks.ps1
+        //   （静态扫描 AgentDrivenProperties 写入 + 模型注册链零命中）。
 
         // X3 编队朝向修正（FacingCorrection 纯逻辑）：朝向计算/0.5s 缓存/目标无效/剧场半径/方向迟滞/玩家豁免
         private static void TestFacingCorrection()

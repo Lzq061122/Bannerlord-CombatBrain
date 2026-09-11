@@ -14,8 +14,8 @@ namespace CombatBrain.Ai
     //      且 距 X1 t93 TryGetFormationTarget 最显著敌编队 ≤ ReleaseRangeMeters=25m；
     //   ② 阵型规模闸门：编队 ≤25 人不启用（RBM 同款阈值，人太少不值得散开）；
     //   ③ 剧场效应闸门（硬性）：仅 L3（玩家可见区）执行，L0-L2 交原版；
-    //   ④ 逐 agent 跳过态：F7 求生撤退 / F9 远程后撤 / 原版逃跑（IsRunningAway）中的兵跳过
-    //      （求生优先于散开接敌）；
+    //   ④ 逐 agent 跳过态：F7 求生撤退 / 原版逃跑（IsRunningAway）中的兵跳过
+    //      （F9 远程后撤态已随 CB-PROMPT-0038 §五.6 退役；求生优先于散开接敌）；
     //   ⑤ 逐 agent 冷却字典限频（RBM Frontline.cs:909 aiDecisionCooldownDict 同款；p3-1 设计：
     //      键=agent.Index（int 防引用泄漏），秒数制冷却，随 OnAgentRemoved 清理）。
     // 反作弊闸：只解除自身阵框约束（能力非信息），不改信息获取（编队中心/命令状态均为引擎公开聚合）。

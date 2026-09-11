@@ -79,7 +79,7 @@ namespace CombatBrain.Ai
         /// <param name="getLod">agent 的 LOD 查询（剧场上限）</param>
         /// <param name="getProfile">agent 的 FighterProfile 查询（绕侧意识，真实兵种分类）</param>
         /// <param name="getMorale">agent 所属队士气查询（F12 输入，0..1）</param>
-        /// <param name="isSurvivalRetreat">F7 求生撤退 / F9 远程后撤态查询（撤退/后撤中跳过走位，优先级最高）</param>
+        /// <param name="isSurvivalRetreat">F7 求生撤退查询（撤退中跳过走位，优先级最高；F9 远程后撤态已随 CB-PROMPT-0038 退役）</param>
         public void Tick(Mission mission, float dt, float now, Func<int, LodLevel> getLod, Func<Agent, FighterProfile> getProfile, Func<Team, float> getMorale, Func<int, bool> isSurvivalRetreat)
         {
             _sinceTick += dt;

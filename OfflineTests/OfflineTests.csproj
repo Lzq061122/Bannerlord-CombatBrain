@@ -35,7 +35,6 @@
     <Compile Include="..\CombatBrain\Perception\PerceptionPipeline.cs" Link="Perception\PerceptionPipeline.cs" />
     <Compile Include="..\CombatBrain\Formation\FormationIntegrity.cs" Link="Formation\FormationIntegrity.cs" />
     <Compile Include="..\CombatBrain\Ai\DecisionBranchTally.cs" Link="Ai\DecisionBranchTally.cs" />
-    <Compile Include="..\CombatBrain\Ai\AttackSuppressionState.cs" Link="Ai\AttackSuppressionState.cs" />
     <Compile Include="..\CombatBrain\Ai\WindowCache.cs" Link="Ai\WindowCache.cs" />
     <Compile Include="..\CombatBrain\Telemetry\BattleTelemetry.cs" Link="Telemetry\BattleTelemetry.cs" />
     <Compile Include="..\CombatBrain\Telemetry\AnomalyDetector.cs" Link="Telemetry\AnomalyDetector.cs" />
@@ -46,7 +45,7 @@
     <Compile Include="..\CombatBrain\Ai\StalemateDetector.cs" Link="Ai\StalemateDetector.cs" />
     <Compile Include="..\CombatBrain\Ai\DecisionDelay.cs" Link="Ai\DecisionDelay.cs" />
     <Compile Include="..\CombatBrain\Ai\FormationTargeting.cs" Link="Ai\FormationTargeting.cs" />
-    <Compile Include="..\CombatBrain\Ai\HandSkillProfile.cs" Link="Ai\HandSkillProfile.cs" />
+    <!-- X2 HandSkillProfile 已随 CB-PROMPT-0038 §五.1 退役删除（不再 link 编译） -->
     <Compile Include="..\CombatBrain\Ai\FacingCorrection.cs" Link="Ai\FacingCorrection.cs" />
     <Compile Include="..\CombatBrain\Ai\FrameReleaseGlue.cs" Link="Ai\FrameReleaseGlue.cs" />
     <Compile Include="..\CombatBrain\Formation\TroopRole.cs" Link="Formation\TroopRole.cs" />

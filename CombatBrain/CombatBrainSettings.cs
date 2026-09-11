@@ -18,11 +18,8 @@ namespace CombatBrain
         // MCM 装载后可在「通用」组里热切（RequireRestart=false，bool 快档：果断/拟人）。
         public static float DecisionDelayStrength = 1f;
 
-        // X2 手活属性强度（观感补强 §X2）：0=原版现值（不覆盖 AI 手活）、1=满效果（格挡/招架×2 顶到
-        // 原版最高难度上限、射击误差按技能、防守方向随机化减半、攻击概率×1.5）。
-        // 能力参数非信息（反作弊闸不违规）；只对 IsAIControlled 人类单位生效（玩家手控不覆盖）。
-        // 默认 1=满效果；MCM 装载后可在「通用」组里热切（RequireRestart=false）。
-        public static float HandSkillStrength = 1f;
+        // X2 手活属性强度已退役（CB-PROMPT-0038 §五.1）：CombatBrain 不再覆盖单兵战斗能力数值，
+        //   该设置项随即删除（原默认值 1f）。退役前它也没有对应 MCM 属性（死开关），删除不改变可配置面。
 
         // X7 战场信息迷雾开关（观感补强 §X7，依赖 X6 接线）：true=迷雾生效（拟人，AI 只看得见
         // KnowledgeView 已观察的敌编队，未见/超期→保守降级）；false=全知（查询直通返回真实值，

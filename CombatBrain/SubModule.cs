@@ -21,21 +21,11 @@ namespace CombatBrain
             CombatLog.Log("CombatBrain 子模块已加载");
         }
 
-        // X2 手活属性模型注册：MissionGameModels 链式取最后一个 GameModel（GetGameModel<T> 倒序遍历），
-        // 引擎自动把原版模型设为我们的 BaseModel（MBGameModel<T> L3-5），转发即保原版行为；零 Harmony。
-        protected override void OnGameStart(Game game, IGameStarter gameStarterObject)
-        {
-            base.OnGameStart(game, gameStarterObject);
-            try
-            {
-                gameStarterObject.AddModel(new CombatBrainAgentStatCalculateModel());
-                CombatLog.Log("CombatBrain 手活属性模型已注册（X2）");
-            }
-            catch (System.Exception ex)
-            {
-                CombatLog.Log("注册手活属性模型失败: " + ex.Message);
-            }
-        }
+        // X2 手活属性模型注册已退役（CB-PROMPT-0038 §五.1）：
+        //   原 OnGameStart → gameStarterObject.AddModel(new CombatBrainAgentStatCalculateModel()) 已删除。
+        //   退役理由：CombatBrain 不修改单兵格挡/招架/攻击决定概率/射击误差/随机防守方向等玩法能力数值。
+        //   链完整性：不再向 MissionGameModels 追加任何 AgentStatCalculateModel 子类 → 引擎取到的就是原版模型，
+        //   其他 Mod 的模型链完全不被触碰（无空壳 override 改变语义）。
 
         // t73：MCM 可选集成。先探测 AppDomain 是否已加载 MCMv5 程序集；
         // 存在才触碰 CombatBrainMcmSettings.Instance（触发 GlobalSettings<T> 单例初始化/注册，被 MCM 扫描显示）；

@@ -1,20 +1,14 @@
 namespace CombatBrain.Ranged
 {
-    // F9 远程目标选择/弹药取舍 —— 纯逻辑。
-    // 0.3 秒低频换目标；按弹药类型匹配护甲；优先集火指挥官与重骑兵；弹药见底转近战/后撤。
-    public enum ArmorClass
-    {
-        Light,
-        Medium,
-        Heavy
-    }
-
-    public enum AmmoKind
-    {
-        LightArrow,
-        ArmorPiercing
-    }
-
+    // F9 远程编队级弹药取舍 —— 纯逻辑（CB-PROMPT-0038 §五.6 退役后形态）。
+    //
+    // 退役内容（本文件原有，已删除）：
+    //   * RangedBrain.SelectTarget / Score / RangedTarget / ArmorClass / AmmoKind
+    //     —— 逐兵选敌打分是「单兵战术决策」，与产品边界冲突（选谁打交还原版 AI）。
+    // 保留内容：
+    //   * RangedFallback + DecideFallback：**编队级**取舍（编队是否继续射击 / 是否整体后撤 /
+    //     是否转换任务），输入是编队聚合量（弹药余量）与引擎公开编队旗标（是否已转为近战编队态）。
+    //     该结果只供编队级消费（日志/诊断/后续合法编队命令通道），不驱动任何单兵 API。
     public enum RangedFallback
     {
         KeepShooting,
@@ -22,58 +16,11 @@ namespace CombatBrain.Ranged
         Retreat
     }
 
-    public struct RangedTarget
-    {
-        public int Index;
-        public float Distance;
-        public ArmorClass Armor;
-        public bool IsCommander;
-        public bool IsHeavyCavalry;
-        public float Threat; // 0..1
-    }
-
     public static class RangedBrain
     {
         public const float AmmoLowThreshold = 0.15f;
 
-        public static int SelectTarget(RangedTarget[] targets, AmmoKind ammo)
-        {
-            int best = -1;
-            float bestScore = float.MinValue;
-            for (int i = 0; i < targets.Length; i++)
-            {
-                float s = Score(targets[i], ammo);
-                if (s > bestScore)
-                {
-                    bestScore = s;
-                    best = i;
-                }
-            }
-            return best;
-        }
-
-        private static float Score(RangedTarget t, AmmoKind ammo)
-        {
-            float s = 0f;
-            if (t.IsCommander) s += 3.0f;
-            if (t.IsHeavyCavalry) s += 1.5f;
-            s += t.Threat;
-            s -= t.Distance * 0.02f;
-
-            // 弹药-护甲匹配：穿甲箭打重甲、轻羽箭打轻甲；错配降低收益。
-            if (ammo == AmmoKind.ArmorPiercing)
-            {
-                if (t.Armor == ArmorClass.Heavy) s += 1.2f;
-                else if (t.Armor == ArmorClass.Light) s -= 0.6f;
-            }
-            else
-            {
-                if (t.Armor == ArmorClass.Light) s += 1.2f;
-                else if (t.Armor == ArmorClass.Heavy) s -= 0.6f;
-            }
-            return s;
-        }
-
+        /// <summary>编队级取舍：弹药见底 + 已近战 → 转换任务；弹药见底 + 未近战 → 整体后撤。</summary>
         public static RangedFallback DecideFallback(float ammoRatio, bool inMeleeRange)
         {
             if (ammoRatio <= AmmoLowThreshold)
