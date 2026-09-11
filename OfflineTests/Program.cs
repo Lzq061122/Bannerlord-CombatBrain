@@ -46,8 +46,8 @@ namespace OfflineTests
         {
             _failures = 0;
 
-            Console.WriteLine("== F0 FighterProfile ==");
-            TestFighterProfile();
+            // F0 FighterProfileFactory / SoldierTier 断言已随 CB-PROMPT-0038 R3 退役删除
+            //   （消费者归零即删；保留的 SoldierInput/PrimaryWeaponClass 由 TroopClassifier 断言覆盖）。
             // F6 MovementController 断言已随 §五.2 退役删除（见 TestMovement 处的映射说明）
             Console.WriteLine("== F7 编队级重整信号 ==");
             TestSurvival();
@@ -282,52 +282,11 @@ namespace OfflineTests
             return 1;
         }
 
-        private static void TestFighterProfile()
-        {
-            // 等级基线（Bannerlord 兵种阶级 1-6）：1→Recruit、2-3→Soldier、4→Veteran、5-6→Elite
-            Check(FighterProfileFactory.Classify(new SoldierInput { Kind = SoldierKind.Infantry, Level = 1, Armor = ArmorGrade.Cloth }) == SoldierTier.Recruit,
-                "level1 cloth infantry -> Recruit");
-            Check(FighterProfileFactory.Classify(new SoldierInput { Kind = SoldierKind.Infantry, Level = 2, Armor = ArmorGrade.Leather }) == SoldierTier.Soldier,
-                "level2 leather infantry -> Soldier");
-            Check(FighterProfileFactory.Classify(new SoldierInput { Kind = SoldierKind.Infantry, Level = 3, Armor = ArmorGrade.Chainmail }) == SoldierTier.Soldier,
-                "level3 chainmail infantry -> Soldier");
-            Check(FighterProfileFactory.Classify(new SoldierInput { Kind = SoldierKind.Infantry, Level = 4, Armor = ArmorGrade.Chainmail }) == SoldierTier.Veteran,
-                "level4 chainmail infantry -> Veteran");
-            Check(FighterProfileFactory.Classify(new SoldierInput { Kind = SoldierKind.Cavalry, Level = 5, Armor = ArmorGrade.Plate }) == SoldierTier.Elite,
-                "level5 plate cavalry -> Elite");
-
-            // 护甲修正：板甲 +1 档
-            Check(FighterProfileFactory.Classify(new SoldierInput { Kind = SoldierKind.Infantry, Level = 3, Armor = ArmorGrade.Plate }) == SoldierTier.Veteran,
-                "level3 plate infantry -> Veteran (armor lift)");
-            Check(FighterProfileFactory.Classify(new SoldierInput { Kind = SoldierKind.Infantry, Level = 1, Armor = ArmorGrade.Plate }) == SoldierTier.Soldier,
-                "level1 plate infantry -> Soldier (armor lift)");
-
-            // 老兵旗标：+1 档，不超 Elite
-            Check(FighterProfileFactory.Classify(new SoldierInput { Kind = SoldierKind.Infantry, Level = 4, Armor = ArmorGrade.Chainmail, IsVeteran = true }) == SoldierTier.Elite,
-                "veteran lifts Veteran -> Elite");
-            Check(FighterProfileFactory.Classify(new SoldierInput { Kind = SoldierKind.Cavalry, Level = 5, Armor = ArmorGrade.Plate, IsVeteran = true }) == SoldierTier.Elite,
-                "veteran never exceeds Elite");
-
-            // 骑兵保底 Soldier
-            Check(FighterProfileFactory.Classify(new SoldierInput { Kind = SoldierKind.Cavalry, Level = 1, Armor = ArmorGrade.Cloth }) == SoldierTier.Soldier,
-                "cavalry floor is Soldier");
-
-            // 等级 clamp：越界不越档
-            Check(FighterProfileFactory.Classify(new SoldierInput { Kind = SoldierKind.Infantry, Level = 0, Armor = ArmorGrade.Cloth }) == SoldierTier.Recruit,
-                "level 0 clamps to Recruit");
-            Check(FighterProfileFactory.Classify(new SoldierInput { Kind = SoldierKind.Infantry, Level = 30, Armor = ArmorGrade.Plate }) == SoldierTier.Elite,
-                "heroic level clamps to Elite");
-
-            // Create 四档素质单调性
-            Check(FighterProfileFactory.Create(SoldierTier.Recruit).PredictConf < FighterProfileFactory.Create(SoldierTier.Soldier).PredictConf,
-                "predict conf monotonic Recruit<Soldier");
-            Check(FighterProfileFactory.Create(SoldierTier.Veteran).FeintRate > FighterProfileFactory.Create(SoldierTier.Soldier).FeintRate,
-                "feint rate monotonic Soldier<Veteran");
-            Check(FighterProfileFactory.Create(SoldierTier.Elite).FlankAware > FighterProfileFactory.Create(SoldierTier.Recruit).FlankAware,
-                "flank aware monotonic Recruit<Elite");
-            // CB-PROMPT-0038 §五.4：F12 抖动退役后纪律/素质派生链已无消费者；以上 3 条为**纯数据结构单调性**
-            //   断言（不涉及任何个体决策），随 FighterProfile 表存废一并复核（R3：消费者归零即删）。
-        }
+        // F0 FighterProfileFactory / SoldierTier 断言已随 CB-PROMPT-0038 R3 整块删除（消费者归零即删）：
+        //   被删 14 条断言 ↔ 退役模块（FighterProfile 四字段表 + FighterProfileFactory.Classify/Create）
+        //   的逐条映射见 docs/agent-control-surface-audit.md §0b。
+        //   保留：SoldierInput / PrimaryWeaponClass（仍有编队级消费者 FormationSlotGlue → TroopClassifier，
+        //   其断言见 TestTroopClassifier）。
 
         // F6 逐兵走位决策（MovementController.Decide/IdealGap）断言已随 CB-PROMPT-0038 §五.2 整块删除：
         //   被删断言 ↔ 退役模块（MovementController + MovementGlue）逐条映射见

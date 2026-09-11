@@ -13,10 +13,9 @@
     <Compile Include="..\CombatBrain\CombatBrainSettings.cs" Link="CombatBrainSettings.cs" />
     <Compile Include="..\CombatBrain\Combat\FighterProfile.cs" Link="Combat\FighterProfile.cs" />
     <!-- CB-PROMPT-0038 §五.2：Movement/MovementController.cs（F6 逐兵走位决策内核）已退役删除，不再 link。
-         §五.5（F7 拆分）：个体判定 SurvivalInstinct.Decide 已不再是 CombatBrain 调用点（SurvivalGlue 改为
-         编队级事件累计，只消费 CasualtyReformSignal）；编队级重整信号仍定义在 Survival/SurvivalInstinct.cs
-         （该文件路径不在 t3 inScope，本任务未改动它），此处 link 同一文件以保留其窗口/阈值离线断言。 -->
-    <Compile Include="..\CombatBrain\Survival\SurvivalInstinct.cs" Link="Survival\SurvivalInstinct.cs" />
+         §五.5（F7 拆分）：逐兵判定 SurvivalInstinct.Decide 已退役删除（SurvivalGlue 改为编队级事件累计，
+         只消费 CasualtyReformSignal）；该文件已随 t9（SCOPE-AMEND-2）重命名为 Survival/CasualtyReformSignal.cs。 -->
+    <Compile Include="..\CombatBrain\Survival\CasualtyReformSignal.cs" Link="Survival\CasualtyReformSignal.cs" />
     <Compile Include="..\CombatBrain\Ai\DiagnosticCounters.cs" Link="Ai\DiagnosticCounters.cs" />
     <Compile Include="..\CombatBrain\Cavalry\CavalryWaveFSM.cs" Link="Cavalry\CavalryWaveFSM.cs" />
     <Compile Include="..\CombatBrain\Ranged\RangedBrain.cs" Link="Ranged\RangedBrain.cs" />
