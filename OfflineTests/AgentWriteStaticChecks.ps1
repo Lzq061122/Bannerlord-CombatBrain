@@ -70,23 +70,47 @@ $banned = @(
     @{ Name = 'Agent.TryToWieldWeaponInSlot'; Pattern = '\.TryToWieldWeaponInSlot\s*\(' },
     @{ Name = 'Agent.SetFormationFrameDisabled'; Pattern = '\.SetFormationFrameDisabled\s*\(' },
     @{ Name = 'AgentDrivenProperties write'; Pattern = 'AgentDrivenProperties\.[A-Za-z_]+\s*=[^=]' },
-    @{ Name = 'Agent.SetScriptedFlags';     Pattern = '\.SetScriptedFlags\s*\(' }
+    @{ Name = 'Agent.SetScriptedFlags';     Pattern = '\.SetScriptedFlags\s*\(' },
+    # QC F-6（门禁加固）：仅禁 **Agent 级** 形态。编队级 `Formation.SetControlledByAI(...)` /
+    #   `FormationAI.AddAiBehavior(...)` 是审计表 §5 的保留项（L2 租约默认关 / L3 Route A 行为权重），
+    #   故按「收信者变量名」区分：agent/a/unit/soldier/defender/attacker 视为 Agent；f/formation/AI 视为编队级（放行）。
+    @{ Name = 'Agent.SetControlledByAI'; Test = {
+            param($code)
+            $out = @()
+            foreach ($m in [regex]::Matches($code, '([A-Za-z_][A-Za-z0-9_]*)\s*\.\s*SetControlledByAI\s*\(')) {
+                $recv = $m.Groups[1].Value.ToLowerInvariant()
+                if ($recv -match '^(agent|a|unit|soldier|defender|attacker)$') { $out += $m.Value }
+            }
+            return $out } },
+    @{ Name = 'Agent.AddAiBehavior'; Test = {
+            param($code)
+            $out = @()
+            foreach ($m in [regex]::Matches($code, '([A-Za-z_][A-Za-z0-9_]*)\s*\.\s*AddAiBehavior\s*\(')) {
+                $recv = $m.Groups[1].Value.ToLowerInvariant()
+                if ($recv -match '^(agent|a|unit|soldier|defender|attacker)$') { $out += $m.Value }
+            }
+            return $out } }
 )
 
 foreach ($rule in $banned) {
     $hits = @()
     $allowedHits = @()
     foreach ($src in $sources) {
-        $m = [regex]::Matches($src.Code, $rule.Pattern)
-        if ($m.Count -eq 0) { continue }
+        if ($rule.Pattern) {
+            $m = [regex]::Matches($src.Code, $rule.Pattern)
+            $matched = @($m | ForEach-Object { $_.Value })
+        } else {
+            $matched = @(& $rule.Test $src.Code)
+        }
+        if ($matched.Count -eq 0) { continue }
         $fileAllowed = $false
         foreach ($key in $allowList.Keys) {
             if ($src.Path.EndsWith($key) -and $allowKeys["$key|$($rule.Name)"]) { $fileAllowed = $true }
         }
         if ($fileAllowed) {
-            $allowedHits += "$($src.Path) x$($m.Count) [allowlisted: $($rule.Name)]"
+            $allowedHits += "$($src.Path) x$($matched.Count) [allowlisted: $($rule.Name)]"
         } else {
-            $hits += "$($src.Path) x$($m.Count)"
+            $hits += "$($src.Path) x$($matched.Count) -> $($matched -join ',')"
         }
     }
     Assert-Contract ($hits.Count -eq 0) "AgentWrite: no unauthorized $($rule.Name) in production code (hits: $($hits -join '; '))"
@@ -109,6 +133,19 @@ foreach ($src in $sources) {
     if ($src.Code -match 'AgentDrivenProperties\.[A-Za-z_]+\s*=[^=]') { $drivenHits += $src.Path }
 }
 Assert-Contract ($drivenHits.Count -eq 0) "AgentWrite: retired AgentDrivenProperties writes fully removed (hits: $($drivenHits -join '; '))"
+
+# ---------- 新增规则自检（元测试，QC F-6）：确保新规则真的在拦 Agent 级、且不误伤编队级 ----------
+$ruleSetControlled = ($banned | Where-Object { $_.Name -eq 'Agent.SetControlledByAI' })
+$ruleAddAi = ($banned | Where-Object { $_.Name -eq 'Agent.AddAiBehavior' })
+Assert-Contract ($ruleSetControlled -ne $null -and $ruleAddAi -ne $null) 'AgentWrite: new Agent-level rules registered (SetControlledByAI / AddAiBehavior)'
+
+$positive = 'agent.SetControlledByAI(false); agent.AddAiBehavior(h); f.SetControlledByAI(true); f.AI.AddAiBehavior(b);'
+$posHits = @(& $ruleSetControlled.Test $positive) + @(& $ruleAddAi.Test $positive)
+Assert-Contract ($posHits.Count -eq 2) "AgentWrite: new rules catch Agent-level receiver forms (expected 2 hits, got $($posHits.Count): $($posHits -join ','))"
+
+$negative = 'f.SetControlledByAI(true); formation.SetControlledByAI(false); f.AI.AddAiBehavior(behavior);'
+$negHits = @(& $ruleSetControlled.Test $negative) + @(& $ruleAddAi.Test $negative)
+Assert-Contract ($negHits.Count -eq 0) "AgentWrite: new rules keep formation-level receivers allowed (expected 0 hits, got $($negHits.Count): $($negHits -join ','))"
 
 # ---------- 退役链完整性（文件级） ----------
 $subModule = Get-Source 'CombatBrain\SubModule.cs'

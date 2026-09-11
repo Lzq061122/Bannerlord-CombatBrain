@@ -24,18 +24,25 @@ namespace CombatBrain.Ai
         private const int DistributionBuckets = 64; // 1s 桶 × 64 = 覆盖战斗前 64s 的分布（超界归入末桶）
 
         // ---- 六类主动写入计数 ----
-        public static int FormationWrites;   // ① 编队级三域命令落地次数（FormationCommandExecutor）
-        public static int AgentMovementWrites; // ② Agent.SetMovementDirection（退役后应恒 0）
-        public static int AgentBlockWrites;    // ③ Agent.EnforceShieldUsage（退役后应恒 0）
-        public static int AgentTargetWrites;   // ④ Agent.SetTargetAgent（退役后应恒 0）
-        public static int AgentWeaponWrites;   // ⑤ Agent.TryToWieldWeaponInSlot（退役后应恒 0）
-        public static int AgentStatsOverrides; // ⑥ AgentDrivenProperties 覆盖（退役后应恒 0）
+        // 观测语义（QC F-4）：**运行期证据只对 ①（Formation 级写入）与 ⑦（FrameRelease 单列）有观测意义**——
+        //   它们有活的生产调用点（FormationCommandExecutor.ApplySetOrder / TickFrameRelease）。
+        //   ②–⑥ 是**结构性恒 0 的回归哨兵**：其生产写入点已随 CB-PROMPT-0038 整链退役（源码零写入 +
+        //   OfflineTests/AgentWriteStaticChecks.ps1 静态零容忍双证），因此这五个计数器**永远不会自增**；
+        //   它们的用途是「若未来有人重新引入逐兵写入，计数与静态门禁会同时报警」，**不是**当前行为的观测证据。
+        //   不得因「无调用点」而删除（门禁断言要求六类计数器与 FrameRelease 计数同时存在）。
+        public static int FormationWrites;   // ① 编队级三域命令落地次数（FormationCommandExecutor）——有活调用点
+        public static int AgentMovementWrites; // ② [哨兵·结构性恒 0] Agent.SetMovementDirection（生产写入点已退役）
+        public static int AgentBlockWrites;    // ③ [哨兵·结构性恒 0] Agent.EnforceShieldUsage（生产写入点已退役）
+        public static int AgentTargetWrites;   // ④ [哨兵·结构性恒 0] Agent.SetTargetAgent（生产写入点已退役）
+        public static int AgentWeaponWrites;   // ⑤ [哨兵·结构性恒 0] Agent.TryToWieldWeaponInSlot（生产写入点已退役）
+        public static int AgentStatsOverrides; // ⑥ [哨兵·结构性恒 0] AgentDrivenProperties 覆盖（生产写入点已退役）
 
         // ---- FrameRelease 单列（保留项：刷新频率与振荡证据）----
-        public static int FrameReleaseWrites;              // 写入调用次数
-        public static int FrameReleaseDistinctAgents;      // 去重后受影响 agent 数
-        public static float FrameReleaseFirstAt = -1f;     // 首次写入时刻（战斗累计秒）
-        public static float FrameReleaseLastAt = -1f;      // 最近写入时刻
+        // 去重后受影响 agent 数一律以 `_frameReleasePerAgent.Count` 为准（QC F-4：原公开字段
+        //   `FrameReleaseDistinctAgents` 无任何写入点，属死字段，已删除；查询走 FrameReleaseDistinctAgentCount()）。
+        public static int FrameReleaseWrites;          // ⑦ 写入调用次数——有活调用点
+        public static float FrameReleaseFirstAt = -1f; // 首次写入时刻（战斗累计秒）
+        public static float FrameReleaseLastAt = -1f;  // 最近写入时刻
         private static readonly Dictionary<int, int> _frameReleasePerAgent = new Dictionary<int, int>(); // agent → 写入次数
         private static readonly int[] _frameReleaseBuckets = new int[DistributionBuckets];
 
@@ -147,10 +154,9 @@ namespace CombatBrain.Ai
             AgentWeaponWrites = 0;
             AgentStatsOverrides = 0;
             FrameReleaseWrites = 0;
-            FrameReleaseDistinctAgents = 0;
             FrameReleaseFirstAt = -1f;
             FrameReleaseLastAt = -1f;
-            _frameReleasePerAgent.Clear();
+            _frameReleasePerAgent.Clear(); // 去重 agent 数即以本字典 Count 呈现（无独立字段）
             for (int i = 0; i < DistributionBuckets; i++) _frameReleaseBuckets[i] = 0;
         }
     }

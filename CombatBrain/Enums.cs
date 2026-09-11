@@ -33,15 +33,12 @@ namespace CombatBrain
         Right = 3
     }
 
-    public enum SoldierTier
-    {
-        Recruit = 0,
-        Soldier = 1,
-        Veteran = 2,
-        Elite = 3
-    }
+    // CB-PROMPT-0038 R3 / F-7·M12：`public enum SoldierTier { Recruit/Soldier/Veteran/Elite }`
+    //   已退役删除——其唯一消费者 `FighterProfileFactory.Classify` 随个体控制面退役（t9）归零，
+    //   全仓零代码消费者；不得以「未来兵种分级预留」为由保留（无消费者状态不留、类型不得暗示旧功能仍有效）。
 
-    // 兵种（F10/F6 FighterProfile.Classify 输入；骑射手由胶水层归并到 Cavalry）
+    // 兵种（X5-1 兵种分类输入；消费链 Ai/FormationSlotGlue.BuildSoldierInput → Formation/TroopClassifier.Classify；
+    //   骑射手由胶水层归并到 Cavalry）
     public enum SoldierKind
     {
         Infantry = 0,
