@@ -1,10 +1,10 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using CombatBrain;
 using CombatBrain.Combat;
 // CB-PROMPT-0038 退役：CombatBrain.Movement（F6 走位内核）与 CombatBrain.Compliance（F12 个体抖动）
 //   已整链删除，不再 using；CombatBrain.Survival 仍提供编队级重整信号 CasualtyReformSignal
-//   （定义在 Survival/SurvivalInstinct.cs，经该文件 link 编译进本测试程序集；个体判定已非调用点）。
+//   （定义在 Survival/CasualtyReformSignal.cs，经该文件 link 编译进本测试程序集；个体判定已非调用点）。
 using CombatBrain.Survival;
 using CombatBrain.Cavalry;
 using CombatBrain.Ranged;
@@ -48,7 +48,7 @@ namespace OfflineTests
 
             // F0 FighterProfileFactory / SoldierTier 断言已随 CB-PROMPT-0038 R3 退役删除
             //   （消费者归零即删；保留的 SoldierInput/PrimaryWeaponClass 由 TroopClassifier 断言覆盖）。
-            // F6 MovementController 断言已随 §五.2 退役删除（见 TestMovement 处的映射说明）
+            // F6 MovementController 断言已随 §五.2 退役删除（逐条映射见 docs/agent-control-surface-audit.md §0b.2）
             Console.WriteLine("== F7 编队级重整信号 ==");
             TestSurvival();
             Console.WriteLine("== F8 CavalryWaveFSM ==");
@@ -283,20 +283,21 @@ namespace OfflineTests
         }
 
         // F0 FighterProfileFactory / SoldierTier 断言已随 CB-PROMPT-0038 R3 整块删除（消费者归零即删）：
-        //   被删 14 条断言 ↔ 退役模块（FighterProfile 四字段表 + FighterProfileFactory.Classify/Create）
-        //   的逐条映射见 docs/agent-control-surface-audit.md §0b。
-        //   保留：SoldierInput / PrimaryWeaponClass（仍有编队级消费者 FormationSlotGlue → TroopClassifier，
-        //   其断言见 TestTroopClassifier）。
+        //   被删 **15** 条断言（FighterProfileFactory.Classify 12 + Create 单调性 3）↔ 退役模块
+        //   （FighterProfile 四字段表 + FighterProfileFactory）的逐条映射见
+        //   docs/agent-control-surface-audit.md §0b.2（t3 −48）与 §0b.4-B（t9 −15）。
+        //   保留：SoldierInput / PrimaryWeaponClass（仍有编队级消费者 FormationSlotGlue.BuildSoldierInput
+        //   → TroopClassifier.Classify，其断言见 TestTroopClassifier）。
 
-        // F6 逐兵走位决策（MovementController.Decide/IdealGap）断言已随 CB-PROMPT-0038 §五.2 整块删除：
-        //   被删断言 ↔ 退役模块（MovementController + MovementGlue）逐条映射见
-        //   docs/agent-control-surface-audit.md §0b。
+        // F6 逐兵走位决策（MovementController.Decide/IdealGap，原 TestMovement）断言已随 CB-PROMPT-0038 §五.2
+        //   整块删除（12 条）；退役模块 MovementController + MovementGlue 的逐条映射见
+        //   docs/agent-control-surface-audit.md §0b.2。
 
         private static void TestSurvival()
         {
-            // F7 个体求生判定（SurvivalInstinct.Decide）断言已随 CB-PROMPT-0038 §五.5 退役删除：
-            //   逐兵「低血 → 自行退向友军」决策不再是 CombatBrain 职责（3 条断言 →
-            //   CombatBrain/Survival/SurvivalInstinct.cs 的 SurvivalInstinct.Decide）。
+            // F7 个体求生判定（SurvivalInstinct.Decide）断言已随 CB-PROMPT-0038 §五.5 退役删除（3 条）；
+            //   逐兵「低血 → 自行退向友军」决策不再是 CombatBrain 职责，逐兵判定定义已随 t9
+            //   （SCOPE-AMEND-2）删除（原 Survival/SurvivalInstinct.cs → 现 Survival/CasualtyReformSignal.cs）。
             // 保留：编队级重整信号（事件累计窗口契约）。
             var sig = new CasualtyReformSignal();
             int i;

@@ -118,31 +118,29 @@ Assert-Contract ($subModule.Code -notmatch 'AddModel\s*\(') 'AgentWrite: SubModu
 foreach ($retired in @('CombatBrainAgentStatCalculateModel.cs', 'HandSkillProfile.cs', 'AttackSuppression.cs',
                        'AttackSuppressionState.cs', 'CombatBrain\Combat\AttackStats.cs', 'CombatBrain\Combat\PredictiveBlock.cs',
                        'CombatBrain\Ai\MovementGlue.cs', 'CombatBrain\Ai\DecisionJitterGlue.cs',
-                       'CombatBrain\Compliance\DecisionJitter.cs')) {
+                       'CombatBrain\Compliance\DecisionJitter.cs',
+                       'CombatBrain\Movement\MovementController.cs', 'CombatBrain\Survival\SurvivalInstinct.cs')) {
     $still = Get-Source $retired
     Assert-Contract ($still.Count -eq 0) "AgentWrite: retired file deleted ($retired)"
 }
 
-# 已知未退役残留（文件级例外，逐项写明理由；t3 范围修正到位后应删除本块并恢复硬断言）：
-#   CombatBrain/Movement/MovementController.cs —— F6 逐兵走位决策内核（MoveAction / MovementContext /
-#   MovementController.Decide）。其唯一消费者 MovementGlue.cs 已随本任务删除，故该文件现为**死代码**。
-#   该路径不在 t3 inScope（inScope 含 Ai/ Compliance/ Formation/ Intent/ Mcm/ Settings/ Coordination/
-#   SubModule.cs OfflineTests/ 两个 docs），已按纪律上报 Captain 请求范围修正；裁决前不擅自删除越界文件、
-#   也不把它伪装成"已退役"。门禁仍强制：该残留文件之外**零生产引用**（下方 retired-type 断言）。
-$knownResidue = @('movementcontroller.cs')   # 以文件名匹配（路径分隔符/大小写无关），仅供下方零引用断言排除自身
-
+# t9（SCOPE-AMEND-2）终态：软断言（文件保留 + 零调用点）已升级为硬断言——文件必须不存在 + 类型零引用。
 foreach ($name in @('CombatBrainAgentStatCalculateModel', 'HandSkillProfile', 'AttackSuppression', 'PredictiveBlock',
-                    'MovementGlue', 'DecisionJitterGlue', 'MovementController')) {
+                    'MovementGlue', 'DecisionJitterGlue', 'MovementController', 'MovementContext', 'MoveAction',
+                    'SurvivalInstinct', 'SurvivalAction', 'SurvivalContext', 'FighterProfileFactory')) {
     $hits = @()
     foreach ($src in $sources) {
-        $isKnownResidue = $false
-        foreach ($leaf in $knownResidue) { if ($src.Path.ToLowerInvariant().EndsWith($leaf)) { $isKnownResidue = $true } }
-        if ($isKnownResidue) { continue }
         if ($src.Code -match "\b$name\b") { $hits += $src.Path }
     }
     Assert-Contract ($hits.Count -eq 0) "AgentWrite: no production reference to retired type $name (hits: $($hits -join '; '))"
 }
-Write-Output "       [INFO] known-residue (dead code, scope fix pending): CombatBrain/Movement/MovementController.cs - zero production callers asserted above"
+
+# R3 口径复核（防过度退役）：FighterProfile 四字段表退役，但 SoldierInput/PrimaryWeaponClass 保留
+#   —— 消费者 Ai/FormationSlotGlue.BuildSoldierInput → Formation/TroopClassifier.Classify 仍然在用。
+$f0 = Get-Source 'CombatBrain\Combat\FighterProfile.cs'
+Assert-Contract ($f0 -ne $null) 'AgentWrite: Combat/FighterProfile.cs present (retained X5-1 input types)'
+Assert-Contract ($f0.Code -match 'struct SoldierInput' -and $f0.Code -match 'PrimaryWeaponClass') 'AgentWrite: SoldierInput/PrimaryWeaponClass retained (in-use X5-1 consumers)'
+Assert-Contract ($f0.Code -notmatch 'struct FighterProfile|class FighterProfileFactory') 'AgentWrite: FighterProfile struct + FighterProfileFactory removed (R3 consumer-zeroed)'
 
 # ---------- 逐兵状态与执行腿零残留 ----------
 foreach ($symbol in @('X5SlotCooldown', 'ShouldRunIndividualLeg', 'IsIndividualOverBudget', 'IndividualLegEnabled',
@@ -167,13 +165,11 @@ Assert-Contract ($frameGlue.Raw -match 'IsFormationFrameEnabled' -and $frameGlue
 $survivalGlue = Get-Source 'CombatBrain\Ai\SurvivalGlue.cs'
 Assert-Contract ($survivalGlue -ne $null) 'AgentWrite: SurvivalGlue.cs present'
 Assert-Contract ($survivalGlue.Code -match 'CasualtyReformSignal') 'AgentWrite: F7 formation-level reform signal retained'
-# 已知残留（路径不在 t3 inScope）：Survival/SurvivalInstinct.cs 仍定义个体判定 API，但**必须零生产调用点**
-$survivalInstinctHits = @()
-foreach ($src in $sources) {
-    if ($src.Path.ToLowerInvariant().EndsWith('survivalinstinct.cs')) { continue }
-    if ($src.Code -match 'SurvivalInstinct\.Decide|SurvivalAction|SurvivalContext') { $survivalInstinctHits += $src.Path }
-}
-Assert-Contract ($survivalInstinctHits.Count -eq 0) "AgentWrite: F7 per-soldier decision API has zero production callers (known residue, hits: $($survivalInstinctHits -join '; '))"
+# t9 终态硬断言：逐兵判定文件已不存在（改名/删除），且生产代码零引用其 API
+$survivalSignal = Get-Source 'CombatBrain\Survival\CasualtyReformSignal.cs'
+Assert-Contract ($survivalSignal -ne $null) 'AgentWrite: Survival/CasualtyReformSignal.cs present (formation-level signal kept)'
+Assert-Contract ($survivalSignal.Code -match 'OnCriticalCasualty') 'AgentWrite: F7 reform window/threshold contract retained'
+Assert-Contract ($survivalSignal.Code -notmatch 'SurvivalInstinct|SurvivalAction|SurvivalContext|HpThreshold') 'AgentWrite: F7 per-soldier decision API fully removed (hard assertion)'
 
 # ---------- 保留项仍在（防过度退役） ----------
 $rangedBrain = Get-Source 'CombatBrain\Ranged\RangedBrain.cs'
