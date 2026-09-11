@@ -150,3 +150,43 @@
 ## 11. 复核实际读取的知识源（加载纪律）
 
 CombatAI/AGENTS.md → repo AGENTS.md → docs/knowledge/INDEX.md（bootstrap）；派单卡 prompts/active/CB-PROMPT-0038；t6 基线文件；worktree 终态源码（SubModule/CombatAiMissionLogic 关键段/FrameReleaseGlue/RangedGlue/SurvivalGlue/DiagnosticCounters/MissionStateLifecycle/MCM）；门禁脚本全文；审计表全文；ab-checklist 全文；git diff 逐段名单（脚本化提取）。未读：legacy CONTEXT、research archive、_kb、Master Spec 全文、历史 handoff。
+
+---
+
+## 12. 增量复核 round 2（t11 卫生清理与门禁加固）—— 2026-09-11
+
+> 复核人：质检5（t4 之 round-2 增量；任务 t12，review kind）
+> **round-2 锚点 = `31823b6aa81a58b2166e63959c5a345b66897608`**（HEAD，工作区 clean；进入与 finalize 前各核一次，无漂移）。
+> 与 §0 的关系：t4 在锚点 `1ed91e1` 的 verdict **保持不变**（pass-with-runtime-debt）；本节只覆盖 t11 增量
+> （`CombatBrain/Enums.cs`、`CombatBrain/Ai/DiagnosticCounters.cs`、`OfflineTests/AgentWriteStaticChecks.ps1`）。
+> 锚点间链：1ed91e1 → 158ef2b/2d93bc3（QC docs-only）→ 8fc7ba8（Captain t5 治理文档，docs-only）→ 31823b6（t11 代码）。
+> **自 1ed91e1 起产品测试代码零变化**（Program.cs 不在链中），t4 §2/§4 结论对本锚点继续有效。
+
+### 12.1 四命令独立复跑（QC 自跑，powershell.exe 5.1 环境适配同前）
+
+| 命令 | 结果 |
+|---|---|
+| `dotnet build CombatBrain.csproj -c Release --nologo` | 已成功生成，**0 警告 0 错误**，exit 0 |
+| `dotnet run OfflineTests -c Debug` | **ALL PASS**；[PASS]=**1147**（与 1ed91e1 实测一致，**零断言增减**）；真实 FAIL=0（10 处正则误报均为 `[PASS] …fail-open…` 测试名） |
+| `RouteAStaticChecks.ps1` | **20/20** [PASS]，exit 0 |
+| `AgentWriteStaticChecks.ps1` | **73/73** [PASS]（68→73，+5 全部为加固项），exit 0 |
+
+### 12.2 t11 三项验收逐条
+
+1. **F-7/M12（SoldierTier）**：✓ `git grep -n 'SoldierTier' HEAD`（除 bin/obj）仅剩 3 处退役说明注释 + 治理文档提及，**零代码引用**；`Enums.cs:44` 注释已更正为「X5-1 兵种分类输入；消费链 Ai/FormationSlotGlue.BuildSoldierInput → Formation/TroopClassifier.Classify」，滞留的 FighterProfile.Classify 指向消除。不留「未来预留」waiver 的处置符合 R3/§七精神。
+2. **F-4（DiagnosticCounters）**：✓ 死字段 `FrameReleaseDistinctAgents` 声明与 Reset 赋值两处均删，去重统一走 `FrameReleaseDistinctAgentCount()`（`_frameReleasePerAgent.Count`）；六类计数器 ①–⑥ 与 FrameRelease 单列 ⑦ **全部在位**，②–⑥ 显式标注「哨兵·结构性恒 0」并写明运行期观测只对 ①⑦ 有意义——与 t4 报告 F-4 建议口径一致；门禁三条相关断言（six write counters present / read-only / reset at lifecycle）未放宽且实测 PASS。
+3. **F-6（门禁扩充）**：✓ 新增 Agent 级 `SetControlledByAI`/`AddAiBehavior` 禁止规则（收信者变量名分类：agent/a/unit/soldier/defender/attacker 拦截；f/formation/AI 放行）+ 注册断言 + 正/负两条元测试（实测 `got 2: agent.SetControlledByAI(,agent.AddAiBehavior()` 与 `got 0`）。编队级保留项**未被误伤**：`FormationControlLeaseGlue.cs:375/426/455`（`f.` 收信者）与 `RouteAOrderAdapter.cs:175`（`f.AI.`）在新规则下全仓扫描零命中（两条 unauthorized 断言 hits 为空）。allowlist 仍仅阵框释放 1 条目；重构后 Pattern 分支语义与原逻辑一致，既有 68 项逐条在位。**残余观察（low，不立项）**：收信者启发式依赖变量命名（如假想 `ai.SetControlledByAI` 会被放行），属前瞻哨兵的固有近似，已由元测试双向锚定，不构成缺陷。
+4. **范围纪律**：✓ 31823b6 diff 恰为 3 个声明文件（+65/−25）；F-3（BracePlan 死参数注释）按最小范围明确不动并留理由——正确处置（该项归 t5 残留清单，captain 已在 8fc7ba8 final-report §5 登记）。
+
+### 12.3 断言账目（round 2）
+
+- 离线：1147 → **1147**（±0；Program.cs 不在 1ed91e1..31823b6 链中）——t11 声明「零断言增减」与 QC 实测一致，无新增抵充需求。
+- 门禁：68 → 73（+5）：规则注册断言 ×1 + 正/负元测试 ×2 + 新增扫描规则断言 ×2；**无删除、无放宽**。
+
+### 12.4 污染快照（增量复核时点）
+
+部署 DLL 未触碰（t11 未部署；游戏 Modules 维持 t6 基线 A39AC964…）；主检出不受影响（t11 与 8fc7ba8 均落在 worktree 分支）；本轮唯一新增写入为本节（docs-only）。运行期债 **D-1/D-2/D-3 维持开放**，不因增量复核改变；§0 verdict 不改写。
+
+### 12.5 Round-2 verdict
+
+**pass（增量范围）**——t11 三项验收全部独立成立、四命令全绿、账目闭合、无误伤、无新 finding 立项（残余观察 1 条 low 不阻断不回流）。本结论仅覆盖 t11 增量及其与 1ed91e1 锚点的一致性；整体任务链状态仍为 §0 的 **pass-with-runtime-debt**（游戏内 A/B 未闭环前不得升级为无条件 pass）。
