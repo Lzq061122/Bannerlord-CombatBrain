@@ -30,10 +30,13 @@ namespace CombatBrain.Ai
         public const string BMoveHold = "move.hold";
         public const string BSurvRetreat = "surv.retreat";      // 求生撤退
         public const string BSurvReform = "surv.reform";        // 编队重伤重整信号
-        public const string BBlockPred = "block.predicted";     // 格挡命中
-        public const string BBlockSkip = "block.skip";          // 抖动让过/无预测
+        // CB-PROMPT-0038：F4 预测式格挡与 F9 逐兵远程腿退役后，以下三个分支计数已无生产者
+        //   （BBlockPred/BBlockSkip 属 TickBlock，BRangedFall 属 RangedGlue 逐兵回退）。
+        //   登记保留以不破坏既有分支索引；报告中恒为 0，不得当作「行为未发生」以外的证据使用。
+        public const string BBlockPred = "block.predicted";     // [RETIRED 生产者 F4] 格挡命中
+        public const string BBlockSkip = "block.skip";          // [RETIRED 生产者 F4] 抖动让过/无预测
         public const string BCavChange = "cav.fsm";             // 骑兵波次 FSM 转移
-        public const string BRangedFall = "ranged.fallback";    // 远程弹药回退
+        public const string BRangedFall = "ranged.fallback";    // [RETIRED 生产者 F9 逐兵] 远程弹药回退
 
         // 赛季内唯一观测实例（任务逻辑挂载/卸载各一次，无并发竞态）
         private static DecisionObservatory _instance;
