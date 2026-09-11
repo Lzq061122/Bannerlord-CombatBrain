@@ -360,12 +360,11 @@ MCM 文案现状：`CombatBrainMcmSettings.cs:23` `[SettingPropertyBool("玩家�
 
 ## 5. §十.9 仍将保留的 Agent / 编队 API 写入清单（含保留理由）
 
-**保留的 Agent 级主动写入：无直接保留项（待裁决项见下表）。**
-退役完成后的预期终态是 **CombatBrain 对 Agent 的主动写入 = 0**；唯一例外需产品裁决：
+**保留的 Agent 级主动写入：1 项（K1，已裁决保留）**；终态下 CombatBrain 对 Agent 的主动写入仅此单点（门禁 68 条含零容忍硬断言）。
 
 | # | API / 写入 | 位置 | 保留理由（若裁决保留） | 恢复原版语义的方法 | 状态 |
 |---|---|---|---|---|---|
-| K1 | `Agent.SetFormationFrameDisabled()` | `CombatBrain/Ai/CombatAiMissionLogic.cs:2188`（判定源 `CombatBrain/Ai/FrameReleaseGlue.cs`） | 编队级接敌状态 + 同政策 + 无逐兵战术判断；与 RBM 同款观感收益（犬牙交错战线） | 移除该调用即可：引擎在编队重排/离开 Charge 时自行恢复阵框；同时清 `SlotAssigner.FrameDisabledAgents` 消费 | **待裁决（§2.4.1 ⑥ 未证明）** |
+| K1 | `Agent.SetFormationFrameDisabled()` | **终态行号 `CombatBrain/Ai/CombatAiMissionLogic.cs:2097`**（判定源 `CombatBrain/Ai/FrameReleaseGlue.cs`；本行旧值 `:2188` 与 §2.4 内 `:2151/:2188` 为 **f6634f7 审计时点坐标**，终态因退役位移） | 编队级**统一接战政策**：编队级触发 + 同政策 + 无逐兵战术判断 + 一次性 latch（只读 `IsFormationFrameEnabled`）+ 5s 冷却 + 玩家队零写入 | 移除该调用即可：引擎在 `HumanAIComponent.ParallelUpdateFormationMovement` 每帧重建帧框、离开 Charge 后自行恢复；同时清 `SlotAssigner.FrameDisabledAgents` 消费 | **resolved（产品裁决：保留；见 §6 M7 与 §0b.3）** |
 
 **保留的编队级写入（不属 Agent 级，列出以便边界透明）**：
 
@@ -385,21 +384,30 @@ MCM 文案现状：`CombatBrainMcmSettings.cs:23` `[SettingPropertyBool("玩家�
 
 ## 6. 待 Integration Owner / Captain 裁决清单（规范与编号）
 
-> 本审计**不宣称规范已改变**；以下条目属 CONSTITUTION / NOMENCLATURE / Master Spec / MCM 的规范层变更，
-> 普通开发者无权自行落地（派单 §七、§十.3）。
+> 本节是**裁决台账**：原为「待裁决清单」，2026-09-11 由 Captain / Integration Owner 角色位逐条裁决并落地；
+> 每条标 `resolved（已落地）` 并给出落点。规范文本的实际改动见 `docs/knowledge/CONSTITUTION.md`（§3.1/§3.2/P2 + 新增 HC-2）、
+> `docs/knowledge/NOMENCLATURE.md`（§2 F/X 行 RETIRED）、`docs/adr/ADR-0005`（accepted，已登记 README §5）。
 
-| # | 待裁决事项 | 现状（证据） | 影响的规范文本 |
+| # | 事项 | 现状 / 落点（证据） | 规范文本 |
 |---|---|---|---|
-| M1 | 「个体层」重新定义为「原版 AI 执行层/适配边界」，而不是 CombatBrain 自有逐兵决策层 | `CONSTITUTION.md:40`「三层：指挥层 → 编队层 → 个体层（走位/格斗/求生）」+ §4 P2「个体层（微操作）」（: 64）与本任务方向冲突 | `CONSTITUTION#architecture-principles` §3.1、`#design-principles` P2 |
-| M2 | 明确禁止周期性逐兵抢写移动/格挡/目标 | CONSTITUTION 现无此禁令；现状代码正是被禁行为（§2.6/§2.2/§2.3） | CONSTITUTION（新增硬约束条款，位置待裁决：§5 或 §8） |
-| M3 | 明确 CombatBrain 产品核心 = 军队级 + 编队级决策 | `CONSTITUTION.md:48`「只改 AI 军队的『脑子』」语义相容，但需显式写明「不替每个士兵设计独立人格/格斗能力/微观移动路线」 | `CONSTITUTION#architecture-principles` §3.2 |
-| M4 | 明确玩法能力数值不属于 CombatBrain 职责 | `CONSTITUTION.md:48`「不改玩法数值」已有近似条款；需明确覆盖「AI 单兵战斗能力参数（格挡/招架/攻击概率/射击误差/防守方向随机化）」 | `CONSTITUTION` §3.2（扩充语义） |
-| M5 | 本次方向变化登记为正式 ADR | 本任务交付 `docs/adr/ADR-0005-individual-control-plane-retirement.md`（**草案**，status=proposed） | `docs/adr/README.md` §5 Register（登记属架构级权限） |
-| M6 | F4/F6/F7/F9/F12/X2/X5 退役部分标 `RETIRED` 或重新定义 | `NOMENCLATURE.md:22` 现列「F4 预测式格挡 / F6 走位 / F7 求生重整 / F9 远程 / F12 决策抖动」为现行功能 | `docs/knowledge/NOMENCLATURE.md` |
+| M1 | 「个体层」重新定义为「原版 AI 执行层/适配边界」 | **resolved（已落地）**：`CONSTITUTION.md` §3.1 三层定义已改写；§4 P2 行同步改写 | `CONSTITUTION#architecture-principles` §3.1、`#design-principles` P2 |
+| M2 | 明确禁止周期性逐兵抢写移动/格挡/目标 | **resolved（已落地，位置=§5）**：新增 `CONSTITUTION#hard-invariants` **HC-2 个体控制面禁令**（禁周期性逐兵抢写 + 禁改战斗能力数值 + 玩家队全控制面豁免 + 例外须按 ADR-0005 登记） | `CONSTITUTION` §5（HC-2） |
+| M3 | 明确 CombatBrain 产品核心 = 军队级 + 编队级决策 | **resolved（已落地）**：§3.2 新增「产品核心 = 军队级 + 编队级决策；不替每个士兵设计独立人格/格斗能力/微观移动路线」 | `CONSTITUTION#architecture-principles` §3.2 |
+| M4 | 明确玩法能力数值不属于 CombatBrain 职责 | **resolved（已落地）**：§3.2 明确「格挡/招架能力、攻击决定概率、射击误差、随机防守方向概率等不得由 CombatBrain 覆盖（含 `AgentStatCalculateModel` 链替换）」 | `CONSTITUTION` §3.2 |
+| M5 | 本次方向变化登记为正式 ADR | **resolved（已落地）**：`docs/adr/ADR-0005-individual-control-plane-retirement.md` → **status=accepted**，并在 `docs/adr/README.md` §5 Register 登记 | `docs/adr/README.md` §5 |
+| M6 | F4/F6/F7/F9/F12/X2/X5 退役部分标 `RETIRED` | **resolved（已落地）**：`NOMENCLATURE.md` §2 `F<n>`/`X<n>` 行已标 RETIRED 并写明 RETIRED 语义（编号沿用但不代表现行功能） | `docs/knowledge/NOMENCLATURE.md` §2 |
 | M7 | 阵框释放（K1）保留或退役的**产品裁决** | **resolved（产品裁决：保留，编队级统一接战政策）** —— 附 v1.4.8 API 核验（§0b.3：类型 `TaleWorlds.MountAndBlade.Agent`，`SetFormationFrameDisabled`/`SetFormationFrameEnabled`/`IsFormationFrameEnabled`/`TrySetFormationFrame` 的签名与调用方）＋ 4 项硬条件（编队级触发 / 一次性 latch+5s 冷却 / 玩家队零写入 / 运行期计数实证）＋ 运行期验证债（动作振荡与恢复时机由 §九 A/B + FrameRelease 单列计数闭环，观测异常则回报 Captain 再议） | 执行落点：`docs/agent-control-retirement-ab-checklist.md` §3/§4；规范层影响见 M2 |
-| M8 | CPS 功能冻结令冲突处理与合并时点 | 冻结令禁「新主动移动 Glue / 新状态机 / 新直接 SetOrder 调用点」（`CONSTITUTION.md:159`）；本任务是**退役**（减写者面），与冻结令目标同向，但仍属架构级变更 | CONSTITUTION §7.2 + 需要 Integration Owner 记录 Waiver / architecture decision（INDEX §4） |
+| M8 | CPS 功能冻结令冲突处理与合并时点 | **待 Integration Owner 裁决（唯一未闭环规范项）**：本任务为「退役/减写者」，与冻结令目标同向，不构成冻结令例外；分支 `feature/agent-control-retirement` 未合入 main、未部署，合并时点与 waiver/architecture decision 记录需 Integration Owner 确认（见 ADR-0005「实施与合并」、最终报告 §5） | CONSTITUTION §7.2 + INDEX §4 Waiver |
 | M9 | MCM 文案与死开关清理 | `HandSkillStrength` 死开关已随 t2 删除（t8 承接声明）；MCM「玩家队豁免」文案已改为「玩家队豁免（全控制面）」+ 全控制面 HintText（`CombatBrainMcmSettings.cs:23-30`，t3） | 文字/设置层已落地；规范层无剩余待裁决项 |
 | M10 | `_profiles`/`FighterProfile` 是否整表退役（I12） | **resolved（按 R3「消费者归零即删」执行完毕）** —— t3 已删除 `_profiles` 字典与 `GetProfile`（`CombatAiMissionLogic.cs`）；四个字段的生产读取点（`DecisionJitterGlue.cs:47` 读 `PredictConf`、`MovementGlue.cs:160` 读 `FlankAware`）随模块退役归零，`FeintRate`/`Shakiness` 在 t2 后即无读取者；**t9（SCOPE-AMEND-2）已删除 `FighterProfile` 四字段表与 `FighterProfileFactory`**（提交 90d2fbf，`-66`），并核实 `rg '\bFighterProfile\b'` 生产代码零命中；**保留** `SoldierInput`/`PrimaryWeaponClass`（在用消费者：`Ai/FormationSlotGlue.BuildSoldierInput` → `Formation/TroopClassifier.Classify`） | 已闭环；离线侧同步由 b0b1628 完成（`TestFighterProfile` 15 条断言随表退役删除，1162→1147） |
+| M11 | 契约文本错误更正（t9 卡「`SoldierInput` 随链退役」） | **resolved（口径更正）**：以代码实情为准——`SoldierInput`/`PrimaryWeaponClass` **保留**（活消费者 `Ai/FormationSlotGlue.cs:198` → `Formation/TroopClassifier.cs:27`）；开发12 的 finding `T9-SCOPE-2` 据此关闭 | 本审计表 + 最终报告 §2 |
+| M12 | `CombatBrain/Enums.cs:36` `SoldierTier` 无消费者死类型（F-7） | **待执行（承接任务，不在 t5 文档范围）**：厂长裁定按 R3 退役（不批 waiver）——删枚举 + 更正 `Enums.cs:44` 滞留注释（仍指向已删 `FighterProfile.Classify`）+ 复查 `OfflineTests` link 与编译链 + 四命令复跑 | `docs/qc-review-agent-control-retirement.md` §9.1（F-7 = low） |
+
+**QC findings 消化登记（t4 报告 §9/§9.1）**：F-1（§5 K1 状态/行号漂移）→ 本表 §5 K1 行已改 `resolved` 并标注 f6634f7 时点坐标；
+F-2（ab-checklist 门禁 55→68）→ 已同步；F-3（既有 `BracePlan.survivalRetreating` 死参数注释）→ 登记为**既有残留**（非本分支引入，
+产品代码不在本轮退役范围，后续卫生提交处理）；F-4（`DiagnosticCounters` 死字段/哨兵语义）→ 登记为**后续卫生提交**，
+当前静态门禁为零写入主证据；F-5（−31 逐条名单）→ 见 QC 报告 §4（本表 §0b.2 为模块级映射，点名来源已注明）；
+F-6（门禁补 Agent 级 `SetControlledByAI`/`AddAiBehavior` 禁止模式）→ 下轮门禁加固；F-7 → 见 M12。
 
 ---
 

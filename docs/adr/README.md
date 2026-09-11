@@ -42,6 +42,7 @@ Related Canonical Rules（`CONSTITUTION#...`）/ Related Evidence / Supersedes /
 | ADR-0002 | 反作弊闸语义模型 | accepted | CONSTITUTION#anti-cheat-gate / #hard-invariants(IL-1) | X0/X7 记录；CONTEXT §4 澄清 |
 | ADR-0003 | TerrainStub→TerrainSampler | accepted（已实施） | CONSTITUTION P1（信息公平） | 代码注释；review-findings #7 |
 | ADR-0004 | 命令所有权与归因纪律 | accepted | CONSTITUTION#command-ownership；INDEX §4 | CommandProvenance.cs；CPS 报告（指针） |
+| ADR-0005 | 个体控制面退役与产品边界收口 | accepted（2026-09-11；合并时点待 Integration Owner 确认） | CONSTITUTION#architecture-principles / #design-principles(P2) / **#hard-invariants(HC-2 新增)**；NOMENCLATURE §2 RETIRED | `docs/agent-control-surface-audit.md`；`docs/qc-review-agent-control-retirement.md`；CB-PROMPT-0038 |
 
 ## 6. Deferred Candidates（未到准入时机，不创建）
 

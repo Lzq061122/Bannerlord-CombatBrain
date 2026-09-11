@@ -75,7 +75,7 @@ B 组（实验）：退役个体控制面后的 CombatBrain（worktree 构建）
 | ⑥ `AgentStatsOverride` | `AgentDrivenProperties` 写入 | **必须恒 0**（§五.1 退役） |
 | ⑦ FrameRelease 单列 | 写入次数 / 去重 agent 数 / 首末时刻 / 是否出现同一 agent 重复写 | 写入次数 ≈ 去重 agent 数（一次性 latch）；`repeatWrite=false`；若出现重复写或时间分布呈周期振荡 → **回报 Captain 再议**（不得自行静默退役或放宽） |
 
-静态侧已由 `OfflineTests/AgentWriteStaticChecks.ps1`（55 条断言）证明 ②–⑥ 的生产写入点**不存在**；
+静态侧已由 `OfflineTests/AgentWriteStaticChecks.ps1`（**68 条断言**，t10 终态：退役文件「必须不存在」硬断言 + 13 个退役类型零引用 + 防过度退役断言）证明 ②–⑥ 的生产写入点**不存在**；
 本节的运行期计数是「零写入」的**运行期**证据（静态与运行期不同权）。
 
 ---

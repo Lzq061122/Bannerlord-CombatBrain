@@ -1,6 +1,6 @@
 # ADR-0005: 个体控制面退役与产品边界收口（Individual Control Plane Retirement）
 
-- **Status**: proposed（草案；正式化 = Captain / Integration Owner 权限，见 `docs/adr/README.md` §5）
+- **Status**: accepted（2026-09-11 由 Captain / Integration Owner 角色位正式化；**合并时点**待 Integration Owner 确认，见「实施与合并」）
 - **Date**: 2026-09-11
 - **Deciders**: 产品方向由用户裁决（CB-PROMPT-0038 派单「最新产品决定」）；架构级采纳待 Captain / Integration Owner review
 - **Related task**: CB-PROMPT-0038 `CombatBrain-个体控制面退役与产品边界收口-正式派单-2026-09-11.md`（series_id=agent-control-retirement）
@@ -54,14 +54,17 @@
 4. **允许**：因游戏 API 限制而遍历士兵执行一个**统一的编队状态**（同一政策、无逐兵独立决策器），
    决策必须来自编队级状态。
 5. **个体层重新定义**：`CONSTITUTION#architecture-principles` §3.1 的「个体层」不再是 CombatBrain
-   自有的逐兵决策层，而是「**原版 AI 执行层 / 适配边界**」（CombatBrain 只做只读观测与编队级适配）。
-   → 该规范文本改动**待 Integration Owner 裁决**（本 ADR 不自行宣称规范已改变；见 Related Canonical Rules）。
+   自有的逐兵决策层，而是「**原版 AI 执行层 / 适配边界**」（CombatBrain 只做只读观测与经裁决的编队级统一适配）。
+   → **已落地（2026-09-11）**：`docs/knowledge/CONSTITUTION.md` §3.1 / §3.2 / §4 P2 已按本 ADR 修订，并新增
+   `CONSTITUTION#hard-invariants` **HC-2 个体控制面禁令**（禁周期性逐兵抢写移动/格挡/目标、禁改战斗能力数值、
+   玩家队全控制面豁免、例外须按本 ADR 条件逐项登记）。
 6. **玩家队豁免语义统一**：开启时 CombatBrain 对玩家队**不做任何主动战斗控制写入**
    （Formation 命令 / 编队行为权重 / 士兵移动方向 / 格挡换防选敌换武器 / AI 士兵战斗能力属性 / 阵框释放），
    允许只读观测但观测不得改变行为；玩家队里的 AI 士兵同样在豁免范围内。
    豁免**关闭**时也不得复活已退役的逐兵系统（只允许军队级/编队级接管）。
-7. **编号语义**：F4/F6/F7/F9/F12/X2/X5 中被退役的部分标 `RETIRED` 或重新定义，避免编号继续暗示旧功能有效
-   （落点 `docs/knowledge/NOMENCLATURE.md:22`；属规范层，待裁决）。
+7. **编号语义**：F4/F6/F7/F9/F12/X2/X5 中被退役的部分标 `RETIRED` 或重新定义，避免编号继续暗示旧功能有效。
+   → **已落地（2026-09-11）**：`docs/knowledge/NOMENCLATURE.md` §2 的 `F<n>` / `X<n>` 行已标 RETIRED 并写明
+   RETIRED 语义（编号沿用但不代表现行功能，生命周期以 registry + 本 ADR 为准）。
 
 **具体退役映射（本决策的实施口径，详见审计表 §2）**：
 
@@ -75,11 +78,19 @@
 | F7 | 单兵低血量自行寻友军并 `SetMovementDirection` 后撤 | 编队级重整/撤退信号（伤亡/完整度/重伤比例 → `IntentType.Reform`） |
 | X5 | 逐兵向 Slot 目标 `SetMovementDirection` 执行腿 + 逐 agent 冷却字典 | 编队构成分类、编队职责、阵宽/阵深/Arrangement、编队纪律、纯观察性 Slot 数据 |
 
-**阵框释放（X4 / `Agent.SetFormationFrameDisabled`）**：不按「用了 Agent API 就一定删除」处理，按 §五.8 语义裁决：
-必须同时满足「统一编队接战状态触发 / 同政策 / 无逐兵独立战术判断 / 有激活-恢复-生命周期边界 / 不作用于玩家队 /
-不造成周期性重复抢写或动作振荡」。审计结果：5 项成立，**第 ⑥ 项（动作振荡）离线不可证**，
-第 ④ 项「恢复边界」缺失（全仓无 `SetFormationFrameEnabled`）→ **裁决权交 Integration Owner**，
-默认建议 = 保留并挂运行期验证债；若 §九 A/B 观测证伪则一并退役。
+**阵框释放（X4 / `Agent.SetFormationFrameDisabled`）—— 产品裁决：保留**：
+
+- **性质确认**：编队级**统一接战政策**，非逐兵决策。允许因引擎 API 形态而逐兵调用（引擎无编队级批量入口）。
+- **禁止附带**：任何逐兵目标选择、逐兵移动方向计算、人格/纪律/疲劳类个体决策；跳过条件只允许非战术门控
+  （存活 / LOD / 已在释放态 / 冷却），依赖已退役个体模块的条件随模块删除，不得改写为新的逐兵判断。
+- **已落地条件**：一次性 latch（只读 `Agent.IsFormationFrameEnabled`，仅 enabled→disabled 跃迁写一次）、
+  5s/agent 冷却、玩家队编队层前置豁免（`ShouldExempt`）、只读计数 `CountFrameReleaseWrite` 单列。
+- **刷新频率与恢复语义已实证（v1.4.8）**：`Agent.IsFormationFrameEnabled`（:1444）、`SetFormationFrameDisabled`（:2305）、
+  `SetFormationFrameEnabled(WorldPosition, Vec2, Vec2, float)`（:2315）、`TrySetFormationFrame`（:3891）、
+  `GetBaseFormationFrame`（:2051）；**恢复边界 = 引擎侧** `HumanAIComponent.ParallelUpdateFormationMovement` 每帧重建帧框，
+  并经 `TeamAI.OnFormationFrameChanged`（:4745-4760）上报。证据落 `FrameReleaseGlue.cs` 文件头与审计表 §0b.3。
+- **运行期验证债（D-2）**：动作振荡须由 §九 A/B + `[Diag] FrameRelease` 单列计数闭环；若观测到重复抢写或振荡，
+  回报 Captain 并按本 ADR 退役该调用（回滚点 = 删除调用 + 清理 `SlotAssigner` 跳过集消费）。
 
 ## Alternatives Considered
 
@@ -132,18 +143,39 @@
 
 ## Related Canonical Rules
 
-- `CONSTITUTION#architecture-principles`（§3.1 三层两横切；§3.2 产品边界）—— **M1/M3/M4 待裁决**
-- `CONSTITUTION#design-principles`（P2 分层决策架构；P4 性能纪律）—— **待裁决**
-- `CONSTITUTION#hard-invariants`（IL-1 信息公平 / IL-2 性能预算 / IL-3 剧场效应）—— 本决策不触碰 IL-1
+- `CONSTITUTION#architecture-principles`（§3.1 三层两横切；§3.2 产品边界）—— **已按本 ADR 修订（2026-09-11）**
+- `CONSTITUTION#hard-invariants`（新增 **HC-2 个体控制面禁令**；IL-1 信息公平 / IL-2 性能预算 / IL-3 剧场效应未变）
+- `CONSTITUTION#design-principles`（P2 个体层语义改写；P4 性能纪律为本决策支撑）—— **已修订**
 - `CONSTITUTION#performance-discipline`（§8.1 聚合 > 个体遍历）—— 本决策的支撑条款
 - `CONSTITUTION#command-ownership`（§7.1 归因纪律 / §7.2 冻结令 / §7.3 命令写入纪律 / §7.4 Waiver）
 - `docs/knowledge/INDEX.md` §4 Waiver Contract（冻结令冲突需显式记录）
-- `docs/knowledge/NOMENCLATURE.md` §2（F/X 编号体系 → 退役项标 RETIRED，**待裁决**）
+- `docs/knowledge/NOMENCLATURE.md` §2（F/X 编号体系 → 退役项已标 RETIRED）—— **已修订**
 - `docs/adr/ADR-0001`（分层架构）、`ADR-0002`（反作弊闸）、`ADR-0004`（命令所有权与归因纪律）
 
-> 规则冲突点：`CONSTITUTION.md:40/64` 现把「个体层（走位/格斗/求生）」列为 CombatBrain 正式架构层，
-> 与本 ADR 的「个体层 = 原版 AI 执行层」定义**直接冲突**。按 Authority 协议：
-> **ADR 不静默覆盖 CONSTITUTION**；本 ADR 保持 `proposed`，直到 Integration Owner 显式更新 CONSTITUTION。
+> **冲突已解决（2026-09-11）**：`CONSTITUTION.md` §3.1/§3.2/§4 P2 原先把「个体层（走位/格斗/求生）」列为
+> CombatBrain 正式架构层，与本 ADR 的「个体层 = 原版 AI 执行层/适配边界」直接冲突。按 Authority 协议，
+> **先改规范、后改状态**：CONSTITUTION 已由 Captain / Integration Owner 角色位显式修订并新增 HC-2，
+> 本 ADR 随之 `accepted`。不存在「ADR 静默覆盖规范」——规范文本本身已更新，见 Related Canonical Rules。
+
+## Verification / Review（实施验证与复核）
+
+| 项 | 结论 | 证据 |
+|---|---|---|
+| 构建 | 0 error / 0 warning | 开发者与 QC 双方自跑（`dotnet build CombatBrain -c Release`） |
+| 离线回归 | ALL PASS，1147 PASS / 0 FAIL | 账目链 1241 →(t2 −31) 1210 →(t3 −48) 1162 →(t9 −15) 1147；逐条名单见 QC 报告 §4 与审计表 §0b.2 |
+| 静态门禁 | `AgentWriteStaticChecks.ps1` 68 条全 PASS | 退役文件「必须不存在」硬断言 + 13 个退役类型零引用 + 防过度退役断言；允许名单仅阵框释放 1 条（逐符号 + 理由，无目录豁免） |
+| CPS/Route A 无回归 | `RouteAStaticChecks.ps1` 20 条全 PASS | 执行器唯一集合 setter 语义未变 |
+| 独立复核 verdict | **pass-with-runtime-debt** | `docs/qc-review-agent-control-retirement.md`（复核锚点 `1ed91e1`，QC 独立复跑四命令 + §八十二条 + 范围账目 + 污染核验） |
+| 污染核验 | 零污染 | 部署 DLL 与 t6 基线逐字节一致；主检出未提交文件未动；日志仅尾部追加且全部早于团队首次写入 |
+| **运行期验证债** | **未闭环（D-1/D-2/D-3）** | §九 游戏内 A/B、阵框振荡与恢复实证、500 人性能；闭环前本 ADR 的实施结论不得写成无条件 pass |
+
+### 实施与合并（2026-09-11）
+
+- 实施落在独立分支 `feature/agent-control-retirement`（worktree `E:\Agent\cb-agent-retirement`），**未合入 main、未部署**。
+- 提交链：`6a33df4`/`7fc07bb`（t2）→ `8c4228e`/`8aea592`（t3）→ `90d2fbf`（t9）→ `b0b1628`（Captain 构建性同步）
+  → `9a584cb`（审计表回填）→ `1ed91e1`（t10 门禁硬化）→ QC 报告 `158ef2b`/`2d93bc3` → 本 ADR/规范收口提交。
+- **待 Integration Owner 裁决：合并时点**（CPS 功能冻结令在途；本决策为「减写者」，与冻结令同向，但仍属架构级变更，
+  需显式记录 waiver / architecture decision 后再合并）。
 
 ## Related Evidence
 
