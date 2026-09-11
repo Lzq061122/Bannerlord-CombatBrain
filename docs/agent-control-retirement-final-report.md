@@ -124,7 +124,7 @@ commit message 写「14 条断言」为笔误，diff 实测 **15 条**（`Fighte
 2. **阵框释放（K1）**：唯一保留的 Agent 级写入；风险=运行期出现重复抢写/动作振荡（D-2）。缓解=一次性 latch + 5s 冷却 + 只读计数单列；触发即退役该调用。
 3. **冻结令交互**：架构级变更在 CPS GO 前合并需 Integration Owner 记录（M8）。
 4. **断言基线下降**：1147 < 1241 是退役的必然结果，已逐条可追溯；后续若出现「为凑绿而删断言」属违规（门禁含防过度退役断言）。
-5. **既有残留**：`BracePlan` 死参数、`DiagnosticCounters` 哨兵计数、`SoldierTier` 死枚举（承接任务）——已登记，不影响行为。
+5. **残留登记**：`BracePlan.survivalRetreating` 死参数注释为**既有残留**（明确不动，见 §5 F-3 行）；`DiagnosticCounters` 哨兵计数标注与 `SoldierTier` 死枚举均已随 t11 `31823b6` **处理完毕**（见 §5 M12/F-4/F-6/F-7 行），非未决残留。均不影响行为。
 
 **可回滚点**
 - 分支级：`feature/agent-control-retirement` 整体丢弃（或 `git checkout` 回分叉点 `f6634f7`）——本分支**未合入 main、未部署**。
