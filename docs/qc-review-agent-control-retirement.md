@@ -18,7 +18,7 @@
 - 对抗性扫描 + 门禁允许名单审查：生产 Agent 级主动写入唯一实调用 = 阵框释放（产品裁决保留项），允许名单 1 条目/文件+符号粒度/附理由，无目录级豁免（§5）；
 - §六 玩家队豁免 7 项逐项核验成立（§6）；阵框四条件合规（§7）；
 - 污染核验：部署 DLL/主检出/CPS 证据/日志零污染成立（§8）；
-- findings：4 条 low（文档卫生与代码卫生，全部转 t5 消化），0 medium/high/blocker（§9）；
+- findings：7 条 low（F-1~F-6 文档/代码卫生；F-7=SoldierTier 零消费者枚举残留，应 captain 补充清单核验后同日补录，§9.1；全部转 t5 承接，无 medium/high/blocker，§9）；
 - 运行期验证债：D-1~D-3（§10），未闭环前本结论不得改写为无条件 pass。
 
 ---
@@ -128,6 +128,14 @@
 | F-4 | low | CombatBrain/Ai/DiagnosticCounters.cs :36 / :49-72 | ① `FrameReleaseDistinctAgents` 公开字段无写入点（去重实际用字典 Count）；②–⑥ 计数器无调用点＝结构性恒 0 的回归哨兵 | 后续清理：删死字段或在注释/ab-checklist 标注「②–⑥为哨兵语义，运行期证据只对 ①⑦ 有观测意义」；静态门禁仍是「零写入」主证据 | t5 或后续小型卫生提交 |
 | F-5 | low(文档) | OfflineTests/Program.cs :286 | 「14 条」已按 F-A 更正为 15 ✓，但 t2 段 −31 的逐条名单只存在于本报告（审计表为模块级映射） | t5 将本报告 §4 名单并入审计表 §0b 或引用本报告 | t5 diff 复核 |
 | F-6 | low(门禁) | OfflineTests/AgentWriteStaticChecks.ps1 :66-74 | 禁止模式未含 Agent 级 `SetControlledByAI`/`AddAiBehavior`（现状零调用；属未来回归哨兵缺口） | 后续门禁加固周期补两条禁止模式（不阻断本次） | 下轮门禁 PASS 含新断言 |
+
+### 9.1 补录（同日，应 captain 17:0x 补充清单；锚点不变，verdict 不变）
+
+| # | 严重度 | 文件:行 | 问题 | 判定与必要修复 | 验收 |
+|---|---|---|---|---|---|
+| F-7 | low | CombatBrain/Enums.cs :36-42（定义）+ :44（注释） | QC 全仓复核确认：`SoldierTier` 在 t9 后**零代码消费者**（仅 Enums.cs 定义 + Program.cs 两处退役注释）；:44 注释仍写「F10/F6 **FighterProfile.Classify** 输入」，指向已删除方法 | **不构成 needs_revision**，理由：① 不违反 §八任何一条与 t2/t3/t9 验收（M10 裁决文本=素质表四字段+工厂，未含枚举）；② `Enums.cs` 从未在任何任务 inScope 内，追溯要求已 completed 任务改动它反而制造越界写入；③ 零行为/零测试影响；属 R3「消费者归零」精神的延伸残留＋§七「编号不得暗示旧功能有效」文档层，**归 t5 单独承接**：删除 SoldierTier 枚举、改写 :44 注释为实际消费者（TroopClassifier/X5-1），承接任务契约 inScope 须显式含 `CombatBrain/Enums.cs` 并同步 link 检查（OfflineTests 编译链） | t5/承接任务 diff + 四命令复跑全绿 |
+
+**处置口径**：F-7 以 low 登记并直接归入 t5 承接清单（与 F-3 同类：既有/延伸卫生项），不触发 repair + 下一轮 review——该机制针对影响验收结论的缺口，本项不改变 §0 verdict=pass-with-runtime-debt 的任何判定基础。
 
 ## 10. 运行期验证债（未闭环项——本 verdict 上限的决定因素）
 
