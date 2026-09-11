@@ -163,11 +163,17 @@ $missionLogicRaw = [IO.File]::ReadAllText($missionLogicPath)
 Assert-Contract ($missionLogicRaw -match 'IsFormationFrameEnabled') 'AgentWrite: frame release reads engine latch state (read-only)'
 Assert-Contract ($frameGlue.Raw -match 'IsFormationFrameEnabled' -and $frameGlue.Raw -match 'SetFormationFrameEnabled' -and $frameGlue.Raw -match 'TrySetFormationFrame') 'AgentWrite: frame release file documents v1.4.8 API verification (latch/recovery evidence)'
 
-# SurvivalGlue：个体求生腿已退役，只允许编队级重整信号
+# SurvivalGlue：个体求生腿已退役（零 Agent 写入），只允许编队级重整信号
 $survivalGlue = Get-Source 'CombatBrain\Ai\SurvivalGlue.cs'
 Assert-Contract ($survivalGlue -ne $null) 'AgentWrite: SurvivalGlue.cs present'
 Assert-Contract ($survivalGlue.Code -match 'CasualtyReformSignal') 'AgentWrite: F7 formation-level reform signal retained'
-Assert-Contract ($survivalGlue.Code -notmatch 'SurvivalAction|SurvivalInstinct') 'AgentWrite: F7 per-soldier survival decision removed'
+# 已知残留（路径不在 t3 inScope）：Survival/SurvivalInstinct.cs 仍定义个体判定 API，但**必须零生产调用点**
+$survivalInstinctHits = @()
+foreach ($src in $sources) {
+    if ($src.Path.ToLowerInvariant().EndsWith('survivalinstinct.cs')) { continue }
+    if ($src.Code -match 'SurvivalInstinct\.Decide|SurvivalAction|SurvivalContext') { $survivalInstinctHits += $src.Path }
+}
+Assert-Contract ($survivalInstinctHits.Count -eq 0) "AgentWrite: F7 per-soldier decision API has zero production callers (known residue, hits: $($survivalInstinctHits -join '; '))"
 
 # ---------- 保留项仍在（防过度退役） ----------
 $rangedBrain = Get-Source 'CombatBrain\Ranged\RangedBrain.cs'

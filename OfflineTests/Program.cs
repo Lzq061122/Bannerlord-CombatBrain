@@ -3,8 +3,8 @@ using System.Collections.Generic;
 using CombatBrain;
 using CombatBrain.Combat;
 // CB-PROMPT-0038 退役：CombatBrain.Movement（F6 走位内核）与 CombatBrain.Compliance（F12 个体抖动）
-//   已整链删除，不再 using；CombatBrain.Survival 仅剩编队级重整信号，已迁至 Ai/CasualtyReformSignal.cs
-//   （命名空间保持 CombatBrain.Survival，经该文件 link 编译进本测试程序集）。
+//   已整链删除，不再 using；CombatBrain.Survival 仍提供编队级重整信号 CasualtyReformSignal
+//   （定义在 Survival/SurvivalInstinct.cs，经该文件 link 编译进本测试程序集；个体判定已非调用点）。
 using CombatBrain.Survival;
 using CombatBrain.Cavalry;
 using CombatBrain.Ranged;
