@@ -41,13 +41,37 @@
 
 限定：该场 3 次 `externalWhileActive` 全部落在同一 tick（t=4.390940），故 `externalDuration=0.000s`；本场 `replaced=0`，即**未发生外部覆盖**，不能用于验收覆盖恢复路径。
 
+## 3a. 场景 3（玩家接管）：**N/A —— 对 Route A 结构上不可执行**（用户裁决 2026-09-13）
+
+原清单（Astra 提交物 §6 / 收工报告 §11）写作「玩家选中该编队手动下令 → CB 1 拍停、不抢回」。该条继承自 **ATC-5R 租约（路线 B）** 的验证计划，**不适用于 Route A**：
+
+1. **候选枚举无条件排除玩家队**（`CombatBrain/Ai/CombatAiMissionLogic.cs:2387`）：
+   `if (team == null || team.IsPlayerTeam || !team.MBTeam.IsValid) continue;`
+2. **资格判定同样无条件**（`CombatBrain/Ai/RouteAOrderAdapter.cs:141-142`）→ `RouteAExit.PlayerOwned`：
+   `f.Team.IsPlayerTeam || f.PlayerOwner != null || f.HasPlayerControlledTroop || f.IsPlayerTroopInFormation`
+   叠加 `:140 e.AiControlled = f.IsAIControlled`（不满足 → `LostAIControl`）。
+
+∴ Route A 只能武装「非玩家队 + 无领主所有者 + 无玩家兵员 + AI 控制」的编队（实测为 `team=1`）；而玩家在 UI 上无法对非玩家队编队下令 → 该动作不可达。**不得把场景 3 记为 FAIL，也不得记为 PASS；正确状态是 N/A（口径不可执行）**。
+
+**替代的可达路径（覆盖原意图「外部接管时 Route A 不得抢回」）**：
+
+| 替代项 | 状态 |
+|---|---|
+| 外部 setter 覆盖当前命令 | 已有运行期样本（场景 1：`ExternalReplaced → EdgeRetry → OrderApplied`） |
+| 编队失效 / 清空 | 已观察（`Exit(EmptyOrInvalid)`，场景 1、2） |
+| 模式 / 开关关闭 | 已通过（`Exit(Disabled)` + `Restore`，场景 2） |
+| **玩家队豁免生效（新增验收点）** | 待跑：整场日志中**玩家队编队的 `[RouteA]` 行恒为 0**，且 Route A 武装对象的 `identity` **永不属于玩家队** |
+
+**附带记录（口径分歧，冻结令下不改代码）**：其它 7 个模块（Protect / Brace / Cavalry / Skirmish / Morale / FormationSlot / FormationControlLease）的玩家队豁免均受 MCM 开关 `CombatBrainSettings.PlayerTeamExemptionEnabled` 约束（可关闭），**Route A 完全不看该开关**（上列两处均无条件）。属 Descriptive 观察，是否收敛口径待 CPS-4 / 后续裁决，本文件不作规范结论。
+
 ## 4. 本轮未证明（运行期债，不得据本文件判 GO）
 
-1. 场景 3（玩家接管）/ 场景 4（Rejoin）/ 场景 5（增援·编队清空·拆分）**未跑**。
+1. 场景 4（Rejoin）/ 场景 5（增援·编队清空·拆分）**未跑**；场景 3 已改判 **N/A**（见 §3a）。
 2. F-2 语义分支「重试已用后再次 `replaced=true` → 立即 `Release(ExternalOverridePersisted)`」**无运行期样本**（两场 `replaced` 分别为 1 / 0，未出现第二次 `replaced=true`）。
 3. `replaced=false` 路径（不释放、不消耗重试、仅计数）只被观测为计数（`externalWhileActive=3` / `12`），其对所有权与抖动的影响无运行期证据。
 4. F-5（Release 位于 Harmony postfix 栈内改权重）无运行期证据；H-2（E 模式帧成本须按「RouteA + 观测」复合口径评定）未评定。
-5. CPS §14.1 **条件 5 仍未满足**；Astra 复审未回签。
+5.「玩家队豁免生效」验收点（§3a 表格末行）尚未采样。
+6. CPS §14.1 **条件 5 仍未满足**；Astra 复审未回签。
 
 ## 5. 复现命令
 
@@ -65,5 +89,6 @@ Get-Content $env:TEMP\CombatBrain.log -Wait -Tail 200 | Select-String -Pattern '
 
 ## 6. 登记状态
 
-- 已登记场次：场景 1（重跑）、场景 2。
-- 待跑场次：场景 3 / 4 / 5；跑完后本文件续写并按 `docs/evidence/INDEX.md` §5 更新指针。
+- 已登记场次：场景 1（重跑，PASS）、场景 2（热关闭，PASS）。
+- 已裁决不可执行：场景 3（玩家接管）→ **N/A**，替代路径见 §3a。
+- 待跑场次：场景 4（Rejoin）、场景 5（增援·编队清空·拆分），以及 §3a 的「玩家队豁免生效」验收点；跑完后本文件续写并按 `docs/evidence/INDEX.md` §5 更新指针。
