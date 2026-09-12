@@ -12,25 +12,26 @@ project_id: CombatBrain
 status_schema: 1
 branch: main
 worktree: E:\Agent\6a9268112aeaf49072bef052   # machine-local locator（非身份）
-last_verified_commit: a879688237900af4f9706b4a0ca894229ca649c7
-last_verified_at: 2026-09-08  # CONTEXT 更新日；git log 同日含该 HEAD
+last_verified_commit: 9a2afe4bdded41e1ace602382e462aa1e7b5687d
+last_verified_at: 2026-09-13  # 离线 1241 PASS/0 FAIL + 已部署 + Route A 运行期场景 1 重跑 / 场景 2 通过
 owner: captain / integration-owner（角色位，非 session）
-state: WAITING_EXTERNAL       # 等 Astra 对 CPS3R Route A 复审
-active_task: none             # 无进行中实现任务（有外部验证在途）
+state: WAITING_EXTERNAL       # 等 Astra 对 CPS3R Route A 复审；运行期 5 场景中 1、2 已完成，3–5 待跑
+active_task: none             # 无进行中实现任务（三张返修卡已闭环）
 ```
 
 ---
 
 ## Current Mainline
 
-- **主线 = CPS（战场命令控制面收口）**：CPS-0 provenance 落地 → CPS-1 唯一命令仲裁 → CPS-2 双路线 PoC → CPS-3 运行期 A/B 验证 → **CPS-3R Route A 修复收口（现状）** → CPS-4 硬门清单 & GO/NO-GO。
-- 分支 `main`，HEAD `a879688`（2026-09-08，「fix(cps): close Route A execution and lifecycle blockers」）。
+- **主线 = CPS（战场命令控制面收口）**：CPS-0 provenance 落地 → CPS-1 唯一命令仲裁 → CPS-2 双路线 PoC → CPS-3 运行期 A/B 验证 → CPS-3R Route A 修复收口 + 覆盖失效返修（现状）→ CPS-4 硬门清单 & GO/NO-GO。
+- 分支 `main`，**已验证代码基线 `9a2afe4`**（2026-09-11「fix(cps): Route A 覆盖语义裁决与 externalDuration 口径统一」）；当前 HEAD 在此之后仅有文档提交（`f6634f7` 测试指南 §0a）。
 - **功能冻结令生效中**：CPS GO 前禁新文化战术 / 新 Formation Mission / 新兵种角色 / 新播报 / 新主动移动 Glue / 新状态机 / 新直接 SetOrder 调用点。
 
 ## Current Phase
 
-- **CPS-3R Route A 修复完成，提交 `a879688`，报告 `docs/cps3r-routea-final-blocker-report.md` 已出：READY FOR ASTRA RE-REVIEW（未部署 DLL）。**
-- 本机部署类动作不得在此状态下执行（等待复审裁决后按命令链部署）。
+- **CPS-3R Route A 已修复并部署**（代码基线 `9a2afe4`；部署校验 src/dst SHA 一致，`Modules\CombatBrain`；游戏进程退出硬门通过）。
+- **运行期验证进行中**：场景 1（E_RouteA 采样）重跑 **未复现**「被外部覆盖后长时间不重落地」缺陷（`ExternalReplaced` → 5.00s 内 `EdgeRetry` → `OrderApplied`）；场景 2（战斗中热关闭）**通过**（`Exit(Disabled)` + `Restore`，`restoreFailures=0`，关闭后无重新武装）。场景 3–5 待跑。
+- **条件 5 仍未满足**：不得据已跑的两场判 CPS GO；Astra 复审未回签。
 
 ## Active Task
 
@@ -43,8 +44,12 @@ active_task: none             # 无进行中实现任务（有外部验证在途
 - 第二波意图升级 S1–S4 流水线（枚举层 8→12 维 / OpponentModel / ProtectGlue / BraceGlue）。
 - P0 评审整改六项全修复（`11f66c7..9d818ec`）。
 - **CPS-0 provenance**：SetOrderObserver 只读观测 + CommandSourceScope + 来源语义修正（902 PASS 实测）。
-- **CPS-3R**：六硬门（`cps3r-route-a-hardgates` 1138→1144 PASS）、D-RouteA 运行期验证模式（1159）、MCM 下拉补 E（1165）、叙事阵营名修复（1174）、**Route A 最终阻断修复（a879688，1174+ 断言）**。
-- 离线回归基线：**1174 PASS / 0 FAIL 实测**（2026-09-08 口径，持续只增）。
+- **CPS-3R**：六硬门（`cps3r-route-a-hardgates` 1138→1144 PASS）、D-RouteA 运行期验证模式（1159）、MCM 下拉补 E（1165）、叙事阵营名修复（1174）、Route A 最终阻断修复（`a879688`）。
+- **CB-REPAIR-0001**（`70c9a11`）：外部覆盖通知 RouteAControl + 单次边沿重试 + 连续覆盖立即 Release + 汇总新增 `externalWhileActive/edgeRetries/externalDuration`。
+- **CB-REPAIR-0002**（`a219c5b`）：`externalDuration` 口径统一为「最后一次外部覆盖时间结算」；F-2 覆盖释放语义裁决并在测试中锁定。
+- **CB-REPAIR-0003**（`9a2afe4`）：`RouteAExecutionEnabled()` 增加 `&& ObserverEnabled` 硬约束（E 模式无观测不执行）。
+- 离线回归基线：**1241 PASS / 0 FAIL 实测**（2026-09-13 口径，只增不减；历史 1174 为过期口径）。
+- 部署：代码基线 `9a2afe4` 已部署，src/dst SHA 一致。
 
 ## Frozen / Deferred
 
@@ -55,7 +60,8 @@ active_task: none             # 无进行中实现任务（有外部验证在途
 
 ## Known Blockers
 
-1. **Astra re-review 未回**（CPS3R Route A，`a879688` 未部署 = 未最终验证）。
+1. **Astra re-review 未回**（CPS3R Route A：修复已部署，等外部复审回签后方可按命令链推进 CPS-4）。
+2. **条件 5 未满足**：Route A 运行期 5 场场景仅完成 1、2（见 `docs/cps3r-routea-runtime-scenarios-2026-09-13.md`），场景 3–5 待跑；不得据部分场景判 GO。
 2. ~~`docs/` 目录未纳入 Git tracking~~ → 已解决：`AGENTS.md` + `docs/knowledge/` 三个 canonical 文件已纳入 tracking（commit `62502e9`、`d5743dd` 及 Traffic Cutover commit）。既有 CPS 报告是否入库仍待决策（不属本 cutover）。
 
 ## Known Engineering Debt
@@ -66,19 +72,24 @@ active_task: none             # 无进行中实现任务（有外部验证在途
 
 ## Latest Verification
 
-- **证据等级：git log + CONTEXT（2026-09-08 更新）确认 HEAD=`a879688`，1174 PASS/0 FAIL 实测口径，报告 `docs/cps3r-routea-final-blocker-report.md`。**
-- 范围说明：以上为「代码 + 离线断言」验证；**运行期游戏内验证（Route A 稳定/归因采样）依赖 Astra 复审 + 游戏内 E 模式采样，未完成**。
+- **证据等级：git log + 三张返修卡质量门（t2/t4/t6）+ 部署校验 + 运行期场景 1/2 实测。**
+- 离线：Release 0 错 0 警；**OfflineTests 1241 PASS / 0 FAIL**；静态 setter 扫描 4=4 无新增调用点（代码基线 `9a2afe4`）。
+- 运行期：场景 1 重跑未复现覆盖失效缺陷；场景 2 热关闭 `Exit(Disabled)`+`Restore` 通过。明细见 `docs/cps3r-routea-runtime-scenarios-2026-09-13.md`。
+- 范围说明：**场景 3–5 未跑**；F-2「重试后再次覆盖→立即 Release」分支、F-5（Harmony postfix 栈内改权重）、H-2（RouteA+观测复合帧成本）均**无运行期证据**。
 - OfflineTests 与运行期语义不同权：离线绿 ≠ 运行期绿（历史有 provenance/生命周期语义失败先例）。
 
 ## Evidence Pointers
 
+- `docs/cps3r-routea-runtime-scenarios-2026-09-13.md`（Route A 运行期场景记录：场景 1 重跑 / 场景 2 通过，含 run id 与判定命令）
 - `docs/cps3r-routea-final-blocker-report.md`（Route A 收口报告，commit a879688 同源）
 - `docs/cps4-hardgate-checklist-2026-09-08.md`（硬门清单）
 - `docs/cps3r-routea-astra-review-submission-2026-09-08.md`（Astra 复审提交物）
-- 测试链：《测试指南.md》（repo 根）— 编译 → 回归 → 部署 → 提交，顺序不得绕过
+- `MBmod/CombatAI/prompts/repairs/registry.json`（CB-REPAIR-0001/0002/0003 台账，均 COMPLETED）
+- 测试链：《测试指南.md》（repo 根）— 编译 → 回归 → 部署 → 提交，顺序不得绕过；§0a 为 E 模式采样前置（ObserverEnabled 硬约束）
 
 ## Staleness Notes
 
-- 本文件状态仅验证到 `a879688`。若 Git HEAD 前进至新 commit 且未完成新验证 → 本文件**不自动**把新 HEAD 当已验证状态；应回报 `state may be stale / repository advanced beyond last verified baseline`。
+- 本文件状态验证到代码基线 `9a2afe4`。若 Git HEAD 前进至新 commit 且未完成新验证 → 本文件**不自动**把新 HEAD 当已验证状态；应回报 `state may be stale / repository advanced beyond last verified baseline`。该基线之后的 HEAD 均为文档提交，代码内容与 `9a2afe4` 一致。
+- 运行期部分同样只覆盖已跑场次（场景 1、2）；场景 3–5 跑完前，任何「Route A 运行期已验证」的表述都必须限定场次范围。
 - 维护责任：Captain / Integration Owner 唯一直接维护；普通 Sub-agent 只能提建议与 evidence。
 - 本文件由 MBmod manager 按 v1.1 Phase A 规范代建（2026-09-09），后续归属 Captain / Integration Owner。
