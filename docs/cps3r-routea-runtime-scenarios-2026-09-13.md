@@ -108,7 +108,13 @@
 
 **子项「拆分」→ N/A**：Route A 只武装非玩家队的 AI 编队，中途拆分编队是玩家侧操作，AI 不会自行拆分 → 对武装对象不可达（与 §3a 场景 3 同因）。可达的等价项为"增援波次补员"（本 §3c 已覆盖）。
 
-**本轮附带观察（未开卡，Descriptive）**：本 run 第 3 场出现「Route A 占位但不再重发」——`replaced=1` 却 `edgeRetries=0`，且覆盖（15:39.418）之后仍有 333 次 `BehaviorSelected`，未触发设计中的"一次边沿重试"；同时 `externalWhileActive=1780`、`externalDuration=1101.9s`。与"首次覆盖→一次重试"的设计口径不一致，属**待查 discrepancy**（与 F-2/F-3/F-4 同域）；用户裁决本轮不开卡，仅记录。
+**本轮附带观察 → 已开卡并定位（CB-REPAIR-0004）**：本 run 第 3 场出现「Route A **占位不开火**」——`replaced=1` 却 `edgeRetries=0`，同时 `externalWhileActive=1780`、`externalDuration=1101.9s`。
+
+- **数据更正（2026-09-14，按 mission time 复核）**：本节早前写的「覆盖后仍有 333 次 `BehaviorSelected`」**有误**。实测该 session `BehaviorSelected` 共 **699** 次 = 覆盖前 **425** + 判定窗口 (215.03s, 979.43s) 内 **0** + 其后 **274**。窗口内只有 `SetterBegin/SetterCompleted/ExternalWhileActive` 各 1529 条，`Exit/Restore/Intent/EdgeRetry` 全 0。
+- **根因**：`Evidence.EdgeRetry` 唯一触发点 `RouteAControl.cs:180` ← `TrySelect` ← `RouteAOrderAdapter.cs:27` ← `RouteABehavior.TickOccasionally`；引擎只对 FormationAI **胜出的 ActiveBehavior** 按 0.5s 节拍回调（反编译契约由 `OfflineTests/RouteAStaticChecks.ps1` 锁定）→ 该窗口 Route A 的 Behavior 未被选中 ⇒ `TrySelect` 从未被调用 ⇒ armed 边沿重试永不执行；且 0 Exit ⇒ 未 Release ⇒ `BlocksExecutor(true, Movement)` 仍为真（`FormationCommandExecutor.cs:117`）→ **持有所有权却不落地**。
+- **处置**：CB-REPAIR-0004 已开卡并提交修复 `723b457`（`DeliveryDeadlineSeconds=10f` 交付上限 → `Release(RouteAExit.SelectionTimeout)` + 暂停重取直至局势变化号更新；汇总新增 `lastSelectedAt=`），**待质检 t8 独立复核**。
+- **未定论部分**：引擎侧「为何停止选中」为 Inferred（窗口内每 0.5s 恰 1 次原生 Movement 写 ⇒ FormationAI 节拍仍在，胜出者非 Route A Behavior）；需另开卡（涉 `Ai/` 文件与运行期采样）。
+- **下轮采样验收点**：`ExternalReplaced` 后 **≤10s** 应出现 `Exit(reason=SelectionTimeout)`，且执行器恢复写 Movement。
 
 ## 4. 本轮未证明（运行期债，不得据本文件判 GO）
 
@@ -138,5 +144,6 @@ Get-Content $env:TEMP\CombatBrain.log -Wait -Tail 200 | Select-String -Pattern '
 - 已完成场景：场景 1（重跑，**PASS**）、场景 2（热关闭，**PASS**）、场景 5（增援/清空，**PASS**，限定见 §3c）。
 - 已裁决不可执行（N/A）：场景 3（玩家接管，§3a）、场景 4（Rejoin，§3b）、场景 5 子项「拆分」（§3c）。
 - 仍待采样：「玩家队豁免生效」验收点（§3a 表格末行）。
-- 待查 discrepancy（未开卡）：§3c 的 `replaced=1 但 edgeRetries=0`（占位不开火）。
+- 已开卡处置：**CB-REPAIR-0004**（占位不开火 / `replaced=1` 但 `edgeRetries=0`，`runtime_failure`）——根因已定位，修复 `723b457` 已提交，待质检 t8 复核；§3c 数据已按实测更正（699 = 425 + 窗口内 0 + 其后 274）。
+- 未定论：引擎侧「为何停止选中」（Inferred）；**下轮采样验收点**见 §3c 末行。
 - 辅助工具：`MBmod/CombatAI/tools/routea-rejoin-check.ps1`（Rejoin/场景条件只读体检）。
