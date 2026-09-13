@@ -91,15 +91,33 @@
 
 **工具**：`MBmod/CombatAI/tools/routea-rejoin-check.ps1`（只读日志，一条命令复现上述判定：部署阶段区间、mission 时间线、条件重叠判定、Rejoin/NavigationFailed 计数与结论）。
 
+## 3c. 场景 5（增援 / 编队清空 / 拆分）：**PASS（带限定）** —— run `b0e2e0a4…`（2026-09-14 00:01–00:17）
+
+采样条件：`BattleSize=6`、`ReinforcementWaveCount=3`；本 run 跨 3 个 mission（session 至 4）；**采样期间使用游戏快进**（第 3 场 `BattleDuration=1268.79s` 游戏时间 / 墙钟约 6.5 分钟 ≈ 3.2×）。
+
+| 判定项 | 实测 |
+|---|---|
+| 退出 + 恢复配对 | 6 次 `Exit` **全部有配对 `Restore`**：`LostAIControl`×3（04:21.908 / 17:20.681 / 17:42.298）、`MissionEnding`×2（02:34.958 / 09:35.913）、`EmptyOrInvalid`×1（17:48.333） |
+| 恢复无失败 / 无对刷 | 汇总 `restoreFailures=0`、`weightFlap=0` ✓ |
+| 重新接管（幂等重挂载） | 每次 Exit 之后均重新 `OrderApplied`（如 17:33.255、17:44.308，紧随 17:20.681 / 17:42.298 的 LostAIControl）✓ |
+| 对象身份 | **`identity` 始终 = 1** → 同一 `Formation` 对象被反复补员重用；**"新对象身份隔离"分支无样本**（对象未销毁重建） |
+| 增援是否真的到场 | 是：`[Bench] agents` 在 100–200 间反复跳变（129→174→119→155→190…），波次持续补充；其中两次与 `Exit(LostAIControl)` 同时段发生 → 增援引起的生命周期事件被正确释放并再武装 |
+| 采样完整性 | `session=4 identity=1 … selected=699 applied=3 replaced=1 externalWhileActive=1780 edgeRetries=0 externalDuration=1101.900s stableSoFar=2 unverified=0 dropped=0 intentChange=0 weightFlap=0 restoreFailures=0` |
+
+**通过结论（限定三条）**：① 仅覆盖"同一对象重挂载"分支，新对象隔离未验；② 采样含游戏快进，故 **响应延迟不构成证据**（只证明"发生且正确"）；③ `LostAIControl` 的触发机制（增援/编队更新瞬间 `IsAIControlled` 翻转）为观察推断，未作定论。
+
+**子项「拆分」→ N/A**：Route A 只武装非玩家队的 AI 编队，中途拆分编队是玩家侧操作，AI 不会自行拆分 → 对武装对象不可达（与 §3a 场景 3 同因）。可达的等价项为"增援波次补员"（本 §3c 已覆盖）。
+
+**本轮附带观察（未开卡，Descriptive）**：本 run 第 3 场出现「Route A 占位但不再重发」——`replaced=1` 却 `edgeRetries=0`，且覆盖（15:39.418）之后仍有 333 次 `BehaviorSelected`，未触发设计中的"一次边沿重试"；同时 `externalWhileActive=1780`、`externalDuration=1101.9s`。与"首次覆盖→一次重试"的设计口径不一致，属**待查 discrepancy**（与 F-2/F-3/F-4 同域）；用户裁决本轮不开卡，仅记录。
+
 ## 4. 本轮未证明（运行期债，不得据本文件判 GO）
 
-1. 场景 5（增援·编队清空·拆分）**未跑**；场景 3（玩家接管）、场景 4（Rejoin）已分别经代码与实测核实**不可达**，改判 **N/A**（见 §3a、§3b）。
-2. **Rejoin 分支无任何运行期样本**（当前不可达），其导航校验失败路径（`NavigationFailed`）同样无样本。
-3. F-2 语义分支「重试已用后再次 `replaced=true` → 立即 `Release(ExternalOverridePersisted)`」**无运行期样本**（两场 `replaced` 分别为 1 / 0，未出现第二次 `replaced=true`）。
-4. `replaced=false` 路径（不释放、不消耗重试、仅计数）只被观测为计数（`externalWhileActive=3` / `12`），其对所有权与抖动的影响无运行期证据。
-5. F-5（Release 位于 Harmony postfix 栈内改权重）无运行期证据；H-2（E 模式帧成本须按「RouteA + 观测」复合口径评定）未评定。
-6.「玩家队豁免生效」验收点（§3a 表格末行）尚未采样。
-7. CPS §14.1 **条件 5 仍未满足**；Astra 复审未回签。
+1. **可执行的五场场景已全部执行完毕**：场景 1、2、5 = **PASS**；场景 3（玩家接管）、场景 4（Rejoin）与场景 5 子项（拆分）经代码与实测核实**不可达**，改判 **N/A**（§3a/§3b/§3c）。这不等于"条件 5 已满足"——条件 5 的判定权在 Astra 复审与用户，本文件不判 GO。
+2. **未取得样本的分支**：① "新 Formation 对象身份隔离"（对象未销毁重建）；② **Rejoin 分支及其 `NavigationFailed` 路径**（不可达）；③ F-2「重试已用后再次 `replaced=true` → 立即 `Release(ExternalOverridePersisted)`」；④ §3c 记录的 `edgeRetries=0` discrepancy 根因。
+3. `replaced=false` 路径（不释放、不消耗重试、仅计数）被大量观测（`externalWhileActive` 3 / 12 / **1780**），但其对所有权与抖动的实际影响仍无定论（§3c 的占位不开火现象正属此域）。
+4. F-5（Release 位于 Harmony postfix 栈内改权重）无运行期证据；H-2（E 模式帧成本须按「RouteA + 观测」复合口径评定）未评定——另注意场景 5 采样使用了快进与低 BattleSize，其数字不得与其他场次混比。
+5.「玩家队豁免生效」验收点（§3a 表格末行）尚未采样。
+6. CPS §14.1 **条件 5 仍未满足**（Astra 复审未回签；本文件不判 GO）。
 
 ## 5. 复现命令
 
@@ -117,7 +135,8 @@ Get-Content $env:TEMP\CombatBrain.log -Wait -Tail 200 | Select-String -Pattern '
 
 ## 6. 登记状态
 
-- 已登记场次：场景 1（重跑，PASS）、场景 2（热关闭，PASS）。
-- 已裁决不可执行：场景 3（玩家接管）→ **N/A**（§3a）；场景 4（Rejoin）→ **N/A**（§3b）。
-- 待跑场次：**场景 5（增援·编队清空·拆分）**，以及 §3a 的「玩家队豁免生效」验收点；跑完后本文件续写并按 `docs/evidence/INDEX.md` §5 更新指针。
+- 已完成场景：场景 1（重跑，**PASS**）、场景 2（热关闭，**PASS**）、场景 5（增援/清空，**PASS**，限定见 §3c）。
+- 已裁决不可执行（N/A）：场景 3（玩家接管，§3a）、场景 4（Rejoin，§3b）、场景 5 子项「拆分」（§3c）。
+- 仍待采样：「玩家队豁免生效」验收点（§3a 表格末行）。
+- 待查 discrepancy（未开卡）：§3c 的 `replaced=1 但 edgeRetries=0`（占位不开火）。
 - 辅助工具：`MBmod/CombatAI/tools/routea-rejoin-check.ps1`（Rejoin/场景条件只读体检）。
