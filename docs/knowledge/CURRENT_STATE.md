@@ -15,7 +15,7 @@ worktree: E:\Agent\6a9268112aeaf49072bef052   # machine-local locator（非身�
 last_verified_commit: 9a2afe4bdded41e1ace602382e462aa1e7b5687d
 last_verified_at: 2026-09-13  # 离线 1241 PASS/0 FAIL + 已部署 + Route A 运行期场景 1 重跑 / 场景 2 通过
 owner: captain / integration-owner（角色位，非 session）
-state: WAITING_EXTERNAL       # 等 Astra 对 CPS3R Route A 复审；运行期场景 1、2 已完成，场景 3 改判 N/A，4、5 待跑
+state: WAITING_EXTERNAL       # 等 Astra 对 CPS3R Route A 复审；场景 1、2 已完成，场景 3、4 改判 N/A，场景 5 待跑
 active_task: none             # 无进行中实现任务（三张返修卡已闭环）
 ```
 
@@ -30,7 +30,7 @@ active_task: none             # 无进行中实现任务（三张返修卡已闭
 ## Current Phase
 
 - **CPS-3R Route A 已修复并部署**（代码基线 `9a2afe4`；部署校验 src/dst SHA 一致，`Modules\CombatBrain`；游戏进程退出硬门通过）。
-- **运行期验证进行中**：场景 1（E_RouteA 采样）重跑 **未复现**「被外部覆盖后长时间不重落地」缺陷（`ExternalReplaced` → 5.00s 内 `EdgeRetry` → `OrderApplied`）；场景 2（战斗中热关闭）**通过**（`Exit(Disabled)` + `Restore`，`restoreFailures=0`，关闭后无重新武装）。**场景 3（玩家接管）改判 N/A**：Route A 对玩家队无条件豁免（`CombatAiMissionLogic.cs:2387`、`RouteAOrderAdapter.cs:141-142`），玩家无法对非玩家队编队下令，该动作结构上不可达 → 替代路径与新增验收点见运行期证据文件 §3a。场景 4–5 待跑。
+- **运行期验证进行中**：场景 1（E_RouteA 采样）重跑 **未复现**「被外部覆盖后长时间不重落地」缺陷（`ExternalReplaced` → 5.00s 内 `EdgeRetry` → `OrderApplied`）；场景 2（战斗中热关闭）**通过**（`Exit(Disabled)` + `Restore`，`restoreFailures=0`，关闭后无重新武装）。**场景 3、4 改判 N/A（不可达）**：场景 3 玩家接管——Route A 对玩家队无条件豁免（`CombatAiMissionLogic.cs:2387`、`RouteAOrderAdapter.cs:141-142`），玩家无法对非玩家队编队下令；场景 4 Rejoin——仅在 `mission=SupportMainEffort ∧ phase=Deployment` 同时成立时产生（`FormationCommandPolicy.cs:156-157`），实测部署阶段仅 5–20s 且该编队恒为 Reserve（→Hold），三场 E 模式 `Rejoin` 0 次。替代路径与新增验收点见运行期证据文件 §3a/§3b。**场景 5 待跑**。
 - **条件 5 仍未满足**：不得据已跑场景判 CPS GO；Astra 复审未回签。
 
 ## Active Task
@@ -61,9 +61,9 @@ active_task: none             # 无进行中实现任务（三张返修卡已闭
 ## Known Blockers
 
 1. **Astra re-review 未回**（CPS3R Route A：修复已部署，等外部复审回签后方可按命令链推进 CPS-4）。
-2. **条件 5 未满足**：Route A 运行期验证仅完成场景 1、2；场景 3 经代码核实**不可执行**（Route A 玩家队无条件豁免）已改判 N/A，场景 4、5 待跑（见 `docs/cps3r-routea-runtime-scenarios-2026-09-13.md`）。不得据部分场景判 GO。
+2. **条件 5 未满足**：Route A 运行期验证仅完成场景 1、2；场景 3（玩家接管）、场景 4（Rejoin）已核实**不可达**并改判 N/A，**场景 5（增援/清空/拆分）待跑**（见 `docs/cps3r-routea-runtime-scenarios-2026-09-13.md` §3a/§3b）。不得据部分场景判 GO。
 3. **口径分歧（待裁决，未改代码）**：Route A 的玩家队排除**不受** MCM 开关 `PlayerTeamExemptionEnabled` 约束，与其它 7 个模块口径不一致；当前仅作 Descriptive 记录，冻结令下不擅自收敛。
-2. ~~`docs/` 目录未纳入 Git tracking~~ → 已解决：`AGENTS.md` + `docs/knowledge/` 三个 canonical 文件已纳入 tracking（commit `62502e9`、`d5743dd` 及 Traffic Cutover commit）。既有 CPS 报告是否入库仍待决策（不属本 cutover）。
+4. ~~`docs/` 目录未纳入 Git tracking~~ → 已解决：`AGENTS.md` + `docs/knowledge/` 三个 canonical 文件已纳入 tracking（commit `62502e9`、`d5743dd` 及 Traffic Cutover commit）。既有 CPS 报告是否入库仍待决策（不属本 cutover）。
 
 ## Known Engineering Debt
 
@@ -76,12 +76,12 @@ active_task: none             # 无进行中实现任务（三张返修卡已闭
 - **证据等级：git log + 三张返修卡质量门（t2/t4/t6）+ 部署校验 + 运行期场景 1/2 实测。**
 - 离线：Release 0 错 0 警；**OfflineTests 1241 PASS / 0 FAIL**；静态 setter 扫描 4=4 无新增调用点（代码基线 `9a2afe4`）。
 - 运行期：场景 1 重跑未复现覆盖失效缺陷；场景 2 热关闭 `Exit(Disabled)`+`Restore` 通过。明细见 `docs/cps3r-routea-runtime-scenarios-2026-09-13.md`。
-- 范围说明：**场景 3–5 未跑**；F-2「重试后再次覆盖→立即 Release」分支、F-5（Harmony postfix 栈内改权重）、H-2（RouteA+观测复合帧成本）均**无运行期证据**。
+- 范围说明：**场景 5 未跑**；场景 3、4 为 **N/A（不可达，非失败）**；F-2「重试后再次覆盖→立即 Release」分支、Rejoin 分支（含 `NavigationFailed` 路径）、F-5（Harmony postfix 栈内改权重）、H-2（RouteA+观测复合帧成本）均**无运行期证据**。
 - OfflineTests 与运行期语义不同权：离线绿 ≠ 运行期绿（历史有 provenance/生命周期语义失败先例）。
 
 ## Evidence Pointers
 
-- `docs/cps3r-routea-runtime-scenarios-2026-09-13.md`（Route A 运行期场景记录：场景 1 重跑 / 场景 2 通过，含 run id 与判定命令）
+- `docs/cps3r-routea-runtime-scenarios-2026-09-13.md`（Route A 运行期场景记录：场景 1 重跑 / 场景 2 通过；场景 3、4 改判 N/A；含 run id、判定命令与 `MBmod/CombatAI/tools/routea-rejoin-check.ps1` 体检工具）
 - `docs/cps3r-routea-final-blocker-report.md`（Route A 收口报告，commit a879688 同源）
 - `docs/cps4-hardgate-checklist-2026-09-08.md`（硬门清单）
 - `docs/cps3r-routea-astra-review-submission-2026-09-08.md`（Astra 复审提交物）
@@ -91,6 +91,6 @@ active_task: none             # 无进行中实现任务（三张返修卡已闭
 ## Staleness Notes
 
 - 本文件状态验证到代码基线 `9a2afe4`。若 Git HEAD 前进至新 commit 且未完成新验证 → 本文件**不自动**把新 HEAD 当已验证状态；应回报 `state may be stale / repository advanced beyond last verified baseline`。该基线之后的 HEAD 均为文档提交，代码内容与 `9a2afe4` 一致。
-- 运行期部分同样只覆盖已跑场次（场景 1、2）与已裁决项（场景 3 = N/A）；场景 4、5 跑完前，任何「Route A 运行期已验证」的表述都必须限定场次范围。
+- 运行期部分只覆盖已跑场次（场景 1、2）与已裁决 N/A 项（场景 3、4）；场景 5 跑完前，任何「Route A 运行期已验证」的表述都必须限定场次范围。
 - 维护责任：Captain / Integration Owner 唯一直接维护；普通 Sub-agent 只能提建议与 evidence。
 - 本文件由 MBmod manager 按 v1.1 Phase A 规范代建（2026-09-09），后续归属 Captain / Integration Owner。

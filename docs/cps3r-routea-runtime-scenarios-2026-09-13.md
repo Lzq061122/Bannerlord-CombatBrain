@@ -64,14 +64,42 @@
 
 **附带记录（口径分歧，冻结令下不改代码）**：其它 7 个模块（Protect / Brace / Cavalry / Skirmish / Morale / FormationSlot / FormationControlLease）的玩家队豁免均受 MCM 开关 `CombatBrainSettings.PlayerTeamExemptionEnabled` 约束（可关闭），**Route A 完全不看该开关**（上列两处均无条件）。属 Descriptive 观察，是否收敛口径待 CPS-4 / 后续裁决，本文件不作规范结论。
 
+## 3b. 场景 4（Rejoin）：**N/A —— 实战两条件不共存**（用户裁决 2026-09-13）
+
+**代码条件**（Rejoin 只有一条产生路径）：
+1. `FormationCommandPolicy.cs:156-157`：仅当 `formationMission == SupportMainEffort` **且** `phase == Deployment` 才映射为 Rejoin（其余映射 Advance/Hold）
+2. `RouteAOrderAdapter.cs:224-241`：MainBody 有效（`strength>0 && confidence>0`）+ **非贴身接敌**（已知敌编队 >12m，`RouteARejoinContactMeters`）+ MainBody 点在边界内 + 起终点 NavMesh 有效且**路径距离可算**
+3. `RouteAControl.cs:100`：已选 Rejoin 但校验失败 → `Exit(NavigationFailed)`，不落地任何命令
+
+**实测（不可达判定依据）**：
+- 三场 E 模式（`4c6212a1` / `ba84a11b` / `a408fc92`）：`Rejoin` 意图 **0 次**、落地 **0 次**、`NavigationFailed` **0 次**
+- 全日志 ~35 场：`phase=Deployment` 均由游戏自动结束，时长 **5–20s**（绝大多数 5–6s，最长 21s）——**玩家停等无法有效延长该窗口**（实测两处 20–21s 与 5–6s 并存，与是否等待无稳定相关）
+- 被武装编队在部署期内恒为 `mission=Reserve`（`ReserveClassifier`：未接敌 + 非主动任务 + 距 MainBody ≤30m → Reserve → 意图 Hold）：实测 `13:53:13.777`、`01:11:08.778` 两个部署窗口内均为 `Reserve`
+- ∴ `SupportMainEffort` 样本（全部出现在 Engage）与 Deployment 窗口**时间上不重叠**
+
+**结论**：Rejoin 在当前代码与游戏参数下**实战不可达**；不得记为 FAIL，也不得记为 PASS，正确状态是 **N/A（口径不可执行）**。原清单该条（Astra 提交物 §6「Rejoin 触发场景：目标=MainBody、导航失败路径不执行」）无运行期证据支撑，属未验证项。
+
+**替代可达路径（覆盖"目标/MainBody/导航校验"的相邻语义）**：
+
+| 替代项 | 状态 |
+|---|---|
+| Route A 意图→命令落地链（Hold/Advance）与 MainBody 态势 | 已有样本（场景 1、2） |
+| 编队清空/失效退出 | 已观察（`Exit(EmptyOrInvalid)`） |
+| 开关/模式关闭退出 | 已通过（`Exit(Disabled)`，场景 2） |
+| 增援 / 对象身份隔离 | 待跑（场景 5） |
+| Rejoin 分支本身 | **无运行期样本**；若日后需验证，须先具备可观测性或调整触发条件（代码变更，冻结令下需先裁决） |
+
+**工具**：`MBmod/CombatAI/tools/routea-rejoin-check.ps1`（只读日志，一条命令复现上述判定：部署阶段区间、mission 时间线、条件重叠判定、Rejoin/NavigationFailed 计数与结论）。
+
 ## 4. 本轮未证明（运行期债，不得据本文件判 GO）
 
-1. 场景 4（Rejoin）/ 场景 5（增援·编队清空·拆分）**未跑**；场景 3 已改判 **N/A**（见 §3a）。
-2. F-2 语义分支「重试已用后再次 `replaced=true` → 立即 `Release(ExternalOverridePersisted)`」**无运行期样本**（两场 `replaced` 分别为 1 / 0，未出现第二次 `replaced=true`）。
-3. `replaced=false` 路径（不释放、不消耗重试、仅计数）只被观测为计数（`externalWhileActive=3` / `12`），其对所有权与抖动的影响无运行期证据。
-4. F-5（Release 位于 Harmony postfix 栈内改权重）无运行期证据；H-2（E 模式帧成本须按「RouteA + 观测」复合口径评定）未评定。
-5.「玩家队豁免生效」验收点（§3a 表格末行）尚未采样。
-6. CPS §14.1 **条件 5 仍未满足**；Astra 复审未回签。
+1. 场景 5（增援·编队清空·拆分）**未跑**；场景 3（玩家接管）、场景 4（Rejoin）已分别经代码与实测核实**不可达**，改判 **N/A**（见 §3a、§3b）。
+2. **Rejoin 分支无任何运行期样本**（当前不可达），其导航校验失败路径（`NavigationFailed`）同样无样本。
+3. F-2 语义分支「重试已用后再次 `replaced=true` → 立即 `Release(ExternalOverridePersisted)`」**无运行期样本**（两场 `replaced` 分别为 1 / 0，未出现第二次 `replaced=true`）。
+4. `replaced=false` 路径（不释放、不消耗重试、仅计数）只被观测为计数（`externalWhileActive=3` / `12`），其对所有权与抖动的影响无运行期证据。
+5. F-5（Release 位于 Harmony postfix 栈内改权重）无运行期证据；H-2（E 模式帧成本须按「RouteA + 观测」复合口径评定）未评定。
+6.「玩家队豁免生效」验收点（§3a 表格末行）尚未采样。
+7. CPS §14.1 **条件 5 仍未满足**；Astra 复审未回签。
 
 ## 5. 复现命令
 
@@ -90,5 +118,6 @@ Get-Content $env:TEMP\CombatBrain.log -Wait -Tail 200 | Select-String -Pattern '
 ## 6. 登记状态
 
 - 已登记场次：场景 1（重跑，PASS）、场景 2（热关闭，PASS）。
-- 已裁决不可执行：场景 3（玩家接管）→ **N/A**，替代路径见 §3a。
-- 待跑场次：场景 4（Rejoin）、场景 5（增援·编队清空·拆分），以及 §3a 的「玩家队豁免生效」验收点；跑完后本文件续写并按 `docs/evidence/INDEX.md` §5 更新指针。
+- 已裁决不可执行：场景 3（玩家接管）→ **N/A**（§3a）；场景 4（Rejoin）→ **N/A**（§3b）。
+- 待跑场次：**场景 5（增援·编队清空·拆分）**，以及 §3a 的「玩家队豁免生效」验收点；跑完后本文件续写并按 `docs/evidence/INDEX.md` §5 更新指针。
+- 辅助工具：`MBmod/CombatAI/tools/routea-rejoin-check.ps1`（Rejoin/场景条件只读体检）。
