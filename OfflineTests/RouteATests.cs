@@ -147,6 +147,110 @@ namespace OfflineTests
             TestRouteAEvidence();
             TestRouteAFlapAndMode();
             TestRouteADeliveryDeadline();
+            TestRouteARepairRound2();
+        }
+
+        // CB-REPAIR-0004 r2（review findings）：①交付暂停只能由「真实释放」终结——候选扇描失败拍的空释放
+        //（ApplyRouteASingle 无候选 → Release(EmptyOrInvalid)，Target 已 null）此前会解锁暂停、占位以周期形式回归；
+        // ②具名 HasExternal 取代 FirstExternalAt == 0f 哨兵（首拍 now == 0f 的首次外部写会被吞掉起点）；
+        // ③edgeRetries 语义 = 授权次数而非落地次数。
+        private static void TestRouteARepairRound2()
+        {
+            RouteAControl c = RouteController(); RouteFake f = new RouteFake(); RouteAEvidence e = c.Evidence;
+            Arm(c, f, Cps2RouteAIntent.Hold, 0f); int id = c.IdentityId;
+            Check(c.TrySelect(f, f.Behaviors[0], f.Behaviors[0], RouteEligible(), true, 20f),
+                "r2 routeA delivers before the overwrite");
+            ObservedRouteWrite(e, f, 1200, 20f); c.Applied(20f, true);
+            e.SetterCompleted(e.SetterBeginning(f, CommandDomain.Movement, CommandSource.ExternalUnknown, 1201, 5, 20.1f), true, 20.1f);
+            Check(!Arm(c, f, Cps2RouteAIntent.Hold, 30f) && !c.Owns(f),
+                "r2 routeA delivery timeout releases ownership");
+
+            // ApplyRouteASingle 两拍等价序列（按生产调用顺序）：无候选拍 = Reconcile + Release(空释放)；
+            // 候选拍 = ApplySingle → Update（同一 situationSignal）。生产侧 Target==null 时的空释放调用形态：
+            // CombatAiMissionLogic.cs:2380 Release(Disabled)、:2400/:320 Release(EmptyOrInvalid)、
+            // RouteAOrderAdapter.cs:161 Release(EmptyOrInvalid)、:185 Release(eligibility.Rejection)、
+            // :200 Release(InitializationFailed) —— 全部是 no-op，r2 口径下均不得作废暂停。
+            RouteAExit[] noOpForms = { RouteAExit.EmptyOrInvalid, RouteAExit.Disabled,
+                RouteAExit.InitializationFailed, RouteAExit.EmptyOrInvalid };
+            bool accepted = false, owned = false; int writes = 0, acquisitions = 0;
+            for (float t = 30.5f; t <= 120f; t += .5f)
+            {
+                c.Release(noOpForms[(int)(t * 2f) % noOpForms.Length], t);
+                var tickStatus = new FormationCommandExecutor.FormationStatus { Valid = true, FieldBattle = true,
+                    LeaseOk = true, RouteAMovementOwned = c.Owns(f) };
+                var tickWinner = new FormationCommandProposal { Domain = CommandDomain.Movement, Kind = CommandKind.Hold };
+                FormationCommandExecutor.ExecuteWinner(tickWinner, tickStatus, default(FormationCommandExecutor.LastDomainWrite),
+                    5f, .2f, p => writes++, null, false);
+                accepted |= Arm(c, f, Cps2RouteAIntent.Hold, t);
+                if (c.Owns(f) && !owned) acquisitions++;
+                owned = c.Owns(f);
+            }
+            Check(!accepted && acquisitions == 0 && writes > 100 && e.BuildSummary(id).Contains("lastSelectedAt=20.000s"),
+                "r2 production no-op release forms cannot unlock the suspension (executor keeps writing Movement)");
+            // 验收序列①（单次可读版）：SelectionTimeout → 一次 Release(EmptyOrInvalid)（Target==null 的 no-op）
+            // → 以相同 situationSignal 调 Update → 仍 suspended 且 !Owns。
+            c.Release(RouteAExit.EmptyOrInvalid, 120.5f);
+            Check(!Arm(c, f, Cps2RouteAIntent.Hold, 121f) && !c.Owns(f),
+                "r2 no-op release then same-signal Update still refuses ownership");
+            // 验收序列②尾段：局势变化号更新后允许「恰好一次」重取（同一新局势号复调不得重复取得）。
+            bool reacquired = Arm(c, f, Cps2RouteAIntent.Hold, 121.5f, 9);
+            if (c.Owns(f) && !owned) acquisitions++;
+            owned = c.Owns(f);
+            bool steady = Arm(c, f, Cps2RouteAIntent.Hold, 122f, 9);
+            if (c.Owns(f) && !owned) acquisitions++;
+            owned = c.Owns(f);
+            Check(reacquired && steady && acquisitions == 1 && owned && !f.Original,
+                "r2 situation revision change re-acquires exactly once and then stays steady");
+
+            // 生产单例（ApplyRouteASingle 实际驱动的对象）复演同一序列：候选扇描失败拍的空释放不得解锁暂停。
+            // 说明：ApplyRouteASingle 本体在 CombatBrain/Ai/CombatAiMissionLogic.cs（本轮 out of scope）且为 private、
+            // 需要活 Mission/Teams，离线不可直接调用；此处用同一生产单例 + 其公开入口复演它的两拍调用序列。
+            CbRouteAPoC.Control.BeginSession(new object(), 0f);
+            CbRouteAPoC.Control.Evidence.Capture = true;
+            var pf = new RouteFake();
+            Check(CbRouteAPoC.Control.Update(pf, RouteEligible(), Cps2RouteAIntent.Hold, true, 0f, 0f, 7, 1, 0, 0f)
+                && CbRouteAPoC.IsMovementOwnedByRouteA(pf), "r2 production singleton owns after arming");
+            ObservedRouteWrite(CbRouteAPoC.Control.Evidence, pf, 1500, 1f);
+            CbRouteAPoC.Control.Applied(1f, true);
+            RouteAEvidence pe = CbRouteAPoC.Control.Evidence;
+            pe.SetterCompleted(pe.SetterBeginning(pf, CommandDomain.Movement, CommandSource.ExternalUnknown, 1501, 5, 2f), true, 2f);
+            Check(!CbRouteAPoC.Control.Update(pf, RouteEligible(), Cps2RouteAIntent.Hold, true, 0f, 0f, 7, 1, 0, 20f)
+                && !CbRouteAPoC.IsMovementOwnedByRouteA(pf),
+                "r2 production singleton releases at the delivery deadline");
+            CbRouteAPoC.Control.Release(RouteAExit.EmptyOrInvalid, 21f); // ApplyRouteASingle 无候选拍的调用
+            Check(!CbRouteAPoC.Control.Update(pf, RouteEligible(), Cps2RouteAIntent.Hold, true, 0f, 0f, 7, 1, 0, 22f)
+                && !CbRouteAPoC.IsMovementOwnedByRouteA(pf),
+                "r2 production singleton stays suspended after a scan-failure release");
+
+            // 具名 HasExternal：now == 0f 的首次外部写入必须作为起点，而不是被 0f 哨兵当成「尚无外部写」。
+            c = RouteController(); f = new RouteFake(); e = c.Evidence;
+            Arm(c, f, Cps2RouteAIntent.Hold, 0f); id = c.IdentityId;
+            ObservedRouteWrite(e, f, 1300, 0f); c.Applied(0f, true);
+            e.SetterCompleted(e.SetterBeginning(f, CommandDomain.Movement, CommandSource.ExternalUnknown, 1301, 5, 0f), true, 0f);
+            e.SetterCompleted(e.SetterBeginning(f, CommandDomain.Movement, CommandSource.ExternalUnknown, 1302, 5, 5f), true, 5f);
+            Check(e.ReplacedFor(id) == 1 && e.BuildSummary(id).Contains("externalDuration=5.000s"),
+                "r2 first external write at now==0 is the origin, not mistaken for none (named HasExternal)");
+            c.Release(RouteAExit.Disabled, 6f);
+            Check(e.BuildSummary(id).Contains("externalDuration=5.000s"),
+                "r2 exit settlement keeps the now==0 origin");
+
+            // 首拍（now == 0f）的选中回调必须如实落账，-Infinity 初值只表示「本 session 从未被选中」。
+            c = RouteController(); f = new RouteFake(); e = c.Evidence;
+            Arm(c, f, Cps2RouteAIntent.Hold, 0f); id = c.IdentityId;
+            Check(c.TrySelect(f, f.Behaviors[0], f.Behaviors[0], RouteEligible(), true, 0f)
+                && e.BuildSummary(id).Contains("lastSelectedAt=0.000s"),
+                "r2 selection at now==0 is a real timestamp, not 'never'");
+
+            // edgeRetries = 授权次数（非落地次数）：重试获授权后落单失败仍是 1，applied 不增。
+            c = RouteController(); f = new RouteFake(); e = c.Evidence;
+            Arm(c, f, Cps2RouteAIntent.Hold, 0f); id = c.IdentityId;
+            ObservedRouteWrite(e, f, 1400, 10f); c.Applied(10f, true);
+            e.SetterCompleted(e.SetterBeginning(f, CommandDomain.Movement, CommandSource.ExternalUnknown, 1401, 5, 10.5f), true, 10.5f);
+            Check(c.TrySelect(f, f.Behaviors[0], f.Behaviors[0], RouteEligible(), true, 11f),
+                "r2 edge retry authorization is granted on the next selected callback");
+            c.Release(RouteAExit.AdapterFailed, 11.1f); // 落单失败：Adapter 侧释放，不产生 OrderApplied
+            Check(e.BuildSummary(id).Contains("edgeRetries=1") && e.AppliedFor(id) == 1,
+                "r2 edgeRetries counts authorizations, not landings");
         }
 
         // CB-REPAIR-0004：运行期 run=b0e2e0a4 session 4 证明「覆盖后 armed 的单次边沿重试永不执行」——

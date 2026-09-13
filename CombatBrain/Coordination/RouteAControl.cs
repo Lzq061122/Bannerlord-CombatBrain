@@ -86,6 +86,8 @@ namespace CombatBrain.Coordination
             _externalRetryArmed = false;
             _externalRetryUsed = false;
             _deliveredAt = now;
+            // r2 裁决：MissionEnding 不依赖 Release 解锁——暂停期间 Target 已为 null，Release 是 no-op，
+            // 因此这里直接归零，保证下一场战斗从干净状态开始（新会话 = 新局面）。
             _deliverySuspended = false;
         }
 
@@ -126,6 +128,11 @@ namespace CombatBrain.Coordination
             }
             else if (Target != null && now - _deliveredAt >= DeliveryDeadlineSeconds)
             {
+                // r2 口径（Captain 裁决 + 陷阱说明）：交付上限自身的这次 Release 也是「真实释放」
+                //（previous != null），按 r2 规则会清掉暂停标记。这里采用**先清后设**顺序：先 Release
+                //（内部在真实释放分支清 _deliverySuspended）再置 true，因此暂停不会被自己的释放清掉。
+                // 若将来把置位提前、或在 Release 内按 reason 排除 SelectionTimeout，必须同步修改此处，
+                // 否则暂停立即失效 → Update 下一拍就重新取得 → 周期占位回归。
                 Release(RouteAExit.SelectionTimeout, now);
                 _signal = situationSignal;
                 _deliverySuspended = true;
@@ -207,6 +214,9 @@ namespace CombatBrain.Coordination
             bool shouldWrite = _writtenRevision != Revision || _writtenActivation != _activation;
             if (shouldWrite && _externalRetryArmed)
             {
+                // CB-REPAIR-0004 r2 语义：EdgeRetry 记「授权次数」而非「落地次数」——此处只消费覆盖后授权的
+                // 单次重试机会；真正落地由紧随其后的 Adapter 写入决定（成功 → OrderApplied，失败 → AdapterFailed）。
+                // 因此 edgeRetries=1 且 applied 未增 ≠ 落地成功，判定落地必须看 OrderApplied/UnverifiedApply。
                 _externalRetryArmed = false;
                 Evidence.EdgeRetry(IdentityId, now);
             }
@@ -244,10 +254,13 @@ namespace CombatBrain.Coordination
 
         public void Release(RouteAExit reason, float now)
         {
-            // 显式释放（资格门、热关闭、会话结束等）终结交付暂停：下一次 Update 允许重新尝试取得所有权。
-            _deliverySuspended = false;
             IRouteAWeights previous = Target;
+            // CB-REPAIR-0004 r2：只有「真实释放」才结束交付暂停。此前放在方法入口，会让候选扇描失败拍的空释放
+            // （ApplyRouteASingle 无候选 → Release(EmptyOrInvalid)，此时 Target 已为 null）立即解锁，
+            // 暂停形同虚设、占位以周期形式回归。指定 reason（Disabled/ModeChanged/MissionEnding）的主动解锁
+            // 需 Captain 裁决后再加；Mission 轮换由 BeginSession 重置（见该方法）。
             if (previous == null) return;
+            _deliverySuspended = false;
             int id = IdentityId;
             Target = null; // 在任何恢复回调之前撤销权限，并记录 Exit。
             Evidence.Exit(id, reason, now);

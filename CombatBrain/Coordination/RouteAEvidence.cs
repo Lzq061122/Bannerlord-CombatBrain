@@ -41,7 +41,11 @@ namespace CombatBrain.Coordination
             public int Changes, Flaps;
             public float X, Y;
             public bool Active, Pending;
+            // CB-REPAIR-0004 r2：用具名 bool 而非 FirstExternalAt == 0f 作「尚无外部写」哨兵——首拍
+            //（now == 0f）的首次外部写入会被 0f 哨兵当成未初始化，第二次写入再覆盖起点，覆盖时长被吞掉。
+            public bool HasExternal;
             public float FirstExternalAt, LastExternalAt, ExternalDuration;
+            // 同一理由：LastSelectedAt 以 -Infinity 初值区分「本 session 从未被选中」与「在 now == 0f 被选中」。
             public float LastSelectedAt;
             public Cps2RouteAIntent Intent;
         }
@@ -100,7 +104,8 @@ namespace CombatBrain.Coordination
             int id = Find(identity);
             if (id != 0) return id;
             if (identity == null || _identities == IdentityCapacity) { Dropped++; return 0; }
-            _stats[_identities] = new Stats { Object = new WeakReference(identity), Team = team, Formation = formation };
+            _stats[_identities] = new Stats { Object = new WeakReference(identity), Team = team, Formation = formation,
+                LastSelectedAt = float.NegativeInfinity };
             return ++_identities;
         }
         private Stats Get(int id) { return id > 0 && id <= _identities ? _stats[id - 1] : null; }
@@ -156,7 +161,7 @@ namespace CombatBrain.Coordination
                 bool replaced = s.Pending;
                 if (replaced) { s.Replaced++; s.Pending = false; }
                 else s.ExternalWhileActive++;
-                if (s.FirstExternalAt == 0f) s.FirstExternalAt = now;
+                if (!s.HasExternal) { s.HasExternal = true; s.FirstExternalAt = now; }
                 s.LastExternalAt = now;
                 Record(token.Identity, replaced ? RouteAEventKind.ExternalReplaced : RouteAEventKind.ExternalWhileActive,
                     now, token.Seq, s.LastApplied, source: token.Source, orderType: token.OrderType, observer: token.ObserverSeq);
@@ -192,11 +197,13 @@ namespace CombatBrain.Coordination
             Stats s = Get(id); if (s == null) return;
             s.Active = false; s.Pending = false;
             // F-1 口径统一：以最后一次外部覆盖时间结算，不用退出时刻——无关原因退出不夸大 Observed 时长。
-            if (s.FirstExternalAt != 0f) s.ExternalDuration = Math.Max(0f, s.LastExternalAt - s.FirstExternalAt);
+            if (s.HasExternal) s.ExternalDuration = Math.Max(0f, s.LastExternalAt - s.FirstExternalAt);
             s.ExitSeq = Record(id, RouteAEventKind.Exit, now, reason: reason);
         }
         public void EdgeRetry(int id, float now)
         {
+            // CB-REPAIR-0004 r2 语义：计数的是「授权次数」（覆盖后授权的那一次边沿重试被消费），不是「落地次数」；
+            // 落地与否看随后的 OrderApplied / UnverifiedApply（见 RouteAControl.TrySelect 同处注释）。
             Stats s = Get(id); if (s == null) return;
             s.EdgeRetries++;
             Record(id, RouteAEventKind.EdgeRetry, now, revision: s.Revision);
@@ -230,13 +237,16 @@ namespace CombatBrain.Coordination
         public string BuildSummary(int id)
         {
             Stats s = Get(id); if (s == null) return "";
+            // edgeRetries 语义 = 授权次数（非落地次数）；lastSelectedAt 的 never 只表示本 session 从未被选中，
+            // 首拍（now == 0f）被选中会如实打印 0.000s（见 Stats.LastSelectedAt 的 -Infinity 初值）。
             return string.Format(CultureInfo.InvariantCulture,
                 "session={0} identity={1} team={2} f={3} domain=Movement intent={4} selected={5} applied={6} replaced={7} externalWhileActive={8} edgeRetries={9} externalDuration={10:F3}s stableSoFar={11} unverified={12} dropped={13} intentChange={14} weightFlap={15} lastSelectedAt={16}",
                 Session, id, s.Team, s.Formation, s.Intents, s.Selected, s.Applied, s.Replaced,
                 s.ExternalWhileActive, s.EdgeRetries,
-                s.Active && s.FirstExternalAt != 0f ? Math.Max(0f, s.LastExternalAt - s.FirstExternalAt) : s.ExternalDuration,
+                s.Active && s.HasExternal ? Math.Max(0f, s.LastExternalAt - s.FirstExternalAt) : s.ExternalDuration,
                 s.Applied - s.Replaced, s.Unverified, Dropped, s.Changes, s.Flaps,
-                s.LastSelectedAt > 0f ? s.LastSelectedAt.ToString("F3", CultureInfo.InvariantCulture) + "s" : "never");
+                float.IsNegativeInfinity(s.LastSelectedAt) ? "never"
+                    : s.LastSelectedAt.ToString("F3", CultureInfo.InvariantCulture) + "s");
         }
     }
 }
