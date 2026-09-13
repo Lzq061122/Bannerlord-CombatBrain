@@ -146,6 +146,80 @@ namespace OfflineTests
 
             TestRouteAEvidence();
             TestRouteAFlapAndMode();
+            TestRouteADeliveryDeadline();
+        }
+
+        // CB-REPAIR-0004：运行期 run=b0e2e0a4 session 4 证明「覆盖后 armed 的单次边沿重试永不执行」——
+        // 00:15:39.418 ExternalReplaced → 00:17:20.681 Exit(LostAIControl) 之间 101s（764 任务秒）
+        // BehaviorSelected 0 次、edgeRetries 0 次，而所有权一直被持有（externalWhileActive=1780）。
+        // 本测试锁定修复口径：交付上限内必须释放所有权，且不得以周期占位的方式重新取得。
+        private static void TestRouteADeliveryDeadline()
+        {
+            RouteAControl c = RouteController(); RouteFake f = new RouteFake(); RouteAEvidence e = c.Evidence;
+            Arm(c, f, Cps2RouteAIntent.Hold, 0f); int id = c.IdentityId;
+            Check(c.TrySelect(f, f.Behaviors[0], f.Behaviors[0], RouteEligible(), true, 20f),
+                "routeA selected callback before the override delivers the first order");
+            ObservedRouteWrite(e, f, 700, 20f); c.Applied(20f, true);
+            e.SetterCompleted(e.SetterBeginning(f, CommandDomain.Movement, CommandSource.ExternalUnknown, 701, 5, 20.1f), true, 20.1f);
+            Check(e.ReplacedFor(id) == 1 && c.Owns(f) && e.BuildSummary(id).Contains("edgeRetries=0"),
+                "routeA armed retry is undelivered after the overwrite (runtime 101s / 0 BehaviorSelected replay)");
+            bool held = true;
+            for (float t = 20.6f; t <= 29.5f; t += .5f) held &= c.Owns(f) && Arm(c, f, Cps2RouteAIntent.Hold, t);
+            Check(held, "routeA keeps ownership inside the delivery deadline without any selected callback");
+            Check(!Arm(c, f, Cps2RouteAIntent.Hold, 30f) && !c.Owns(f) && f.Original,
+                "routeA releases ownership at the delivery deadline instead of holding a placeholder");
+            Check(e.BuildSummary(id).Contains("edgeRetries=0") && e.BuildSummary(id).Contains("replaced=1")
+                && e.BuildSummary(id).Contains("lastSelectedAt=20.000s"),
+                "routeA placeholder evidence keeps replacement/retry counts and the last selected time");
+            var winner = new FormationCommandProposal { Domain = CommandDomain.Movement, Kind = CommandKind.Hold };
+            var status = new FormationCommandExecutor.FormationStatus { Valid = true, FieldBattle = true,
+                LeaseOk = true, RouteAMovementOwned = c.Owns(f) };
+            int resumed = 0;
+            Check(FormationCommandExecutor.ExecuteWinner(winner, status, default(FormationCommandExecutor.LastDomainWrite),
+                5f, .2f, p => resumed++, null, false) && resumed == 1,
+                "routeA placeholder release unblocks the ordinary Movement executor (no 占位不开火)");
+            RouteAExit exitReason = RouteAExit.None; RouteAEvent item;
+            while (e.TryRead(out item)) { if (item.Kind == RouteAEventKind.Exit) exitReason = item.Reason; }
+            Check(exitReason == RouteAExit.SelectionTimeout,
+                "routeA placeholder release is observable as SelectionTimeout exit reason");
+
+            Check(!Arm(c, f, Cps2RouteAIntent.Hold, 31f) && !c.Owns(f) && f.Original,
+                "routeA does not re-acquire ownership while the situation revision is unchanged");
+            Check(!Arm(c, f, Cps2RouteAIntent.Hold, 900f) && !c.Owns(f),
+                "routeA delivery suspension persists across an unchanged situation (no periodic placeholder)");
+            Check(Arm(c, f, Cps2RouteAIntent.Hold, 900.5f, 6) && c.Owns(f) && !f.Original,
+                "routeA new situation revision re-arms ownership for one more delivery attempt");
+            Check(Arm(c, f, Cps2RouteAIntent.Hold, 901f, 6) && c.Owns(f),
+                "routeA re-acquired ownership opens a fresh delivery window");
+            Check(!Arm(c, f, Cps2RouteAIntent.Hold, 910.5f, 6) && !c.Owns(f) && f.Original,
+                "routeA second undelivered attempt is bounded by the same deadline");
+
+            c = RouteController(); f = new RouteFake(); e = c.Evidence;
+            Arm(c, f, Cps2RouteAIntent.Hold, 0f); id = c.IdentityId;
+            bool owned = true;
+            for (float t = .5f; t <= 9.5f; t += .5f) owned &= c.Owns(f) && Arm(c, f, Cps2RouteAIntent.Hold, t);
+            Check(owned, "routeA never-selected arming owns inside the delivery window");
+            Check(!Arm(c, f, Cps2RouteAIntent.Hold, 10f) && !c.Owns(f) && f.Original
+                && e.BuildSummary(id).Contains("lastSelectedAt=never"),
+                "routeA never-selected arming is bounded by the same deadline (占位判定量: lastSelectedAt=never)");
+
+            // 健康路径回归：覆盖后仍在节拍内收到选中回调 → 重试落地、所有权保持，交付上限不误触发。
+            c = RouteController(); f = new RouteFake(); e = c.Evidence;
+            Arm(c, f, Cps2RouteAIntent.Hold, 0f); id = c.IdentityId;
+            bool retried = false;
+            for (float t = .5f; t <= 40f; t += .5f)
+            {
+                if (Arm(c, f, Cps2RouteAIntent.Hold, t)
+                    && c.TrySelect(f, f.Behaviors[0], f.Behaviors[0], RouteEligible(), true, t))
+                {
+                    ObservedRouteWrite(e, f, 900 + (long)(t * 2f), t); c.Applied(t, true);
+                    if (t > 1f) retried = true;
+                }
+                if (Math.Abs(t - 20f) < .01f)
+                    e.SetterCompleted(e.SetterBeginning(f, CommandDomain.Movement, CommandSource.ExternalUnknown, 1500, 5, 20.05f), true, 20.05f);
+            }
+            Check(retried && c.Owns(f) && e.BuildSummary(id).Contains("edgeRetries=1"),
+                "routeA steady selected cadence lands the edge retry and keeps ownership (no false timeout)");
         }
 
         private static void TestRouteAEvidence()

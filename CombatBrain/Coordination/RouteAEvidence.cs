@@ -42,6 +42,7 @@ namespace CombatBrain.Coordination
             public float X, Y;
             public bool Active, Pending;
             public float FirstExternalAt, LastExternalAt, ExternalDuration;
+            public float LastSelectedAt;
             public Cps2RouteAIntent Intent;
         }
         public const int IdentityCapacity = 64;
@@ -115,6 +116,8 @@ namespace CombatBrain.Coordination
         {
             Stats s = Get(id); if (s == null) return;
             s.Selected++;
+            // CB-REPAIR-0004：占位不开火的判定量——armed 期间再无选中回调时，该时刻远早于 ExternalReplaced。
+            s.LastSelectedAt = now;
             Record(id, RouteAEventKind.BehaviorSelected, now, revision: revision);
         }
         public void IntentChanged(int id, bool flap)
@@ -228,11 +231,12 @@ namespace CombatBrain.Coordination
         {
             Stats s = Get(id); if (s == null) return "";
             return string.Format(CultureInfo.InvariantCulture,
-                "session={0} identity={1} team={2} f={3} domain=Movement intent={4} selected={5} applied={6} replaced={7} externalWhileActive={8} edgeRetries={9} externalDuration={10:F3}s stableSoFar={11} unverified={12} dropped={13} intentChange={14} weightFlap={15}",
+                "session={0} identity={1} team={2} f={3} domain=Movement intent={4} selected={5} applied={6} replaced={7} externalWhileActive={8} edgeRetries={9} externalDuration={10:F3}s stableSoFar={11} unverified={12} dropped={13} intentChange={14} weightFlap={15} lastSelectedAt={16}",
                 Session, id, s.Team, s.Formation, s.Intents, s.Selected, s.Applied, s.Replaced,
                 s.ExternalWhileActive, s.EdgeRetries,
                 s.Active && s.FirstExternalAt != 0f ? Math.Max(0f, s.LastExternalAt - s.FirstExternalAt) : s.ExternalDuration,
-                s.Applied - s.Replaced, s.Unverified, Dropped, s.Changes, s.Flaps);
+                s.Applied - s.Replaced, s.Unverified, Dropped, s.Changes, s.Flaps,
+                s.LastSelectedAt > 0f ? s.LastSelectedAt.ToString("F3", CultureInfo.InvariantCulture) + "s" : "never");
         }
     }
 }

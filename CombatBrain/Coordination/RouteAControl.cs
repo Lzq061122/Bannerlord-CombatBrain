@@ -16,7 +16,7 @@ namespace CombatBrain.Coordination
         None, Disabled, ModeChanged, MissionEnding, Replaced, EmptyOrInvalid,
         PlayerOwned, LostAIControl, NotFieldBattle, NotInfantry, InvalidCommand,
         NavigationFailed, InitializationFailed, AdapterFailed, EvidenceCapacity, ForcedTick,
-        ExternalOverridePersisted
+        ExternalOverridePersisted, SelectionTimeout
     }
 
     public struct RouteAEligibility
@@ -40,6 +40,12 @@ namespace CombatBrain.Coordination
 
     public sealed class RouteAControl
     {
+        // CB-REPAIR-0004：所有权的可交付上限。armed 的单次边沿重试只能由引擎的选中回调（TrySelect）触发，
+        // 而引擎只对 FormationAI 胜出的 ActiveBehavior 按固定 0.5s 节拍回调（FormationAI 计时器，
+        // OfflineTests/RouteAStaticChecks.ps1 锁定其契约）；健康路径的覆盖重落地在 5s 内完成。
+        // 10s = 20 拍无任何选中回调即判定「不可交付」——必须释放所有权，不得继续占位挡住 CB 执行器。
+        public const float DeliveryDeadlineSeconds = 10f;
+
         public IRouteAWeights Target { get; private set; }
         public Cps2RouteAIntent Intent { get; private set; }
         public int IdentityId { get; private set; }
@@ -56,6 +62,8 @@ namespace CombatBrain.Coordination
         private int _chainSignal;
         private bool _hasChange;
         private bool _externalRetryArmed, _externalRetryUsed;
+        private float _deliveredAt;          // 最近一次「引擎可交付」时刻：武装激活或真实选中回调
+        private bool _deliverySuspended;     // 交付超时释放后暂停重新取得所有权，直到局势变化号更新
         public int IntentChanges { get; private set; }
         public int Flaps { get; private set; }
 
@@ -77,6 +85,8 @@ namespace CombatBrain.Coordination
             _writtenRevision = _writtenActivation = -1;
             _externalRetryArmed = false;
             _externalRetryUsed = false;
+            _deliveredAt = now;
+            _deliverySuspended = false;
         }
 
         public bool Owns(object identity) { return Target != null && ReferenceEquals(Target.Identity, identity); }
@@ -103,6 +113,24 @@ namespace CombatBrain.Coordination
                 Release(reject, now);
                 return false;
             }
+            // ── CB-REPAIR-0004（运行期 run=b0e2e0a4 / session 4）：外部覆盖触发 armed 单次边沿重试后，
+            // 引擎在 101s（764 任务秒）内一次都没回调 TrySelect（0 次 BehaviorSelected）→ 重试永不执行，
+            // 而 Target 仍被持有 → BlocksExecutor 持续挡住 CB 自身 Movement 执行（FormationCommandExecutor:117）
+            // = 占位不开火。处置：超过交付上限仍无可交付回调 → 释放所有权（恢复原权重、解除执行器阻塞）并
+            // 暂停重新取得，直到局势变化号更新（真正的战术变化）才重试一次；期间由原版 AI 继续指挥（fail-open）。
+            // 本检查搭在既有每拍入口上（ApplyRouteASingle → Update），不新增调用点、不新增每帧成本。
+            if (_deliverySuspended)
+            {
+                if (situationSignal == _signal) return false;
+                _deliverySuspended = false;
+            }
+            else if (Target != null && now - _deliveredAt >= DeliveryDeadlineSeconds)
+            {
+                Release(RouteAExit.SelectionTimeout, now);
+                _signal = situationSignal;
+                _deliverySuspended = true;
+                return false;
+            }
             if (Target == null)
             {
                 int id = Evidence.Register(target.Identity, team, formation);
@@ -116,6 +144,8 @@ namespace CombatBrain.Coordination
                 _writtenRevision = _writtenActivation = -1;
                 _externalRetryArmed = false;
                 _externalRetryUsed = false;
+                // 每次取得所有权都重开一个交付窗口（不能继承上一次武装/释放前的时间戳）。
+                _deliveredAt = now;
                 Evidence.Activate(id);
             }
             bool changed = intent != Intent || Math.Abs(x - _x) >= 5f || Math.Abs(y - _y) >= 5f;
@@ -173,6 +203,7 @@ namespace CombatBrain.Coordination
                 || !ReferenceEquals(behavior, Target.Behavior((int)Intent - 1)))
             { Release(RouteAExit.InvalidCommand, now); return false; }
             Evidence.Selected(IdentityId, Revision, now);
+            _deliveredAt = now; // 引擎可交付：刷新交付上限时钟；armed 重试正是依赖此回调执行。
             bool shouldWrite = _writtenRevision != Revision || _writtenActivation != _activation;
             if (shouldWrite && _externalRetryArmed)
             {
@@ -213,6 +244,8 @@ namespace CombatBrain.Coordination
 
         public void Release(RouteAExit reason, float now)
         {
+            // 显式释放（资格门、热关闭、会话结束等）终结交付暂停：下一次 Update 允许重新尝试取得所有权。
+            _deliverySuspended = false;
             IRouteAWeights previous = Target;
             if (previous == null) return;
             int id = IdentityId;
