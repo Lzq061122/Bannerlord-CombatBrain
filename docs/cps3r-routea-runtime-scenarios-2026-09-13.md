@@ -223,6 +223,41 @@
 
 **判定**：`restoreFailures=0`、无异常行 ✓；`Exit(LostAIControl)` 配对 `Restore` ✓。**无 S2 样本**（本场未进入暂停，退出原因是 `LostAIControl` 而非 `SelectionTimeout`）；**无 S5-edgeRetry 样本**（`replaced=0`，3 次外部写均为 `ExternalWhileActive`）。本场亦未再武装（资格未恢复），属资格门控行为、非缺陷。
 
+## 3h. r3 第四个运行期样本：**S2 补齐**（2026-09-14，run=`d43c302ee4944e7d9de445d460df2393`）
+
+**绑定**：同部署（`395fe13` / DLL `7E5FC25A…`）；`agents=1501`、`BattleDuration=1365.66s`（长局）、窗口 15339 行**异常 0**、`AnomalyLongStalemate=1`（长僵持，与本 mod 无关的历史常见现象）。
+
+**完整生命周期链**：
+
+| t（s） | 事件 | 判定要点 |
+|---|---|---|
+| 501.995 / 502.030 | `Intent(Advance rev1)` → `OrderApplied` | 正常落地 |
+| 531.752 / 532.029 | `Intent(Hold rev2)` → `OrderApplied` | 意图真变化即落地 |
+| 532.255 | `Exit(LostAIControl)` + `Restore` | 配对 ✓ |
+| 559.379 | `Intent(Hold rev3)`（重新武装） | — |
+| 569.381 | **`Exit(SelectionTimeout)`** + `Restore` | **Δ=10.002s**，期间零选中 |
+| **587.012** | **`SuspensionRetry`（rev3）** + `Intent(Advance rev4)` | **合格事件=意图真变化 → 恰好一次重取**；距超时 17.63s（>10s 冷却） |
+| 590.534 | `Intent(Hold rev5)`（意图又变） | **冷却内 → 未授予重取** ✓（冷却门禁实机生效） |
+| 592.548 | `Exit(LostAIControl)` + `Restore` | 非超时真实释放 → 预算重置 |
+| 675.086 | `Intent(Hold rev6)` | — |
+| 685.088 | **`Exit(SelectionTimeout)`** + `Restore` | **Δ=10.002s** |
+| 1179.461 | **`SuspensionRetry`（rev6）** + `Intent(Advance rev7)` | **超时后 494s 零再武装**（S1 强证据），直到合格事件出现才重取一次 |
+| 1189.467 | **`Exit(SelectionTimeout)`** + `Restore` | **Δ=10.006s**（重取尝试同样按期限释放） |
+| 1199.470 | **`SuspensionRetry`（rev9）** + `Intent(Hold rev10)` | 本暂停期第 2 次重取（**达上限 `MaxSuspendedReattempts=2`**） |
+| 1209.470 | **`Exit(SelectionTimeout)`** + `Restore` | **Δ=10.000s**；此后**无第 3 次重取**（预算耗尽 → 本场退役，符合 J-2 语义） |
+
+**汇总（末）**：`selected=61 applied=2 replaced=0 externalWhileActive=94 edgeRetries=0 externalDuration=649.652s stableSoFar=2 unverified=0 dropped=0 intentChange=4 weightFlap=0 lastSelectedAt=532.029s suspensionRetries=3 restoreFailures=0`
+`Exit` 分布：`SelectionTimeout` ×4、`LostAIControl` ×2，**全部配对 `Restore`**。
+
+**判定**：
+- **S2 = PASS（首次取得运行期样本）**：三次 `SuspensionRetry` 分别对应三次**具名/离散**的意图真变化（rev3→rev4、rev6→rev7、rev9→rev10），每次合格事件**只授予一次**重取；
+- **S1 = PASS（进一步加强）**：`685 → 1179` 长达 **494 秒**持有资格却不重新武装（同期 94 次外部写），只在合格离散事件出现时才重取 → 无周期重占位；
+- **S3 = PASS（×4）**：四次 `SelectionTimeout` 均在武装/重取后 **10.000–10.006s** 触发，且均配对 `Restore`；
+- **冷却门禁 = 实机确认**：冷却内的意图变化（590.534）未授予重取；
+- **预算上界 = 实机确认**：第 2 次重取超时后不再重取（预算耗尽）；
+- `restoreFailures=0`、`weightFlap=0`、`unverified=0`、`dropped=0`、异常 0 ✓；
+- **S5-edgeRetry 仍无样本**：本场 `replaced=0`（94 次外部写全为 `ExternalWhileActive`，按 F-2 语义不释放、不消耗预算、不计入 edgeRetry）。
+
 ## 4. 本轮未证明（运行期债，不得据本文件判 GO）
 
 1. **可执行的五场场景已全部执行完毕**：场景 1、2、5 = **PASS**；场景 3（玩家接管）、场景 4（Rejoin）与场景 5 子项（拆分）在**本次采样口径下不适用**（§3a/§3b/§3c），其中 **Rejoin 分支仍未验证**（不得声称结构上永久不可达）。这不等于"条件 5 已满足"——条件 5 的判定权在 Astra 复审与用户，本文件不判 GO。

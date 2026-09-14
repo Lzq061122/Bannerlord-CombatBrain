@@ -68,6 +68,19 @@
 | S2 | **无样本**（未进入暂停：退出原因是 `LostAIControl` 而非 `SelectionTimeout`） |
 | S5 edgeRetry | **无样本**（`replaced=0`；3 次外部写均为 `ExternalWhileActive`，按 F-2 不释放不消耗预算） |
 
+## 2e. 第四个运行期样本（run=`d43c302e…`，1501 人 / 1365.66s 长局）——**S2 补齐**
+
+同部署；窗口 15339 行异常 0。汇总（末）：`selected=61 applied=2 replaced=0 externalWhileActive=94 edgeRetries=0 externalDuration=649.652s stableSoFar=2 intentChange=4 weightFlap=0 lastSelectedAt=532.029s suspensionRetries=3 restoreFailures=0`；`Exit` = `SelectionTimeout`×4 + `LostAIControl`×2，**全部配对 `Restore`**。
+
+| # | 结果 |
+|---|---|
+| **S2 合格意图变化仅一次 `SuspensionRetry`** | **PASS（首次取得样本）**：3 次 `SuspensionRetry` 各对应一次意图真变化（rev3→4、rev6→7、rev9→10），每次合格事件只授予一次 |
+| **S1 连续变号不重取** | **PASS（进一步加强）**：`t=685→1179` **494 秒**持有资格却不重新武装（同期 94 次外部写），只在合格离散事件出现时重取一次 |
+| **S3 `SelectionTimeout` + `Restore`** | **PASS（×4）**：四次均在武装/重取后 **10.000–10.006s** 触发并配对 `Restore` |
+| 冷却门禁 | **实机确认**：冷却内意图变化（t=590.534）未授予重取 |
+| 预算上界 | **实机确认**：第 2 次重取超时后不再重取（`MaxSuspendedReattempts=2`，符合 J-2「本场退役」） |
+| S5 edgeRetry | **仍无样本**（`replaced=0`，94 次外部写全为 `ExternalWhileActive`） |
+
 ## 2. 本轮采样验收点（Astra 回签要求的最小集）
 
 | # | 验收点 | 判定方法 | 通过标准 |

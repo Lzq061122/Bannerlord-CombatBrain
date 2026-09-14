@@ -36,7 +36,9 @@ active_task: CB-REPAIR-0004 r3 受控部署 + 运行期采样（台账 IN_PROGRE
 - **当前动作**：按 Astra 回签执行 **r3 受控部署 + 运行期采样**（绑定 commit / 部署 DLL SHA / run·session / MCM 与战斗配置；采样项见 `docs/cps3r-routea-r3-sampling-record-2026-09-14.md`）。
 - **r3 运行期样本（累计两场，2026-09-14）**：
   - 样本①`run=c81c4f5e…`（§3e）：武装后引擎全程未选中 → **恰好 10.00s `Exit(SelectionTimeout)`+`Restore`**，余场 304s **零再武装** → S1 **PASS（强）**、S3 **PASS**、S4 间接 PASS、S5 部分、S2 未触发。
-  - 样本②`run=6223ad9b…`（§3f，`agents=601`、`BattleDuration=505.51s`、异常 0）：健康路径**强 PASS**——`applied=9`/`stableSoFar=9`/`selected=746`/`lastSelectedAt=493.531s`/`weightFlap=0`/`restoreFailures=0`；`Exit`×6（`LostAIControl`×5 + `EmptyOrInvalid`×1）**全部配对 `Restore`** 且每次资格恢复后重新武装；意图真变化链 Hold→Advance→Retreat→Hold **逐次落地**；S4 **直接 PASS**（释放期间原版写入正常）。**S2 与 S5-edgeRetry 仍无样本**（前者需"暂停期出现合格意图变化"，后者需发生外部覆盖）。
+  - 样本②`run=6223ad9b…`（§3f，`agents=601`、`BattleDuration=505.51s`、异常 0）：健康路径**强 PASS**——`applied=9`/`stableSoFar=9`/`selected=746`/`lastSelectedAt=493.531s`/`weightFlap=0`/`restoreFailures=0`；`Exit`×6（`LostAIControl`×5 + `EmptyOrInvalid`×1）**全部配对 `Restore`** 且每次资格恢复后重新武装；意图真变化链 Hold→Advance→Retreat→Hold **逐次落地**；S4 **直接 PASS**。**S2、S5-edgeRetry 当时无样本**。
+  - 样本③`run=ce970979…`（§3g）：短样本（武装 1s 后 `LostAIControl` 释放，全场未再武装），`restoreFailures=0`，无新验收点。
+  - 样本④`run=d43c302e…`（§3h，**1501 人 / 1365.66s 长局**）：**S2 补齐 PASS**——3 次 `SuspensionRetry` 各对应一次具名意图真变化、每次合格事件只授予一次；**S1 进一步加强**（`t=685→1179` **494 秒**零再武装，同期 94 次外部写）；**S3 PASS ×4**（四次 `SelectionTimeout` 均在武装/重取后 10.000–10.006s 触发并配对 `Restore`）；**冷却门禁与预算上界均获实机确认**（冷却内意图变化不授予；第 2 次重取超时后不再重取）。**S5-edgeRetry 仍无样本**（`replaced=0`）。
 - **条件 5 仍未满足**：不判 GO（判定权在 Astra 复审与用户）。
 
 ## Active Task
