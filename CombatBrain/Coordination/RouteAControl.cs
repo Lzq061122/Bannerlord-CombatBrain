@@ -330,18 +330,21 @@ namespace CombatBrain.Coordination
             // 不 Release、不消耗重试；仅由证据层计数 ExternalWhileActive。
         }
 
-        // CB-REPAIR-0005：只读采样（不读写任何游戏状态、不改权重/暂停/预算）。读取异常一律单点吞掉，
-        // 保证诊断路径不可能改变控制流——这是本卡的零语义差要求。
+        // CB-REPAIR-0005 r1（Astra P1）：整个诊断边界都视为不可信——探针读取、样本组装、
+        // SilenceObserved/日志出口抛出的异常一律不得逃逸到 Route A 控制流。此前输出回调在 catch 之外：
+        // 终拍异常会打断「先探针、后 Release(SelectionTimeout)」的次序，超时释放被跳过、外层按异常
+        // 释放为 InitializationFailed → 下一拍可立即重取（破坏暂停语义）。
+        // 本 catch 只包诊断语句，内部不含任何控制流语句（权重/暂停/预算/释放都在别处），
+        // 因此不会吞掉真实控制逻辑错误。终拍仍在释放前取时刻，保留可解释的时间口径。
         private void SilenceProbe(float now, bool final)
         {
-            float w0 = -1f, w1 = -1f, w2 = -1f, w3 = -1f;
-            int activeIndex = -1, units = -1;
-            string activeType = "unreadable";
-            bool aiSame = false, aiCtl = false;
             try
             {
-                w0 = Target.GetWeight(0); w1 = Target.GetWeight(1);
-                w2 = Target.GetWeight(2); w3 = Target.GetWeight(3);
+                float w0 = Target.GetWeight(0); float w1 = Target.GetWeight(1);
+                float w2 = Target.GetWeight(2); float w3 = Target.GetWeight(3);
+                int activeIndex = -1, units = -1;
+                string activeType = "unreadable";
+                bool aiSame = false, aiCtl = false;
                 IRouteASilenceProbe probe = Target as IRouteASilenceProbe;
                 if (probe != null)
                 {
@@ -351,17 +354,17 @@ namespace CombatBrain.Coordination
                     aiCtl = probe.AiControlled();
                     units = probe.Units();
                 }
+                _silenceProbes++;
+                Evidence.Silence(IdentityId, new RouteASilenceSample
+                {
+                    Time = now, Final = final, ProbeSeq = _silenceProbes, ReplacedAt = _silenceAt,
+                    LastSelectedAt = Evidence.LastSelectedAtFor(IdentityId),
+                    ActiveIndex = activeIndex, ActiveType = activeType,
+                    AiObjectSame = aiSame, AiControlled = aiCtl, Units = units,
+                    Weight0 = w0, Weight1 = w1, Weight2 = w2, Weight3 = w3
+                });
             }
-            catch (Exception) { return; }
-            _silenceProbes++;
-            Evidence.Silence(IdentityId, new RouteASilenceSample
-            {
-                Time = now, Final = final, ProbeSeq = _silenceProbes, ReplacedAt = _silenceAt,
-                LastSelectedAt = Evidence.LastSelectedAtFor(IdentityId),
-                ActiveIndex = activeIndex, ActiveType = activeType,
-                AiObjectSame = aiSame, AiControlled = aiCtl, Units = units,
-                Weight0 = w0, Weight1 = w1, Weight2 = w2, Weight3 = w3
-            });
+            catch (Exception) { }
         }
 
         public void Release(RouteAExit reason, float now)

@@ -168,6 +168,7 @@ namespace OfflineTests
             TestRouteARepairRound2();
             TestRouteAReArmBounded();
             TestRouteASilenceProbe();
+            TestRouteASilenceFailureBoundary();
         }
 
         // CB-REPAIR-0004 r2（review findings）：①交付暂停只能由「真实释放」终结——候选扇描失败拍的空释放
@@ -654,6 +655,96 @@ namespace OfflineTests
             Check(!Arm(c3, f3, Cps2RouteAIntent.Hold, 30.1f) && !c3.Owns(f3) && f3.Original,
                 "silence probe read failure does not affect the delivery-deadline release");
             Check(rows == 0, "silence probe read failures are swallowed silently (zero rows)");
+        }
+
+        // CB-REPAIR-0005 r1（Astra P1）：诊断输出边界不可信——读取端与输出端异常都不得改变控制流。
+        // 场景 = 覆盖后 10s 交付窗口 + 超时释放 + 暂停；三份对照（基线 / 读取端抛 / 输出端抛）逐字段比较。
+        private sealed class SilenceBoundaryResult
+        {
+            public bool Threw, HeldInsideWindow, ReleasedAtDeadline, WeightsRestored, ImmediateReacquire;
+            public bool ExitWasSelectionTimeout, SawInitializationFailed, ProbeReadCalls;
+            public int ExitCount, Events, WeightWritesInsideWindow;
+        }
+
+        private static SilenceBoundaryResult RunSilenceBoundary(Action<RouteFake> configureFake,
+            Action<RouteAEvidence> wireOutlet)
+        {
+            var r = new SilenceBoundaryResult();
+            RouteAControl c = RouteController(); RouteFake f = new RouteFake(); RouteAEvidence e = c.Evidence;
+            if (configureFake != null) configureFake(f);
+            if (wireOutlet != null) wireOutlet(e);
+            Arm(c, f, Cps2RouteAIntent.Hold, 0f);
+            c.TrySelect(f, f.Behaviors[0], f.Behaviors[0], RouteEligible(), true, 20f);
+            ObservedRouteWrite(e, f, 1200, 20f); c.Applied(20f, true);
+            e.SetterCompleted(e.SetterBeginning(f, CommandDomain.Movement, CommandSource.ExternalUnknown, 1201, 5, 20.1f), true, 20.1f);
+            int writesBefore = f.Writes;
+            bool held = true;
+            try
+            {
+                for (float t = 20.6f; t <= 29.5f; t += .5f) held &= c.Owns(f) && Arm(c, f, Cps2RouteAIntent.Hold, t);
+            }
+            catch (Exception) { r.Threw = true; held = false; }
+            r.HeldInsideWindow = held;
+            r.WeightWritesInsideWindow = f.Writes - writesBefore;
+            bool acquiredAtDeadline;
+            try { acquiredAtDeadline = Arm(c, f, Cps2RouteAIntent.Hold, 30.1f); }
+            catch (Exception) { r.Threw = true; acquiredAtDeadline = true; }
+            r.ReleasedAtDeadline = !acquiredAtDeadline && !c.Owns(f);
+            r.WeightsRestored = f.Original;
+            try { r.ImmediateReacquire = Arm(c, f, Cps2RouteAIntent.Hold, 30.6f); }
+            catch (Exception) { r.Threw = true; r.ImmediateReacquire = true; }
+            r.ProbeReadCalls = f.ProbeCalls > 0;
+            RouteAEvent item;
+            while (e.TryRead(out item))
+            {
+                r.Events++;
+                if (item.Kind != RouteAEventKind.Exit) continue;
+                r.ExitCount++;
+                if (item.Reason == RouteAExit.SelectionTimeout) r.ExitWasSelectionTimeout = true;
+                if (item.Reason == RouteAExit.InitializationFailed) r.SawInitializationFailed = true;
+            }
+            return r;
+        }
+
+        private static bool SameBoundary(SilenceBoundaryResult a, SilenceBoundaryResult b)
+        {
+            return a.HeldInsideWindow == b.HeldInsideWindow
+                && a.ReleasedAtDeadline == b.ReleasedAtDeadline
+                && a.WeightsRestored == b.WeightsRestored
+                && a.ImmediateReacquire == b.ImmediateReacquire
+                && a.ExitWasSelectionTimeout == b.ExitWasSelectionTimeout
+                && a.SawInitializationFailed == b.SawInitializationFailed
+                && a.ExitCount == b.ExitCount
+                && a.Events == b.Events
+                && a.WeightWritesInsideWindow == b.WeightWritesInsideWindow;
+        }
+
+        private static void TestRouteASilenceFailureBoundary()
+        {
+            SilenceBoundaryResult baseline = RunSilenceBoundary(null, null);
+            Check(!baseline.Threw && baseline.HeldInsideWindow && baseline.ReleasedAtDeadline
+                && baseline.WeightsRestored && !baseline.ImmediateReacquire
+                && baseline.ExitWasSelectionTimeout && !baseline.SawInitializationFailed
+                && baseline.WeightWritesInsideWindow == 0 && baseline.ProbeReadCalls,
+                "silence boundary baseline: unplugged outlet keeps the plain delivery-deadline semantics");
+
+            SilenceBoundaryResult readFault = RunSilenceBoundary(f => f.ProbeThrows = true, null);
+            SilenceBoundaryResult outletFault = RunSilenceBoundary(null,
+                e => e.SilenceObserved = s => { throw new InvalidOperationException("diagnostic outlet failed"); });
+
+            Check(!readFault.Threw && SameBoundary(baseline, readFault),
+                "silence boundary: probe read failures never escape the diagnostic boundary");
+            Check(!outletFault.Threw && SameBoundary(baseline, outletFault),
+                "silence boundary: outlet (log callback) failures never escape the diagnostic boundary");
+            Check(readFault.WeightWritesInsideWindow == 0 && outletFault.WeightWritesInsideWindow == 0,
+                "silence boundary: failing diagnostics cause zero weight writes inside the window");
+            Check(outletFault.ExitWasSelectionTimeout && !outletFault.SawInitializationFailed
+                && !outletFault.ImmediateReacquire && outletFault.WeightsRestored,
+                "silence boundary: final-tick outlet failure still releases as SelectionTimeout and stays suspended");
+            Check(outletFault.Events == baseline.Events && outletFault.ExitCount == baseline.ExitCount,
+                "silence boundary: repeated outlet failures add no event storm and consume no extra retry budget");
+            Check(baseline.Events == readFault.Events && baseline.Events == outletFault.Events,
+                "silence boundary: diagnostic faults leave the recorded event stream identical to baseline");
         }
 
         private static void TestRouteAFlapAndMode()

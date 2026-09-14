@@ -34,7 +34,7 @@
 | S1 连续变号不重取 | **PASS**（多场：494s / 895.9s / 213.7s / 117s+ 零再武装；连续变号零重取） |
 | S2 合格意图变化仅一次 `SuspensionRetry` | **PASS**（2 个独立样本：§3h 三连重取、§3k 两次重取各对应一次具名意图变化；冷却内与达上限后一律不授予） |
 | S3 超时 `SelectionTimeout` + `Restore` | **PASS**（多次，Δ=9.507–10.006s，全部配对 `Restore`，`restoreFailures=0`） |
-| S4 释放后执行器持续可用 | **PASS（直接形态）**：单次释放后连续 `ExternalAfterExit` 跨 117.2s–213.7s |
+| S4 释放后执行器持续可用 | **PASS（直接形态；口径更正）**：释放后 `ExternalAfterExit` 连续窗口——§3k 场 190 次 / 总跨度 117.2s（**内含 CB 两次重新持有所有权，实得三段 ≈10.0s/30.7s/56.5s，合计 ≈97.2s**）；§3j 场 188 次 / 213.7s |
 | **S5 正向形态（`ExternalReplaced → EdgeRetry → OrderApplied`）** | **未取得：3 次覆盖样本 3/3 全负**（§3i/§3j/§3k），`edgeRetries` 均为 0 |
 | 健康路径 / 生命周期 | **PASS（强）**：多场 `applied=15~11 / stableSoFar` 同步、`weightFlap=0`、`unverified=0`、`dropped=0`；所有 `Exit` 全部配对 `Restore` |
 | 场景 4 Rejoin | **成功路径已取得 1 次运行期样本**（§3j：部署期 `SupportMainEffort` → `Intent(Rejoin)` → `OrderApplied(ot=1)`，`NavigationFailed=0`）；**失败路径 `NavigationFailed` 仍无样本** |
@@ -50,12 +50,12 @@
 | §3j `4156cc25` s2（2010 人 / 549s） | 覆盖前 320.0–325.0 连续选中 | 断流 **223s 至战斗结束** | 负 |
 | §3k `4e885a4e`（1251 人 / 347s，**最强**） | 覆盖前 **379 次连续选中 / 15 次落地**（健康局正中间） | 断流 **127.3s 至战斗结束**；期间 CB **两次重取**（各持 10s 交付窗口）引擎仍未回调 | 负 |
 
-§3k 附带的两个可判定事实（Descriptive）：
+§3k 附带的两个可判定事实（Descriptive；**口径已按 Astra P1 复审更正**）：
 
-1. `ExternalWhileActive`：**覆盖前 3 次（全在部署拍）/ 覆盖后 58 次**（221.030→290.528，约每 0.5s 一次）⇒ 覆盖后**原生侧持续每拍写该编队 Movement**，CB 行为同期零选中。
+1. `ExternalWhileActive`：**覆盖前 3 次（全在部署拍 5.295）/ 覆盖后 58 次**（221.0295→290.5281；**分布非均匀：含 11.0s 与 31.0s 两处间隔，最大间隔 31.0s**）⇒ 只能报告"覆盖后外部 Movement 写入显著增加 + 该切片事实"；**来源仍是 `ExternalUnknown`，不得写成"已证明原生持续胜出"**；CB 行为同期零选中。
 2. 全场 `BehaviorSelected` 只有两处 >3s 空档，且都在 `LostAIControl` 窗口内（19.9s / 5.8s），其余严格 0.5s 连续 ⇒ **断流不是引擎节拍问题**。
 
-**由此产生的新判断（Inferred，未证）**：`ExternalReplaced`（CB 落地后 ≤1s 内出现外部写）标记的正是"原生 FormationAI 重新接管该编队 Movement"的时刻；此后原生行为持续胜出，**armed 单次边沿重试失去被兑现的前提** ⇒ 在当前实现下，S5 正向形态（要求 10s 内引擎重新选中 CB 行为）可能**在该配置下不可达**；r3 前构建上出现过的那一次正样本（§3 `ba84a11b`，Δ=5.00s）反而成为需要解释的例外。
+**由此产生的新判断（Inferred，未证）**：`ExternalReplaced`（CB 落地后 ≤1s 内出现外部写）标记的正是"外部侧重新接管该编队 Movement"的时刻；此后外部写入持续存在而 CB 行为再未被选中，**armed 单次边沿重试失去被兑现的前提** ⇒ 在当前实现下，S5 正向形态（要求 10s 内引擎重新选中 CB 行为）可能**在该配置下不可达**；r3 前构建上出现过的那一次正样本（§3 `ba84a11b`，Δ=5.00s）反而成为需要解释的例外。**"原生行为是否持续胜出"仍属待探针确认的推断。**
 
 **这正是 CB-REPAIR-0005 探针要判定的事**：`[RouteASilence]` 行会给出覆盖后 `activeIdx`（胜出者是否仍是 Route A 行为）、`activeType`（谁在胜出）、`weights`（CB 侧权重是否仍为 `10/0/0/0`）、`aiSame/aiCtl`（AI 对象与资格是否仍成立）。**探针已就绪但未部署**——部署会替换现网 r3 DLL，故需裁决（见 §5 问题 6/7/8）。
 
@@ -148,7 +148,7 @@
 6. **J-1（记账口径）**：开发侧反向验证产物（`REVERSE-CHECK PASS=1280 FAIL=17` + 具名失败断言）未按任务契约字段登记 → 质检按**未验证**记账，风险已由 t12 更强的等价证据（真 r2 生产构建复现 P1）闭合；已在运行场景档 §3d 补登。
 7. **口径分歧（Descriptive，未改代码）**：Route A 的玩家队排除**不受** MCM 开关 `PlayerTeamExemptionEnabled` 约束，与其它 7 个模块口径不一致。
 8. **状态陈旧纪律**：`CURRENT_STATE.last_verified_commit = 9a2afe4`（离线已验证基线）；**现网 DLL = r3 `395fe13`（运行期验收未完成，非已验证状态）**；`main` HEAD 已在其后（含 r1/r2/r3 与证据文档提交），不得把新 HEAD 当作已验证状态。
-9. **下轮最小采样项（按 §0b 更新）**：a) 连续变号期间不得重取 → **已达成（多场）**；b) 合格意图变化后允许且仅允许一次重取 → **已达成（2 样本，上限/冷却实机确认）**；c) `ExternalReplaced` 后 ≤10s `Exit(reason=SelectionTimeout)` 且执行器恢复 Movement 写 → **已达成（Δ=9.507–10.006s，执行器连续窗口 117.2–213.7s）**；d) 无重入异常、`RestoreFailures==0` → **已达成（8 场全 0，异常 0）**。**唯一未达成 = 健康 `EdgeRetry` 被兑现（S5 正向形态）**。
+9. **下轮最小采样项（按 §0b 更新）**：a) 连续变号期间不得重取 → **已达成（多场）**；b) 合格意图变化后允许且仅允许一次重取 → **已达成（2 样本，上限/冷却实机确认）**；c) `ExternalReplaced` 后 ≤10s `Exit(reason=SelectionTimeout)` 且执行器恢复 Movement 写 → **已达成（Δ=9.507–10.006s；执行器实得连续窗口：§3j ≈213.7s、§3k 三段合计 ≈97.2s）**；d) 无重入异常、`RestoreFailures==0` → **已达成（8 场全 0，异常 0）**。**唯一未达成 = 健康 `EdgeRetry` 被兑现（S5 正向形态）**。
 10. **归因口径问题（新，Descriptive，需裁决）**：Route A 的写入**不进** `CommandProvenance` 聚合——`RouteAOrderAdapter` 只 `CommandSourceScope.Enter`+`SetMovementOrder`，不调用 `CommandProvenance.Instance.Record`（全仓唯一调用点 = `FormationCommandExecutor.cs:147`）⇒ `[OrderTraceAgg]` 恒为 `CombatBrainRouteA=0/o0`（4 场复现），Route A 的归因只存在于 `[RouteAEvent] source=CombatBrainRouteA` 渠道（内部自洽：36 条 = 12 次落地×3）。这影响 §4.9(d) 中「`OrderTraceAgg` 归因正常」的判定口径。
 
 ## 5. 请 Astra 裁决的问题
@@ -160,7 +160,7 @@
 5. **玩家队豁免口径分歧**：是否需要收敛（使 Route A 也受 MCM 开关约束）？该项当前仅记录，未改代码（功能冻结令内）。
 6. **S5 正向形态的验收口径**：请裁决——**①接受离线证据替代**（三次覆盖样本均证明"覆盖后引擎不再回调 CB 行为"这一失败形态，armed 重试的兑现前提不成立），据此关闭 CB-REPAIR-0004 的运行期验收；还是**②要求先做机制确认**（见问题 7）；或**③要求继续采样**（请给出可接受的等待上限/场次）。
 7. **是否授权部署 CB-REPAIR-0005 诊断构建**：该卡只读探针已实现且离线验收通过（`a6a4ec5`；OfflineTests 1320 PASS/0 FAIL；setter 站点 4=4；**零语义差已断言**），**未部署**。部署后可判定覆盖瞬间"胜出者是否是 Route A 行为"（`activeIdx/activeType/weights/aiSame/aiCtl`）。**代价**：现网 DLL 由 r3 变为诊断构建，CB-REPAIR-0004 的 r3 采样绑定随之中断——请裁决是否授权、以及是否需以"零语义差 + 离线等价"为前提继续把诊断构建上的样本计入 r3 运行期验收。
-8. **若 S5 正向形态在当前实现下不可达，是否需要重新设计"覆盖恢复"语义**：现有机制把恢复的希望寄托于"引擎在 10s 内重新选中 CB 行为"（armed 单次边沿重试）；§0b 的 3/3 全负 + "覆盖后原生侧持续每拍接管"（58 次外部写 vs 覆盖前 3 次）提示该前提可能长期不成立。是否另立卡（冻结令下需先裁决）改为 CB 侧主动、具名、有界的重取？
+8. **若 S5 正向形态在当前实现下不可达，是否需要重新设计"覆盖恢复"语义**：现有机制把恢复的希望寄托于"引擎在 10s 内重新选中 CB 行为"（armed 单次边沿重试）；§0b 的 3/3 全负 + "覆盖后外部 Movement 写入由 3 次增至 58 次（分布非均匀，最大间隔 31.0s；来源仍为 `ExternalUnknown`，'原生胜出'待探针确认）"提示该前提可能长期不成立。是否另立卡（冻结令下需先裁决）改为 CB 侧主动、具名、有界的重取？
 
 ## 6. 复现方式（只读，不改仓库/不启动游戏）
 

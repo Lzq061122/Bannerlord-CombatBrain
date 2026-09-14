@@ -361,11 +361,11 @@
 - **S2 = PASS（第 2 次样本）**：两次 `SuspensionRetry` 各对应一次具名意图真变化（rev16→17、rev17→18），每次只授予一次；冷却内的 rev19/20/21 与上限后的意图变化**均未授予**，`suspensionRetries=2` 恰达上限。
 - **S1 = PASS（再确认）**：连续变号（rev19/20/21，间隔 1–2s）**零重取**。
 - **S3 = PASS（×3）**：三次 `SelectionTimeout` 分别在覆盖后 9.507s／重取后 10.0s／重取后 10.0s 触发，全部配对 `Restore`，`restoreFailures=0`。
-- **S4 = PASS（直接）**：首次超时释放后 `ExternalAfterExit`×**190**，从 230.030 连续覆盖到 347.218（**117.2s**），普通执行器获得持续窗口。
+- **S4 = PASS（直接；口径按 Astra P1 复审更正）**：首次超时释放后 `ExternalAfterExit`×**190**，分布 t=230.030→347.218（总跨度 **117.2s**），但**不得称为"单一连续普通执行器放行窗口"**——该区间内含 CB **两次重新持有所有权**（240.035→250.039、280.705→290.706，各约 **10.0s**）；扣除此两段后普通执行器实得三段连续窗口 ≈**10.0s / 30.7s / 56.5s（合计 ≈97.2s）**。结论仍成立（释放后执行器获得**持续**而非单帧窗口），但量化口径以本条为准。
 - **健康路径 = PASS（强）**：覆盖前 220s 内 `applied=15 / stableSoFar=14`、`selected=379`、`weightFlap=0`、`unverified=0`、`dropped=0`、异常 0；三次 `LostAIControl` 后均恢复接管。
 - **归因（复现 §3j 观察，第 4 次）**：本场 `[OrderTraceAgg]` 亦为 `CombatBrainRouteA=0/o0`（applied=15），Route A 写入仍不进 `CommandProvenance` 聚合。
-- **新增判别事实（关键，Descriptive）**：本场 `ExternalWhileActive` **覆盖前仅 3 次（全部落在部署拍 t=5.295）**，**覆盖后 58 次**（自 t=221.030 起约每 0.5s 一次持续到 290.528）——即**覆盖之后原生侧持续每拍写该编队 Movement**，而 CB 行为同期零选中。另一侧：全场 `BehaviorSelected` 只有两处 >3s 空档（18.027→37.884 **19.9s**、159.531→165.351 **5.8s**，均在 `LostAIControl` 窗口内），其余时段严格每 0.5s 连续 ⇒ **覆盖后 127.3s 的静默不是引擎节拍问题，而是胜出权不再回到 Route A 行为**。
-  **推断（Inferred，未证）**：`ExternalReplaced`（CB 落地后 ≤1s 内出现外部写）标记的正是"原生 FormationAI 重新接管该编队 Movement"的时刻；此后原生行为持续胜出，armed 单次边沿重试失去被兑现的前提。**该推断需由 CB-REPAIR-0005 只读探针（`[RouteASilence]` 的 `activeIdx/activeType/weights`）判定**，不得仅凭日志形态下结论。
+- **新增判别事实（关键，Descriptive；口径按 Astra P1 复审更正）**：本场 `ExternalWhileActive` **覆盖前仅 3 次（全部落在部署拍 t=5.295）**、**覆盖后 58 次**（t=221.0295→290.5281；**分布非均匀：含 11.0s 与 31.0s 两处间隔，最大间隔 31.0s**，其余间隔约 0.5s）。**来源仍为 `ExternalUnknown`** ⇒ 只能报告"覆盖后外部 Movement 写入显著增加 + 上述切片事实"，**不得写成"已证明原生持续胜出"**。另一侧：全场 `BehaviorSelected` 只有两处 >3s 空档（18.027→37.884 **19.9s**、159.531→165.351 **5.8s**，均在 `LostAIControl` 窗口内），其余时段严格每 0.5s 连续 ⇒ **覆盖后 127.3s 的静默不是引擎节拍问题**。
+  **推断（Inferred，未证）**：`ExternalReplaced`（CB 落地后 ≤1s 内出现外部写）标记的正是"外部侧重新接管该编队 Movement"的时刻；此后外部写入持续存在而 CB 行为再未被选中，armed 单次边沿重试失去被兑现的前提。**"原生行为是否持续胜出"必须由 CB-REPAIR-0005 只读探针（`[RouteASilence]` 的 `activeIdx/activeType/weights`）判定**，不得仅凭日志形态下结论。
 
 **日志归档**：全量快照 `MBmod/CombatAI/logs/CombatBrain-2026-09-14-full-2056.log`（53,009,560 bytes / 407,767 行，SHA256 `7223BB15…`）；本 run 切片 `MBmod/CombatAI/logs/run-4e885a4e-20260914-mixed-battle.log`（403,826 bytes / 1330 行，SHA256 `E3E60C97…`）。
 
