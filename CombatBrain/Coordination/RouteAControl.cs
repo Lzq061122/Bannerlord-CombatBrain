@@ -46,6 +46,16 @@ namespace CombatBrain.Coordination
         // 10s = 20 拍无任何选中回调即判定「不可交付」——必须释放所有权，不得继续占位挡住 CB 执行器。
         public const float DeliveryDeadlineSeconds = 10f;
 
+        // CB-REPAIR-0004 r3：交付超时后的「重新武装」只认具名、离散、可解释、有界的条件——真实战术意图变化
+        // （Cps2RouteAIntent，由 Formation Mission/相位映射而来）+ 冷却 + 同一暂停期内次数上限。
+        // 原始 situationSignal（位置/兵数/12 维向量/Army 浮点的连续变化）一律不得作为解锁依据：
+        // Astra 在 60Hz、每拍 X+=0.001、零选中的条件下复现「10.000s 释放 → 10.0167s 重取」，
+        // 占空比约 99.83%，普通执行器只拿到单帧窗口（P1 FAIL 根因）。
+        // 冷却与一次交付期限等长：每次授予的尝试失败后，普通执行器至少获得一整个期限的连续写入窗口。
+        public const float ReArmCooldownSeconds = 10f;
+        // 同一暂停期内最多授予的重试次数：意图反复抖动（Hold↔Advance…）也不能把它变成周期占位。
+        public const int MaxSuspendedReattempts = 2;
+
         public IRouteAWeights Target { get; private set; }
         public Cps2RouteAIntent Intent { get; private set; }
         public int IdentityId { get; private set; }
@@ -63,7 +73,10 @@ namespace CombatBrain.Coordination
         private bool _hasChange;
         private bool _externalRetryArmed, _externalRetryUsed;
         private float _deliveredAt;          // 最近一次「引擎可交付」时刻：武装激活或真实选中回调
-        private bool _deliverySuspended;     // 交付超时释放后暂停重新取得所有权，直到局势变化号更新
+        private bool _deliverySuspended;     // 交付超时释放后让出所有权，直到出现合格离散事件
+        private Cps2RouteAIntent _suspendedIntent; // 暂停时锁存的战术意图：只有它「变化」才算合格事件
+        private float _suspendedAt;          // 本次暂停起点：重新武装的冷却基准
+        private int _suspendedReattempts;    // 本暂停期内已授予的重试次数（上限 MaxSuspendedReattempts）
         public int IntentChanges { get; private set; }
         public int Flaps { get; private set; }
 
@@ -89,6 +102,9 @@ namespace CombatBrain.Coordination
             // r2 裁决：MissionEnding 不依赖 Release 解锁——暂停期间 Target 已为 null，Release 是 no-op，
             // 因此这里直接归零，保证下一场战斗从干净状态开始（新会话 = 新局面）。
             _deliverySuspended = false;
+            _suspendedIntent = Cps2RouteAIntent.None;
+            _suspendedAt = now;
+            _suspendedReattempts = 0;
         }
 
         public bool Owns(object identity) { return Target != null && ReferenceEquals(Target.Identity, identity); }
@@ -118,13 +134,25 @@ namespace CombatBrain.Coordination
             // ── CB-REPAIR-0004（运行期 run=b0e2e0a4 / session 4）：外部覆盖触发 armed 单次边沿重试后，
             // 引擎在 101s（764 任务秒）内一次都没回调 TrySelect（0 次 BehaviorSelected）→ 重试永不执行，
             // 而 Target 仍被持有 → BlocksExecutor 持续挡住 CB 自身 Movement 执行（FormationCommandExecutor:117）
-            // = 占位不开火。处置：超过交付上限仍无可交付回调 → 释放所有权（恢复原权重、解除执行器阻塞）并
-            // 暂停重新取得，直到局势变化号更新（真正的战术变化）才重试一次；期间由原版 AI 继续指挥（fail-open）。
+            // = 占位不开火。处置：超过交付上限仍无可交付回调 → 释放所有权（恢复原权重、解除执行器阻塞）。
             // 本检查搭在既有每拍入口上（ApplyRouteASingle → Update），不新增调用点、不新增每帧成本。
+            bool grantedReattempt = false;
             if (_deliverySuspended)
             {
-                if (situationSignal == _signal) return false;
+                // r3：让出所有权后，只有「具名、离散、可解释、有界」的事件才允许重新武装：
+                //   ① 真实战术意图变化（intent != 暂停时锁存的 _suspendedIntent）；
+                //   ② 已过冷却 ReArmCooldownSeconds（保证普通执行器至少拿到一整段连续窗口）；
+                //   ③ 本暂停期内已授予次数 < MaxSuspendedReattempts（防意图抖动变成周期占位）。
+                // 三条任一不满足 → 继续让位。原始 situationSignal 不参与判定（连续微变不得解锁）。
+                if (intent == _suspendedIntent || now - _suspendedAt < ReArmCooldownSeconds
+                    || _suspendedReattempts >= MaxSuspendedReattempts)
+                {
+                    _signal = situationSignal; // 仅维护抖动链账本新鲜度，不作解锁依据
+                    return false;
+                }
                 _deliverySuspended = false;
+                _suspendedReattempts++;        // 合格事件最多一次新交付尝试；失败后由下面的超时分支重新暂停
+                grantedReattempt = true;
             }
             else if (Target != null && now - _deliveredAt >= DeliveryDeadlineSeconds)
             {
@@ -136,6 +164,8 @@ namespace CombatBrain.Coordination
                 Release(RouteAExit.SelectionTimeout, now);
                 _signal = situationSignal;
                 _deliverySuspended = true;
+                _suspendedIntent = intent;     // 锁存离散意图：只有它的真实变化才算合格事件
+                _suspendedAt = now;
                 return false;
             }
             if (Target == null)
@@ -154,6 +184,9 @@ namespace CombatBrain.Coordination
                 // 每次取得所有权都重开一个交付窗口（不能继承上一次武装/释放前的时间戳）。
                 _deliveredAt = now;
                 Evidence.Activate(id);
+                // r3 可观测原因：暂停期内授权的那次重新武装，与紧随其后的 Intent 事件成对阅读
+                //（后者带该次尝试的真实意图与 revision）。
+                if (grantedReattempt) Evidence.SuspensionRetry(id, Revision, now);
             }
             bool changed = intent != Intent || Math.Abs(x - _x) >= 5f || Math.Abs(y - _y) >= 5f;
             if (changed)
@@ -211,6 +244,8 @@ namespace CombatBrain.Coordination
             { Release(RouteAExit.InvalidCommand, now); return false; }
             Evidence.Selected(IdentityId, Revision, now);
             _deliveredAt = now; // 引擎可交付：刷新交付上限时钟；armed 重试正是依赖此回调执行。
+            // r3：引擎确实还在回调 → 占位风险消失，重置暂停期重试预算（下一轮超时从零开始计数）。
+            _suspendedReattempts = 0;
             bool shouldWrite = _writtenRevision != Revision || _writtenActivation != _activation;
             if (shouldWrite && _externalRetryArmed)
             {
@@ -261,6 +296,9 @@ namespace CombatBrain.Coordination
             // 需 Captain 裁决后再加；Mission 轮换由 BeginSession 重置（见该方法）。
             if (previous == null) return;
             _deliverySuspended = false;
+            // r3：交付超时自身的释放仍属同一暂停期（重试预算继续累计，防周期占位）；其它真实释放意味着
+            // 局面已被外部事件改变（热关闭/资格门/替换等）→ 暂停期结束，重试预算归零。
+            if (reason != RouteAExit.SelectionTimeout) _suspendedReattempts = 0;
             int id = IdentityId;
             Target = null; // 在任何恢复回调之前撤销权限，并记录 Exit。
             Evidence.Exit(id, reason, now);

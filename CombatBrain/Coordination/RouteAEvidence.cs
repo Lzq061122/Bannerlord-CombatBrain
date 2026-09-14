@@ -5,7 +5,7 @@ namespace CombatBrain.Coordination
 
     public enum RouteAEventKind { Intent, BehaviorSelected, OrderApplied, UnverifiedApply, SetterBegin,
         SetterCompleted, SetterSkipped, ExternalReplaced, ExternalWhileActive, ExternalAfterExit,
-        EdgeRetry, Exit, Restore }
+        EdgeRetry, Exit, Restore, SuspensionRetry }
 
     public struct RouteAEvent
     {
@@ -37,7 +37,7 @@ namespace CombatBrain.Coordination
             public WeakReference Object;
             public int Team, Formation;
             public long Intents, Selected, Applied, Replaced, ExternalWhileActive, EdgeRetries,
-                Unverified, LastApplied, ExitSeq, Revision;
+                Unverified, LastApplied, ExitSeq, Revision, SuspensionRetries;
             public int Changes, Flaps;
             public float X, Y;
             public bool Active, Pending;
@@ -208,6 +208,14 @@ namespace CombatBrain.Coordination
             s.EdgeRetries++;
             Record(id, RouteAEventKind.EdgeRetry, now, revision: s.Revision);
         }
+        // CB-REPAIR-0004 r3：交付暂停期内「授予一次重新武装」的可观测原因（具名离散事件：真实战术意图变化
+        // + 冷却 + 次数上限）。与紧随其后的 Intent 事件成对阅读，即可解释该次尝试的意图与 revision。
+        public void SuspensionRetry(int id, long revision, float now)
+        {
+            Stats s = Get(id); if (s == null) return;
+            s.SuspensionRetries++;
+            Record(id, RouteAEventKind.SuspensionRetry, now, revision: revision);
+        }
         public void Restored(int id, RouteAExit reason, float now, int failures)
         { Record(id, RouteAEventKind.Restore, now, reason: reason, signal: failures); }
         public long AppliedFor(int id) { Stats s = Get(id); return s == null ? 0 : s.Applied; }
@@ -240,13 +248,14 @@ namespace CombatBrain.Coordination
             // edgeRetries 语义 = 授权次数（非落地次数）；lastSelectedAt 的 never 只表示本 session 从未被选中，
             // 首拍（now == 0f）被选中会如实打印 0.000s（见 Stats.LastSelectedAt 的 -Infinity 初值）。
             return string.Format(CultureInfo.InvariantCulture,
-                "session={0} identity={1} team={2} f={3} domain=Movement intent={4} selected={5} applied={6} replaced={7} externalWhileActive={8} edgeRetries={9} externalDuration={10:F3}s stableSoFar={11} unverified={12} dropped={13} intentChange={14} weightFlap={15} lastSelectedAt={16}",
+                "session={0} identity={1} team={2} f={3} domain=Movement intent={4} selected={5} applied={6} replaced={7} externalWhileActive={8} edgeRetries={9} externalDuration={10:F3}s stableSoFar={11} unverified={12} dropped={13} intentChange={14} weightFlap={15} lastSelectedAt={16} suspensionRetries={17}",
                 Session, id, s.Team, s.Formation, s.Intents, s.Selected, s.Applied, s.Replaced,
                 s.ExternalWhileActive, s.EdgeRetries,
                 s.Active && s.HasExternal ? Math.Max(0f, s.LastExternalAt - s.FirstExternalAt) : s.ExternalDuration,
                 s.Applied - s.Replaced, s.Unverified, Dropped, s.Changes, s.Flaps,
                 float.IsNegativeInfinity(s.LastSelectedAt) ? "never"
-                    : s.LastSelectedAt.ToString("F3", CultureInfo.InvariantCulture) + "s");
+                    : s.LastSelectedAt.ToString("F3", CultureInfo.InvariantCulture) + "s",
+                s.SuspensionRetries);
         }
     }
 }

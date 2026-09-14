@@ -148,6 +148,7 @@ namespace OfflineTests
             TestRouteAFlapAndMode();
             TestRouteADeliveryDeadline();
             TestRouteARepairRound2();
+            TestRouteAReArmBounded();
         }
 
         // CB-REPAIR-0004 r2（review findings）：①交付暂停只能由「真实释放」终结——候选扇描失败拍的空释放
@@ -192,15 +193,18 @@ namespace OfflineTests
             c.Release(RouteAExit.EmptyOrInvalid, 120.5f);
             Check(!Arm(c, f, Cps2RouteAIntent.Hold, 121f) && !c.Owns(f),
                 "r2 no-op release then same-signal Update still refuses ownership");
-            // 验收序列②尾段：局势变化号更新后允许「恰好一次」重取（同一新局势号复调不得重复取得）。
-            bool reacquired = Arm(c, f, Cps2RouteAIntent.Hold, 121.5f, 9);
+            // 验收序列②尾段（r3 口径）：signal 变化不解锁；只有具名离散事件（意图真实变化 + 冷却 + 次数上限）
+            // 才授予，且恰好一次。
+            Check(!Arm(c, f, Cps2RouteAIntent.Hold, 121.5f, 9) && !c.Owns(f),
+                "r3 raw situation revision change alone never re-acquires ownership");
+            bool reacquired = Arm(c, f, Cps2RouteAIntent.Advance, 131f, 9);
             if (c.Owns(f) && !owned) acquisitions++;
             owned = c.Owns(f);
-            bool steady = Arm(c, f, Cps2RouteAIntent.Hold, 122f, 9);
+            bool steady = Arm(c, f, Cps2RouteAIntent.Advance, 131.5f, 9);
             if (c.Owns(f) && !owned) acquisitions++;
             owned = c.Owns(f);
             Check(reacquired && steady && acquisitions == 1 && owned && !f.Original,
-                "r2 situation revision change re-acquires exactly once and then stays steady");
+                "r3 qualifying discrete intent change re-acquires exactly once and then stays steady");
 
             // 生产单例（ApplyRouteASingle 实际驱动的对象）复演同一序列：候选扇描失败拍的空释放不得解锁暂停。
             // 说明：ApplyRouteASingle 本体在 CombatBrain/Ai/CombatAiMissionLogic.cs（本轮 out of scope）且为 private、
@@ -288,14 +292,19 @@ namespace OfflineTests
                 "routeA placeholder release is observable as SelectionTimeout exit reason");
 
             Check(!Arm(c, f, Cps2RouteAIntent.Hold, 31f) && !c.Owns(f) && f.Original,
-                "routeA does not re-acquire ownership while the situation revision is unchanged");
+                "routeA does not re-acquire ownership while no qualifying event occurs");
             Check(!Arm(c, f, Cps2RouteAIntent.Hold, 900f) && !c.Owns(f),
                 "routeA delivery suspension persists across an unchanged situation (no periodic placeholder)");
-            Check(Arm(c, f, Cps2RouteAIntent.Hold, 900.5f, 6) && c.Owns(f) && !f.Original,
-                "routeA new situation revision re-arms ownership for one more delivery attempt");
-            Check(Arm(c, f, Cps2RouteAIntent.Hold, 901f, 6) && c.Owns(f),
+            // r3：原始 signal 变化不是合格事件；具名离散事件（意图真实变化）+ 冷却才授予一次尝试。
+            Check(!Arm(c, f, Cps2RouteAIntent.Hold, 900.5f, 6) && !c.Owns(f),
+                "r3 raw situation revision change alone never re-arms ownership");
+            Check(!Arm(c, f, Cps2RouteAIntent.Advance, 35f, 6) && !c.Owns(f),
+                "r3 intent change inside the re-arm cooldown is not granted");
+            Check(Arm(c, f, Cps2RouteAIntent.Advance, 45.5f, 6) && c.Owns(f) && !f.Original,
+                "r3 intent change after the cooldown re-arms ownership for one delivery attempt");
+            Check(Arm(c, f, Cps2RouteAIntent.Advance, 46f, 6) && c.Owns(f),
                 "routeA re-acquired ownership opens a fresh delivery window");
-            Check(!Arm(c, f, Cps2RouteAIntent.Hold, 910.5f, 6) && !c.Owns(f) && f.Original,
+            Check(!Arm(c, f, Cps2RouteAIntent.Advance, 56.5f, 6) && !c.Owns(f) && f.Original,
                 "routeA second undelivered attempt is bounded by the same deadline");
 
             c = RouteController(); f = new RouteFake(); e = c.Evidence;
@@ -324,6 +333,105 @@ namespace OfflineTests
             }
             Check(retried && c.Owns(f) && e.BuildSummary(id).Contains("edgeRetries=1"),
                 "routeA steady selected cadence lands the edge retry and keeps ownership (no false timeout)");
+        }
+
+        // CB-REPAIR-0004 r3（Astra FAIL 复现，P1 周期重占位）：交付超时后的重新武装必须是具名、离散、
+        // 可解释且有界的条件。旧逻辑把 situationSignal 任意变化当作战术变化 → 60Hz、每拍 X+=0.001、
+        // 零 BehaviorSelected 时 10.000s 释放 / 10.0167s 重取，占空比 ≈99.83%，普通执行器只剩单帧窗口。
+        // 本方法按派单 §4 六项组合断言锁定：连续变号不重武装 / 执行器持续可用 / 三类微变分别不解锁 /
+        // 合格离散事件恰好一次且有可观测原因 / 二次失败有界 / 健康回归（选中刷新窗口 + 预算重置）。
+        private static void TestRouteAReArmBounded()
+        {
+            // §4.1–§4.3：位置微变、兵数变化、态势向量变化在 RouteAControl 入口都表现为 situationSignal
+            // 连续变化（RouteASituationStamp 精确比较 X/Y、Count、12 维向量与 Army 浮点）——三类分别验证。
+            string[] changeKinds = { "position micro change", "unit count change", "situation vector change" };
+            for (int k = 0; k < changeKinds.Length; k++)
+            {
+                RouteAControl c = RouteController(); RouteFake f = new RouteFake(); RouteAEvidence e = c.Evidence;
+                Arm(c, f, Cps2RouteAIntent.Hold, 0f); int id = c.IdentityId;
+                Check(!Arm(c, f, Cps2RouteAIntent.Hold, 10f) && !c.Owns(f),
+                    "r3 " + changeKinds[k] + ": delivery timeout yields Movement ownership");
+                bool everOwned = false, everAccepted = false; int writes = 0, ticks = 0, signal = 100 + k * 1000;
+                for (float t = 10.5f; t <= 130f; t += .5f) // 240 拍 ≈ 4 个交付期限，每拍都变号
+                {
+                    signal++;
+                    everAccepted |= Arm(c, f, Cps2RouteAIntent.Hold, t, signal);
+                    everOwned |= c.Owns(f);
+                    var tickStatus = new FormationCommandExecutor.FormationStatus { Valid = true, FieldBattle = true,
+                        LeaseOk = true, RouteAMovementOwned = c.Owns(f) };
+                    var tickWinner = new FormationCommandProposal { Domain = CommandDomain.Movement, Kind = CommandKind.Hold };
+                    if (FormationCommandExecutor.ExecuteWinner(tickWinner, tickStatus,
+                        default(FormationCommandExecutor.LastDomainWrite), 5f, .2f, p => writes++, null, false)) { }
+                    ticks++;
+                }
+                Check(!everOwned && !everAccepted,
+                    "r3 " + changeKinds[k] + ": never re-arms during continuous situation changes");
+                Check(writes == ticks && writes > 200,
+                    "r3 " + changeKinds[k] + ": every tick's Movement proposal reaches the executor (sustained window)");
+                Check(e.BuildSummary(id).Contains("suspensionRetries=0"),
+                    "r3 " + changeKinds[k] + ": no suspension retry granted without a qualifying event");
+            }
+
+            // §4.4 合格离散事件：意图真实变化（Hold→Advance）+ 冷却 → 恰好一次重取，且证据可观测。
+            RouteAControl c4 = RouteController(); RouteFake f4 = new RouteFake(); RouteAEvidence e4 = c4.Evidence;
+            Arm(c4, f4, Cps2RouteAIntent.Hold, 0f); int id4 = c4.IdentityId;
+            Check(!Arm(c4, f4, Cps2RouteAIntent.Hold, 10f) && !c4.Owns(f4),
+                "r3 qualifying-event case: delivery timeout yields ownership");
+            Check(!Arm(c4, f4, Cps2RouteAIntent.Advance, 12f, 40) && !c4.Owns(f4),
+                "r3 qualifying event inside the cooldown is not granted (bounded rate)");
+            Check(Arm(c4, f4, Cps2RouteAIntent.Advance, 20.5f, 41) && c4.Owns(f4),
+                "r3 qualifying discrete event after the cooldown grants exactly one new attempt");
+            long suspensionRetries = 0; RouteAEvent item4;
+            while (e4.TryRead(out item4)) { if (item4.Kind == RouteAEventKind.SuspensionRetry) suspensionRetries++; }
+            Check(suspensionRetries == 1 && e4.BuildSummary(id4).Contains("suspensionRetries=1"),
+                "r3 granted re-arm is observable (SuspensionRetry event + summary counter)");
+
+            // §4.5 二次失败有界：仍零选中 → 再次超时释放；此后意图反复抖动 + 连续变号也不自动周期重取。
+            Check(!Arm(c4, f4, Cps2RouteAIntent.Advance, 31f, 42) && !c4.Owns(f4) && f4.Original,
+                "r3 second undelivered attempt is released again by the same deadline");
+            Cps2RouteAIntent[] oscillate = { Cps2RouteAIntent.Hold, Cps2RouteAIntent.Advance, Cps2RouteAIntent.Retreat };
+            bool owned5 = false, everOwnedTail = false; int acquisitions5 = 0, writesTail = 0, ticksTail = 0, signal5 = 500;
+            for (float t = 41.5f; t <= 200f; t += .5f)
+            {
+                bool tail = t >= 80f; // 预算耗尽后的「持续让位」阶段：每个提案都必须到达执行器
+                signal5++;
+                if (Arm(c4, f4, oscillate[(int)t % oscillate.Length], t, signal5)) { }
+                bool owns5 = c4.Owns(f4);
+                if (owns5 && !owned5) acquisitions5++;
+                owned5 = owns5;
+                if (tail)
+                {
+                    everOwnedTail |= owns5;
+                    var tickStatusTail = new FormationCommandExecutor.FormationStatus { Valid = true, FieldBattle = true,
+                        LeaseOk = true, RouteAMovementOwned = c4.Owns(f4) };
+                    var tickWinnerTail = new FormationCommandProposal { Domain = CommandDomain.Movement, Kind = CommandKind.Hold };
+                    if (FormationCommandExecutor.ExecuteWinner(tickWinnerTail, tickStatusTail,
+                        default(FormationCommandExecutor.LastDomainWrite), 5f, .2f, p => writesTail++, null, false)) { }
+                    ticksTail++;
+                }
+            }
+            Check(acquisitions5 == 1 && !everOwnedTail && !c4.Owns(f4) && writesTail == ticksTail && ticksTail > 200,
+                "r3 after the attempt budget is spent the control keeps yielding (executor writes every tick)");
+            Check(e4.BuildSummary(id4).Contains("suspensionRetries=2"),
+                "r3 total granted re-arms are bounded by MaxSuspendedReattempts (observable: suspensionRetries=2)");
+
+            // §4.6 健康回归（增量）：重武装后的真实选中回调刷新交付窗口并重置暂停期预算；
+            // 之后的超时仍可由新的离散事件再次授权（预算不是一次性耗尽）。
+            RouteAControl c6 = RouteController(); RouteFake f6 = new RouteFake(); RouteAEvidence e6 = c6.Evidence;
+            Arm(c6, f6, Cps2RouteAIntent.Hold, 0f); int id6 = c6.IdentityId;
+            Check(!Arm(c6, f6, Cps2RouteAIntent.Hold, 10f) && !c6.Owns(f6),
+                "r3 healthy case: first timeout yields ownership");
+            Check(Arm(c6, f6, Cps2RouteAIntent.Advance, 20.5f, 9) && c6.Owns(f6),
+                "r3 healthy case: qualifying event re-arms once");
+            Check(c6.TrySelect(f6, f6.Behaviors[1], f6.Behaviors[1], RouteEligible(), true, 21f),
+                "r3 healthy case: selected callback after re-arm is accepted (Advance behavior index)");
+            ObservedRouteWrite(e6, f6, 2000, 21f); c6.Applied(21f, true);
+            Check(e6.BuildSummary(id6).Contains("applied=1"),
+                "r3 healthy case: delivered order still lands through the adapter path");
+            Check(!Arm(c6, f6, Cps2RouteAIntent.Advance, 31.5f, 9) && !c6.Owns(f6),
+                "r3 healthy case: later timeout yields again after a healthy delivery");
+            Check(Arm(c6, f6, Cps2RouteAIntent.Hold, 42f, 10) && c6.Owns(f6),
+                "r3 healthy delivery reset the suspension budget so a new discrete event grants again");
         }
 
         private static void TestRouteAEvidence()
