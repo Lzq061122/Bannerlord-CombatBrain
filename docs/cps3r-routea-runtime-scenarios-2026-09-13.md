@@ -206,6 +206,23 @@
 
 **结论**：本场为「健康路径 + 多轮生命周期」强样本；**S2 与 S5-edgeRetry 两类样本仍需在后续场次中自然出现**（均为条件组合型，非每场必现）。
 
+## 3g. r3 第三个运行期样本（2026-09-14，run=`ce970979229b4b3f82d73badbad641c5`）——短样本，无新验收点
+
+**绑定**：同部署（`395fe13` / DLL `7E5FC25A…`）；`13:01:10.447` 观测挂载 `prefixes=3`；同 run 一场 `BattleDuration=334.76s`。
+
+**全部事件（85 行）**：
+
+| t（s） | 事件 |
+|---|---|
+| 0.536 | `Intent(Hold)`（武装） |
+| 1.463 | `ExternalWhileActive` ×3（外部写入，**非覆盖**；按 F-2 语义不释放、不消耗预算） |
+| 1.529 | **`Exit(LostAIControl)` + `Restore`** |
+| 之后 → 战斗结束 | **无任何 Route A 事件**（未再武装） |
+
+**汇总（末）**：`selected=0 applied=0 replaced=0 externalWhileActive=3 edgeRetries=0 stableSoFar=0 intentChange=0 weightFlap=0 lastSelectedAt=never suspensionRetries=0 restoreFailures=0`
+
+**判定**：`restoreFailures=0`、无异常行 ✓；`Exit(LostAIControl)` 配对 `Restore` ✓。**无 S2 样本**（本场未进入暂停，退出原因是 `LostAIControl` 而非 `SelectionTimeout`）；**无 S5-edgeRetry 样本**（`replaced=0`，3 次外部写均为 `ExternalWhileActive`）。本场亦未再武装（资格未恢复），属资格门控行为、非缺陷。
+
 ## 4. 本轮未证明（运行期债，不得据本文件判 GO）
 
 1. **可执行的五场场景已全部执行完毕**：场景 1、2、5 = **PASS**；场景 3（玩家接管）、场景 4（Rejoin）与场景 5 子项（拆分）在**本次采样口径下不适用**（§3a/§3b/§3c），其中 **Rejoin 分支仍未验证**（不得声称结构上永久不可达）。这不等于"条件 5 已满足"——条件 5 的判定权在 Astra 复审与用户，本文件不判 GO。

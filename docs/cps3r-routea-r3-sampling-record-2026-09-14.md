@@ -56,6 +56,18 @@
 | S2 | **仍无样本**（本场未进入暂停、无 `SelectionTimeout`） |
 | S5 edgeRetry | **仍无样本**（`replaced=0`，本场无外部覆盖） |
 
+## 2d. 第三个运行期样本（run=`ce970979…`）——短样本，无新验收点
+
+同部署；`13:01:10.447` 观测挂载；`BattleDuration=334.76s`，85 行 Route A 记录。
+时间线：`t=0.536 Intent(Hold)` → `t=1.463 ExternalWhileActive×3`（非覆盖）→ `t=1.529 Exit(LostAIControl) + Restore` → **余场无任何 Route A 事件**。
+汇总（末）：`selected=0 applied=0 replaced=0 externalWhileActive=3 edgeRetries=0 intentChange=0 lastSelectedAt=never suspensionRetries=0 restoreFailures=0`。
+
+| # | 结果 |
+|---|---|
+| 生命周期 | `Exit(LostAIControl)` **配对 `Restore`** ✓、`restoreFailures=0` ✓ |
+| S2 | **无样本**（未进入暂停：退出原因是 `LostAIControl` 而非 `SelectionTimeout`） |
+| S5 edgeRetry | **无样本**（`replaced=0`；3 次外部写均为 `ExternalWhileActive`，按 F-2 不释放不消耗预算） |
+
 ## 2. 本轮采样验收点（Astra 回签要求的最小集）
 
 | # | 验收点 | 判定方法 | 通过标准 |
