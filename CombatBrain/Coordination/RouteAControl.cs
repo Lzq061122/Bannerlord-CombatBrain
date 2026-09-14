@@ -11,6 +11,28 @@ namespace CombatBrain.Coordination
         void SetWeight(int index, float value);
     }
 
+    // CB-REPAIR-0005（只读诊断）：覆盖发生后「引擎是否仍选中 Route A 行为」只有游戏侧适配器能读。
+    // 实现方只读，不得写任何游戏状态；读取抛异常由 RouteAControl 单点捕获并跳过（诊断不得影响控制流）。
+    public interface IRouteASilenceProbe
+    {
+        int ActiveBehaviorIndex();    // 1..4 = 胜出者仍是 Route A 的第 i 个行为；0 = 不是；-1 = 不可读
+        string ActiveBehaviorType();  // 胜出者类型名（ActiveBehaviorIndex() == 0 时有意义）
+        bool AiObjectSame();          // FormationAI 对象是否仍是武装时捕获的那个
+        bool AiControlled();
+        int Units();
+    }
+
+    // 一行 [RouteASilence] 的自描述样本；时间口径由日志出口负责换算（不在这里做 -Infinity 算术）。
+    public struct RouteASilenceSample
+    {
+        public long Session;
+        public int Identity, Team, Formation, ProbeSeq, ActiveIndex, Units;
+        public float Time, LastSelectedAt, ReplacedAt;
+        public float Weight0, Weight1, Weight2, Weight3;
+        public bool Final, AiObjectSame, AiControlled;
+        public string ActiveType;
+    }
+
     public enum RouteAExit
     {
         None, Disabled, ModeChanged, MissionEnding, Replaced, EmptyOrInvalid,
@@ -56,6 +78,10 @@ namespace CombatBrain.Coordination
         // 同一暂停期内最多授予的重试次数：意图反复抖动（Hold↔Advance…）也不能把它变成周期占位。
         public const int MaxSuspendedReattempts = 2;
 
+        // CB-REPAIR-0005（只读诊断）：覆盖后交付窗口内的断流采样上限与间隔。仅覆盖后才产生，关观测时零开销。
+        public const int SilenceProbeLimit = 10;
+        public const float SilenceProbeIntervalSeconds = 1f;
+
         public IRouteAWeights Target { get; private set; }
         public Cps2RouteAIntent Intent { get; private set; }
         public int IdentityId { get; private set; }
@@ -77,6 +103,9 @@ namespace CombatBrain.Coordination
         private Cps2RouteAIntent _suspendedIntent; // 暂停时锁存的战术意图：只有它「变化」才算合格事件
         private float _suspendedAt;          // 本次暂停起点：重新武装的冷却基准
         private int _suspendedReattempts;    // 本暂停期内已授予的重试次数（上限 MaxSuspendedReattempts）
+        // CB-REPAIR-0005：覆盖时刻 + 探针节拍/计数。只在 _externalRetryArmed 期间使用。
+        private float _silenceAt, _silenceNextAt;
+        private int _silenceProbes;
         public int IntentChanges { get; private set; }
         public int Flaps { get; private set; }
 
@@ -105,6 +134,8 @@ namespace CombatBrain.Coordination
             _suspendedIntent = Cps2RouteAIntent.None;
             _suspendedAt = now;
             _suspendedReattempts = 0;
+            _silenceAt = _silenceNextAt = now;
+            _silenceProbes = 0;
         }
 
         public bool Owns(object identity) { return Target != null && ReferenceEquals(Target.Identity, identity); }
@@ -161,6 +192,8 @@ namespace CombatBrain.Coordination
                 //（内部在真实释放分支清 _deliverySuspended）再置 true，因此暂停不会被自己的释放清掉。
                 // 若将来把置位提前、或在 Release 内按 reason 排除 SelectionTimeout，必须同步修改此处，
                 // 否则暂停立即失效 → Update 下一拍就重新取得 → 周期占位回归。
+                // CB-REPAIR-0005：释放瞬间再采一拍，用于看到「交付上限到期时谁在胜出」。
+                if (_externalRetryArmed && Evidence.Capture) SilenceProbe(now, true);
                 Release(RouteAExit.SelectionTimeout, now);
                 _signal = situationSignal;
                 _deliverySuspended = true;
@@ -187,6 +220,12 @@ namespace CombatBrain.Coordination
                 // r3 可观测原因：暂停期内授权的那次重新武装，与紧随其后的 Intent 事件成对阅读
                 //（后者带该次尝试的真实意图与 revision）。
                 if (grantedReattempt) Evidence.SuspensionRetry(id, Revision, now);
+            }
+            // CB-REPAIR-0005：覆盖后引擎未恢复选中期间，每 ≥1s 采一拍（上限 SilenceProbeLimit）。
+            if (_externalRetryArmed && Evidence.Capture && now >= _silenceNextAt && _silenceProbes < SilenceProbeLimit)
+            {
+                _silenceNextAt = now + SilenceProbeIntervalSeconds;
+                SilenceProbe(now, false);
             }
             bool changed = intent != Intent || Math.Abs(x - _x) >= 5f || Math.Abs(y - _y) >= 5f;
             if (changed)
@@ -277,6 +316,10 @@ namespace CombatBrain.Coordination
                     _externalRetryArmed = true;
                     _externalRetryUsed = true;
                     _writtenRevision = _writtenActivation = -1;
+                    // CB-REPAIR-0005：断流探针以本时刻为起点（覆盖时刻由外部 setter 观测给出）。
+                    _silenceAt = now;
+                    _silenceNextAt = now + SilenceProbeIntervalSeconds;
+                    _silenceProbes = 0;
                     return;
                 }
                 // 重试已消耗后再次 replaced=true 覆盖 = 持续覆盖 → 立即 Release。
@@ -285,6 +328,40 @@ namespace CombatBrain.Coordination
             }
             // replaced=false（ExternalWhileActive）：独立外部写入，明确不算「持续覆盖」——
             // 不 Release、不消耗重试；仅由证据层计数 ExternalWhileActive。
+        }
+
+        // CB-REPAIR-0005：只读采样（不读写任何游戏状态、不改权重/暂停/预算）。读取异常一律单点吞掉，
+        // 保证诊断路径不可能改变控制流——这是本卡的零语义差要求。
+        private void SilenceProbe(float now, bool final)
+        {
+            float w0 = -1f, w1 = -1f, w2 = -1f, w3 = -1f;
+            int activeIndex = -1, units = -1;
+            string activeType = "unreadable";
+            bool aiSame = false, aiCtl = false;
+            try
+            {
+                w0 = Target.GetWeight(0); w1 = Target.GetWeight(1);
+                w2 = Target.GetWeight(2); w3 = Target.GetWeight(3);
+                IRouteASilenceProbe probe = Target as IRouteASilenceProbe;
+                if (probe != null)
+                {
+                    activeIndex = probe.ActiveBehaviorIndex();
+                    activeType = probe.ActiveBehaviorType();
+                    aiSame = probe.AiObjectSame();
+                    aiCtl = probe.AiControlled();
+                    units = probe.Units();
+                }
+            }
+            catch (Exception) { return; }
+            _silenceProbes++;
+            Evidence.Silence(IdentityId, new RouteASilenceSample
+            {
+                Time = now, Final = final, ProbeSeq = _silenceProbes, ReplacedAt = _silenceAt,
+                LastSelectedAt = Evidence.LastSelectedAtFor(IdentityId),
+                ActiveIndex = activeIndex, ActiveType = activeType,
+                AiObjectSame = aiSame, AiControlled = aiCtl, Units = units,
+                Weight0 = w0, Weight1 = w1, Weight2 = w2, Weight3 = w3
+            });
         }
 
         public void Release(RouteAExit reason, float now)

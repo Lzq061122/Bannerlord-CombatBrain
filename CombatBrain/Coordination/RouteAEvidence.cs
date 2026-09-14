@@ -80,6 +80,8 @@ namespace CombatBrain.Coordination
         public int Identities { get { return _identities; } }
         public bool DirectCompleted { get { return _directCompleted; } }
         public Action<int, bool, float> ExternalWriteObserved;
+        // CB-REPAIR-0005：断流样本出口（与 ExternalWriteObserved 同构）；日志出口由 CbRouteAPoC 接线。
+        public Action<RouteASilenceSample> SilenceObserved;
 
         public void BeginSession()
         {
@@ -221,6 +223,19 @@ namespace CombatBrain.Coordination
         public long AppliedFor(int id) { Stats s = Get(id); return s == null ? 0 : s.Applied; }
         public long ReplacedFor(int id) { Stats s = Get(id); return s == null ? 0 : s.Replaced; }
         public long StableFor(int id) { return AppliedFor(id) - ReplacedFor(id); }
+
+        // CB-REPAIR-0005（只读诊断）：断流样本读取口 + 出口（与 ExternalWriteObserved 同构）。
+        // LastSelectedAt 的 -Infinity 初值原样传出（= 本 session 从未被选中），由日志出口换算成 never。
+        public float LastSelectedAtFor(int id)
+        { Stats s = Get(id); return s == null ? float.NegativeInfinity : s.LastSelectedAt; }
+        public void Silence(int id, RouteASilenceSample sample)
+        {
+            Stats s = Get(id);
+            if (s == null || !Capture) return;
+            sample.Session = Session; sample.Identity = id; sample.Team = s.Team; sample.Formation = s.Formation;
+            Action<RouteASilenceSample> notify = SilenceObserved;
+            if (notify != null) notify(sample);
+        }
 
         private long Record(int id, RouteAEventKind kind, float now, long setter = -1, long related = 0,
             long revision = 0, CommandSource source = CommandSource.ExternalUnknown, int orderType = -1,

@@ -9,12 +9,20 @@ namespace OfflineTests
 
     internal static partial class Program
     {
-        private sealed class RouteFake : IRouteAWeights
+        private sealed class RouteFake : IRouteAWeights, IRouteASilenceProbe
         {
             public readonly float[] Weights = { 0.25f, 0.5f, 0.75f, 1.25f };
             public readonly object[] Behaviors = { new object(), new object(), new object(), new object() };
             public int Writes;
             public bool Destroyed;
+            // CB-REPAIR-0005 只读探针读值（默认：胜出者不是 Route A 行为、AI 对象同一且可控）。
+            public int ProbeActiveIndex;
+            public string ProbeActiveType = "NativeBehavior";
+            public bool ProbeAiSame = true;
+            public bool ProbeAiCtl = true;
+            public int ProbeUnits = 200;
+            public bool ProbeThrows;
+            public int ProbeCalls;
             public object Identity { get { return this; } }
             public object Behavior(int i) { return Behaviors[i]; }
             public float GetWeight(int i) { return Weights[i]; }
@@ -23,6 +31,16 @@ namespace OfflineTests
                 if (Destroyed) throw new InvalidOperationException("destroyed engine object");
                 Writes++; Weights[i] = w;
             }
+            public int ActiveBehaviorIndex()
+            {
+                ProbeCalls++;
+                if (ProbeThrows) throw new InvalidOperationException("probe read failed");
+                return ProbeActiveIndex;
+            }
+            public string ActiveBehaviorType() { return ProbeActiveType; }
+            public bool AiObjectSame() { return ProbeAiSame; }
+            public bool AiControlled() { return ProbeAiCtl; }
+            public int Units() { return ProbeUnits; }
             public override int GetHashCode() { return 42; } // 故意碰撞，不能充当对象身份。
             public bool Original { get { return Weights[0] == .25f && Weights[1] == .5f
                 && Weights[2] == .75f && Weights[3] == 1.25f; } }
@@ -149,6 +167,7 @@ namespace OfflineTests
             TestRouteADeliveryDeadline();
             TestRouteARepairRound2();
             TestRouteAReArmBounded();
+            TestRouteASilenceProbe();
         }
 
         // CB-REPAIR-0004 r2（review findings）：①交付暂停只能由「真实释放」终结——候选扇描失败拍的空释放
@@ -550,6 +569,91 @@ namespace OfflineTests
                 "routeA bounded event overflow explicitly invalidates complete evidence");
             long dropped = e.Dropped; e.Capture = false; e.Capture = true;
             Check(e.Dropped > dropped, "routeA diagnostic interruption remains visible after re-enabling capture");
+        }
+
+        // CB-REPAIR-0005（只读诊断）：覆盖后「引擎是否仍选中 Route A 行为」的探针。
+        // 断言三件事：① 只在真实覆盖后产生、节拍 ≥1s 且受交付窗口上限约束；② 字段口径正确（两个时间锚点分开）；
+        // ③ 零语义差——探针读取抛异常时所有权/权重/超时释放与无探针路径完全一致。
+        private static void TestRouteASilenceProbe()
+        {
+            RouteAControl c = RouteController(); RouteFake f = new RouteFake(); RouteAEvidence e = c.Evidence;
+            var samples = new List<RouteASilenceSample>();
+            e.SilenceObserved = s => samples.Add(s);
+            Arm(c, f, Cps2RouteAIntent.Hold, 0f); int id = c.IdentityId;
+            Check(c.TrySelect(f, f.Behaviors[0], f.Behaviors[0], RouteEligible(), true, 20f),
+                "silence probe: RouteA delivers before the overwrite");
+            ObservedRouteWrite(e, f, 900, 20f); c.Applied(20f, true);
+            Check(samples.Count == 0, "silence probe stays silent while no external overwrite happened");
+            e.SetterCompleted(e.SetterBeginning(f, CommandDomain.Movement, CommandSource.ExternalUnknown, 901, 5, 20.1f), true, 20.1f);
+            Check(e.ReplacedFor(id) == 1 && samples.Count == 0,
+                "silence probe does not sample on the overwrite tick itself (interval honouring)");
+            Arm(c, f, Cps2RouteAIntent.Hold, 20.9f);
+            Check(samples.Count == 0, "silence probe respects the one-second sampling interval");
+            Arm(c, f, Cps2RouteAIntent.Hold, 21.1f);
+            Check(samples.Count == 1, "silence probe emits one row per second after the overwrite");
+            RouteASilenceSample s0 = samples[0];
+            Check(s0.Final == false && s0.ProbeSeq == 1 && s0.Identity == id && s0.Session == e.Session,
+                "silence probe row carries session/identity and is not marked final");
+            Check(Math.Abs((s0.Time - s0.ReplacedAt) - 1.0f) < .001f
+                && Math.Abs((s0.Time - s0.LastSelectedAt) - 1.1f) < .001f,
+                "silence probe reports sinceReplaced and silentFor from separate anchors");
+            Check(s0.ActiveIndex == 0 && s0.ActiveType == "NativeBehavior" && s0.AiObjectSame
+                && s0.AiControlled && s0.Units == 200,
+                "silence probe reports the foreign winner and eligibility facts verbatim");
+            Check(Math.Abs(s0.Weight0 - 10f) < .001f && Math.Abs(s0.Weight1) < .001f
+                && Math.Abs(s0.Weight2) < .001f && Math.Abs(s0.Weight3) < .001f,
+                "silence probe reports the RouteA-side weights without touching them");
+            Arm(c, f, Cps2RouteAIntent.Hold, 22.1f); Arm(c, f, Cps2RouteAIntent.Hold, 22.9f);
+            Check(samples.Count == 2 && Math.Abs((samples[1].Time - samples[1].ReplacedAt) - 2.0f) < .001f,
+                "silence probe keeps a one-per-second cadence without sampling every tick");
+            for (float t = 23.1f; t <= 29.6f; t += 1f) Arm(c, f, Cps2RouteAIntent.Hold, t);
+            Check(samples.Count == 9, "silence probe emits exactly one row per second inside the ten-second window");
+            f.ProbeActiveIndex = 1; f.ProbeActiveType = "CbHoldBehavior";
+            Check(!Arm(c, f, Cps2RouteAIntent.Hold, 30.1f) && !c.Owns(f) && f.Original,
+                "silence probe scenario still releases ownership at the delivery deadline");
+            Check(samples.Count == 10 && samples[9].Final && samples[9].ProbeSeq == 10
+                && samples[9].ActiveIndex == 1 && samples[9].ActiveType == "CbHoldBehavior",
+                "silence probe takes one final snapshot right before the delivery-deadline release");
+            Check(e.BuildSummary(id).Contains("replaced=1") && e.BuildSummary(id).Contains("edgeRetries=0")
+                && e.BuildSummary(id).Contains("lastSelectedAt=20.000s"),
+                "silence probe leaves the r3 summary semantics untouched");
+
+            // 引擎恢复选中 → armed 被消费 → 探针必须停止。
+            RouteAControl c2 = RouteController(); RouteFake f2 = new RouteFake();
+            var s2 = new List<RouteASilenceSample>();
+            c2.Evidence.SilenceObserved = s => s2.Add(s);
+            Arm(c2, f2, Cps2RouteAIntent.Hold, 0f);
+            Check(c2.TrySelect(f2, f2.Behaviors[0], f2.Behaviors[0], RouteEligible(), true, 10f),
+                "silence probe positive path delivers before the overwrite");
+            ObservedRouteWrite(c2.Evidence, f2, 950, 10f); c2.Applied(10f, true);
+            c2.Evidence.SetterCompleted(c2.Evidence.SetterBeginning(f2, CommandDomain.Movement,
+                CommandSource.ExternalUnknown, 951, 5, 10.2f), true, 10.2f);
+            Arm(c2, f2, Cps2RouteAIntent.Hold, 11.2f);
+            Check(s2.Count == 1, "silence probe samples once inside the armed window");
+            Check(c2.TrySelect(f2, f2.Behaviors[0], f2.Behaviors[0], RouteEligible(), true, 11.5f) && s2.Count == 1,
+                "silence probe: a real reselection consumes the armed retry (EdgeRetry path)");
+            Arm(c2, f2, Cps2RouteAIntent.Hold, 13.5f); Arm(c2, f2, Cps2RouteAIntent.Hold, 20f);
+            Check(s2.Count == 1, "silence probe stops once the engine reselects the RouteA behavior");
+
+            // 零语义差：探针读取抛异常时不得改变控制流（同 TestRouteADeliveryDeadline 的窗口与超时释放）。
+            RouteAControl c3 = RouteController(); RouteFake f3 = new RouteFake();
+            int rows = 0;
+            c3.Evidence.SilenceObserved = s => rows++;
+            Arm(c3, f3, Cps2RouteAIntent.Hold, 0f);
+            Check(c3.TrySelect(f3, f3.Behaviors[0], f3.Behaviors[0], RouteEligible(), true, 20f),
+                "silence probe failure scenario delivers before the overwrite");
+            ObservedRouteWrite(c3.Evidence, f3, 960, 20f); c3.Applied(20f, true);
+            c3.Evidence.SetterCompleted(c3.Evidence.SetterBeginning(f3, CommandDomain.Movement,
+                CommandSource.ExternalUnknown, 961, 5, 20.1f), true, 20.1f);
+            f3.ProbeThrows = true;
+            int writesBefore = f3.Writes;
+            bool heldThrowing = true;
+            for (float t = 20.6f; t <= 29.5f; t += .5f) heldThrowing &= c3.Owns(f3) && Arm(c3, f3, Cps2RouteAIntent.Hold, t);
+            Check(heldThrowing && f3.ProbeCalls > 0, "silence probe read failure keeps ownership inside the window");
+            Check(f3.Writes == writesBefore, "silence probe read failures cause zero weight writes inside the window");
+            Check(!Arm(c3, f3, Cps2RouteAIntent.Hold, 30.1f) && !c3.Owns(f3) && f3.Original,
+                "silence probe read failure does not affect the delivery-deadline release");
+            Check(rows == 0, "silence probe read failures are swallowed silently (zero rows)");
         }
 
         private static void TestRouteAFlapAndMode()

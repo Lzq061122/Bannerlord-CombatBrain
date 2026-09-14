@@ -63,7 +63,7 @@ namespace CombatBrain.Ai
         }
     }
 
-    internal sealed class RouteAHandle : IRouteAWeights
+    internal sealed class RouteAHandle : IRouteAWeights, IRouteASilenceProbe
     {
         public readonly Formation Formation;
         public readonly FormationAI AI;
@@ -83,6 +83,23 @@ namespace CombatBrain.Ai
             Behaviors[index].WeightFactor = weight;
             if (weight == 0f) Behaviors[index].IsCurrentOrderChanged = false;
         }
+        // CB-REPAIR-0005（只读诊断）：覆盖后引擎是否仍把 Route A 的行为选为 ActiveBehavior。
+        // 全部为读操作；不做任何 SetOrder/权重写。
+        public int ActiveBehaviorIndex()
+        {
+            object active = Formation.AI.ActiveBehavior;
+            for (int i = 0; i < 4; i++)
+                if (ReferenceEquals(active, Behaviors[i])) return i + 1;
+            return 0;
+        }
+        public string ActiveBehaviorType()
+        {
+            object active = Formation.AI.ActiveBehavior;
+            return active == null ? "none" : active.GetType().Name;
+        }
+        public bool AiObjectSame() { return ReferenceEquals(AI, Formation.AI); }
+        public bool AiControlled() { return Formation.IsAIControlled; }
+        public int Units() { return Formation.CountOfUnits; }
     }
 
     public static class CbRouteAPoC
@@ -107,6 +124,7 @@ namespace CombatBrain.Ai
             _ended = false;
             Control.BeginSession(mission, Now);
             SetOrderObserver.RouteAEvidenceSink = Control.Evidence;
+            Control.Evidence.SilenceObserved = LogSilenceProbe;
         }
         public static void ResetAll()
         {
@@ -239,6 +257,21 @@ namespace CombatBrain.Ai
             float distance;
             return mission.Scene.GetPathDistanceBetweenPositions(ref start, ref target, 0.5f, out distance)
                 && Finite(distance) && distance >= 0f;
+        }
+
+        // CB-REPAIR-0005（只读诊断）：断流行出口。silentFor = 距最近一次真实选中；sinceReplaced = 距覆盖时刻。
+        // 只在 _externalRetryArmed（已发生 ExternalReplaced）且观测开启时产生，最高 1 行/秒、每覆盖 ≤11 行。
+        private static void LogSilenceProbe(RouteASilenceSample s)
+        {
+            string silentFor = float.IsNegativeInfinity(s.LastSelectedAt)
+                ? "never"
+                : (s.Time - s.LastSelectedAt).ToString("F3", CultureInfo.InvariantCulture) + "s";
+            CombatLog.Log(string.Format(CultureInfo.InvariantCulture,
+                "[RouteASilence] run={0} session={1} identity={2} team={3} f={4} t={5:F3} silentFor={6} sinceReplaced={7:F3}s probe={8} final={9} activeIdx={10} activeType={11} aiSame={12} aiCtl={13} units={14} weights={15:F2}/{16:F2}/{17:F2}/{18:F2}",
+                RunId, s.Session, s.Identity, s.Team, s.Formation, s.Time, silentFor,
+                s.Time - s.ReplacedAt, s.ProbeSeq, s.Final ? 1 : 0, s.ActiveIndex, s.ActiveType,
+                s.AiObjectSame ? 1 : 0, s.AiControlled ? 1 : 0, s.Units,
+                s.Weight0, s.Weight1, s.Weight2, s.Weight3));
         }
 
         public static void FlushEvidence()
