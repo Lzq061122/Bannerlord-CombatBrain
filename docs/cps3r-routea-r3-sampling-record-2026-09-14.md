@@ -81,6 +81,20 @@
 | 预算上界 | **实机确认**：第 2 次重取超时后不再重取（`MaxSuspendedReattempts=2`，符合 J-2「本场退役」） |
 | S5 edgeRetry | **仍无样本**（`replaced=0`，94 次外部写全为 `ExternalWhileActive`） |
 
+## 2f. 第五个运行期样本（run=`0496f7b6…`，1426 人 / 3809.58s 超长局）——S5 负样本
+
+同部署；窗口 20147 行异常 0；本场武装对象 `f=1`。汇总（末）：`selected=295 applied=2 replaced=1 externalWhileActive=60 edgeRetries=0 externalDuration=962.490s stableSoFar=1 intentChange=2 weightFlap=0 lastSelectedAt=1114.587s suspensionRetries=2 restoreFailures=0`。
+
+| # | 结果 |
+|---|---|
+| **S5 edgeRetry** | **负样本（关键）**：`t=1115.090 ExternalReplaced`（距上次落地 4.0s）→ **`EdgeRetry` = 0**：覆盖后 Behavior 再未被选中（`lastSelectedAt=1114.587`），armed 重试从未兑现；`t=1124.593`（Δ=9.5s）按期限 `Exit(SelectionTimeout)` + `Restore`。→ **S5 正向形态需"覆盖后 10s 内仍被选中"** |
+| S1 | **再次加强**：`1171.8 → 2067.7` **895.9s 零再武装**（同期 60 次外部写） |
+| S3 | 本场 3 次 `SelectionTimeout` 均 Δ≈10.0s，全部配对 `Restore` |
+| 超长局稳定性 | 63.5 分钟：`weightFlap=0`、`restoreFailures=0`、`unverified=0`、`dropped=0`、异常 0 |
+| 预算上界 | 第 2 次重取超时后不再重取（符合 J-2） |
+
+**归档**：全量 `logs/CombatBrain-2026-09-14-full.log`（SHA256 `63ECC4A9…`）；切片 `logs/run-0496f7b6-20260914-longbattle.log`（SHA256 `585DCEAD…`，5194 行）。
+
 ## 2. 本轮采样验收点（Astra 回签要求的最小集）
 
 | # | 验收点 | 判定方法 | 通过标准 |

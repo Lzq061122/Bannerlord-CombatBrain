@@ -34,11 +34,12 @@ active_task: CB-REPAIR-0004 r3 受控部署 + 运行期采样（台账 IN_PROGRE
 - **Astra 离线回签通过（2026-09-14）**：CB-REPAIR-0004 r3（`395fe13`）**离线复审通过、允许进入受控部署采样**；`395fe13` 允许部署测试但**尚未取得运行期验收**；**无必须继续修改的阻断代码**；条件 5 仍未满足、CPS-4/GO 仍不批准；最终 GO 前仍须裁决**玩家豁免口径**（产品/规范事项）。非阻断待整理（P2）：重试事件 revision 配对；t12 源码不可重建。
 - **CB-REPAIR-0004（占位不开火 → 周期重占位）离线已闭，卡未关**：r1 `723b457` → 质检 needs_revision（R4-1）→ r2 `bc8449a` → **Astra 判 FAIL（P1）**（连续态势数值变化可在超时释放后下一拍重武装，占空比 ≈99.83%）→ **r3 `395fe13`**（重武装改为具名/离散/有界：意图真变化 + 10s 冷却 + 本暂停期授予 <2；可观测 `SuspensionRetry`/`suspensionRetries=`），**质检 t12 独立复核 = pass-with-runtime-debt**（真 r2/r3 生产构建双向复现：r2 三类变化 duty 98.75~99.88%、r3 acquires=1 且 40/100/150s 零重取、执行器 75~93% 连续窗口；CHURN 下 acquires 封顶 3）。派单 = `prompts/active/CombatBrain-CB-REPAIR-0004-r3-周期重占位返修派单-2026-09-14.md`（CB-PROMPT-0041）。**台账 `IN_PROGRESS` + `review_state=PASSED`（离线通过）**：须运行期采样验收齐备才可关。
 - **当前动作**：按 Astra 回签执行 **r3 受控部署 + 运行期采样**（绑定 commit / 部署 DLL SHA / run·session / MCM 与战斗配置；采样项见 `docs/cps3r-routea-r3-sampling-record-2026-09-14.md`）。
-- **r3 运行期样本（累计两场，2026-09-14）**：
+- **r3 运行期样本（累计五场，2026-09-14）**：
   - 样本①`run=c81c4f5e…`（§3e）：武装后引擎全程未选中 → **恰好 10.00s `Exit(SelectionTimeout)`+`Restore`**，余场 304s **零再武装** → S1 **PASS（强）**、S3 **PASS**、S4 间接 PASS、S5 部分、S2 未触发。
   - 样本②`run=6223ad9b…`（§3f，`agents=601`、`BattleDuration=505.51s`、异常 0）：健康路径**强 PASS**——`applied=9`/`stableSoFar=9`/`selected=746`/`lastSelectedAt=493.531s`/`weightFlap=0`/`restoreFailures=0`；`Exit`×6（`LostAIControl`×5 + `EmptyOrInvalid`×1）**全部配对 `Restore`** 且每次资格恢复后重新武装；意图真变化链 Hold→Advance→Retreat→Hold **逐次落地**；S4 **直接 PASS**。**S2、S5-edgeRetry 当时无样本**。
   - 样本③`run=ce970979…`（§3g）：短样本（武装 1s 后 `LostAIControl` 释放，全场未再武装），`restoreFailures=0`，无新验收点。
-  - 样本④`run=d43c302e…`（§3h，**1501 人 / 1365.66s 长局**）：**S2 补齐 PASS**——3 次 `SuspensionRetry` 各对应一次具名意图真变化、每次合格事件只授予一次；**S1 进一步加强**（`t=685→1179` **494 秒**零再武装，同期 94 次外部写）；**S3 PASS ×4**（四次 `SelectionTimeout` 均在武装/重取后 10.000–10.006s 触发并配对 `Restore`）；**冷却门禁与预算上界均获实机确认**（冷却内意图变化不授予；第 2 次重取超时后不再重取）。**S5-edgeRetry 仍无样本**（`replaced=0`）。
+  - 样本④`run=d43c302e…`（§3h，**1501 人 / 1365.66s 长局**）：**S2 补齐 PASS**——3 次 `SuspensionRetry` 各对应一次具名意图真变化、每次合格事件只授予一次；**S1 进一步加强**（`t=685→1179` **494 秒**零再武装，同期 94 次外部写）；**S3 PASS ×4**（四次 `SelectionTimeout` 均在武装/重取后 10.000–10.006s 触发并配对 `Restore`）；**冷却门禁与预算上界均获实机确认**。
+  - 样本⑤`run=0496f7b6…`（§3i，**1426 人 / 3809.58s 超长局**、异常 0、武装对象 `f=1`）：**S5 负样本**——`t=1115.09 ExternalReplaced` 真实发生，但 `EdgeRetry`=0（覆盖后 Behavior 再未被选中，`lastSelectedAt=1114.587`），9.5s 后按期限 `Exit(SelectionTimeout)`+`Restore` → **S5 正向形态还需"覆盖后 10s 内仍被选中"**；**S1 再加强**（`1171.8→2067.7` **895.9s** 零再武装）；S3 ×3（Δ≈10.0s 全配对）；63.5 分钟 `weightFlap=0`/`restoreFailures=0`/异常 0。日志已归档：`MBmod/CombatAI/logs/CombatBrain-2026-09-14-full.log`（SHA256 `63ECC4A9…`）与切片 `run-0496f7b6-20260914-longbattle.log`（`585DCEAD…`）。
 - **条件 5 仍未满足**：不判 GO（判定权在 Astra 复审与用户）。
 
 ## Active Task

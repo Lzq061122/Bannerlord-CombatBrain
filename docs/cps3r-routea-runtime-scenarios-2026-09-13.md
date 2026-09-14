@@ -258,6 +258,35 @@
 - `restoreFailures=0`、`weightFlap=0`、`unverified=0`、`dropped=0`、异常 0 ✓；
 - **S5-edgeRetry 仍无样本**：本场 `replaced=0`（94 次外部写全为 `ExternalWhileActive`，按 F-2 语义不释放、不消耗预算、不计入 edgeRetry）。
 
+## 3i. r3 第五个运行期样本：**S5 负样本 + 超长局稳定性**（2026-09-14，run=`0496f7b680d3455587862d570703790e`）
+
+**绑定**：同部署（`395fe13` / DLL `7E5FC25A…`）；`agents=1426`、**`BattleDuration=3809.58s`（约 63.5 分钟，迄今最长）**、窗口 20147 行**异常 0**；本场武装对象为 **`f=1`**（非 f=0）。
+
+**时间线**：
+
+| t（s） | 事件 | 要点 |
+|---|---|---|
+| 967.540 / 967.588 | `Intent(Advance rev1)` → `OrderApplied` | 正常落地 |
+| 1110.648 / 1111.083 | `Intent(Hold rev2)` → `OrderApplied` | 正常落地 |
+| **1115.090** | **`ExternalReplaced`** | **外部覆盖真实发生**（距上次落地 4.0s；`lastSelectedAt=1114.587` = 覆盖前最后一次选中） |
+| 1124.593 | **`Exit(SelectionTimeout)` + `Restore`** | **Δ=9.5s**；**armed 的边沿重试未执行**（覆盖后 Behavior 再未被选中） |
+| 1161.798 | **`SuspensionRetry`（rev2）** + `Intent(Advance rev3)` | 合格离散事件 → 只授一次重取（距超时 37.2s） |
+| 1165.330 | `Intent(Hold rev4)` | 冷却内 → 未授予 |
+| 1171.802 | `Exit(SelectionTimeout)` + `Restore` | Δ=10.0s |
+| 2067.656 | **`SuspensionRetry`（rev4）** + `Intent(Advance rev5)` | **距上次 895.9 秒零再武装**；本暂停期第 2 次（达上限 2） |
+| 2077.659 | `Exit(SelectionTimeout)` + `Restore` | Δ=10.0s；此后无重取（预算耗尽） |
+
+**汇总（末）**：`selected=295 applied=2 replaced=1 externalWhileActive=60 edgeRetries=0 externalDuration=962.490s stableSoFar=1 unverified=0 dropped=0 intentChange=2 weightFlap=0 lastSelectedAt=1114.587s suspensionRetries=2 restoreFailures=0`
+
+**判定**：
+- **S5-edgeRetry = 负样本（重要）**：`ExternalReplaced` 确实发生，但 **`EdgeRetry` = 0**——按 r3 语义，armed 的重试只在"下一次真实选中"时兑现；本场覆盖后 Behavior 再未被选中，故重试从未兑现，9.5s 后由交付上限释放。**结论：S5 的正向形态（`ExternalReplaced → EdgeRetry → OrderApplied`）除"发生覆盖"外还需"覆盖后 10s 内仍被选中"这一附加条件**——与 S2 同属条件组合型样本。
+- **S1/S3 再次加强**：`1171.8 → 2067.7` **895.9 秒零再武装**（同期 `externalWhileActive` 60 次）；本场 3 次 `SelectionTimeout` 均 Δ≈10.0s 且全部配对 `Restore`。
+- **超长局稳定性**：63.5 分钟、`weightFlap=0`、`restoreFailures=0`、`unverified=0`、`dropped=0`、异常 0；`applied=2 / replaced=1 / stableSoFar=1` 自洽。
+
+**日志归档（供后续研究）**：
+- 全量日志：`MBmod/CombatAI/logs/CombatBrain-2026-09-14-full.log`（50,728,702 bytes，SHA256 `63ECC4A976DD1EAA866197F7A11C5624F33206DE5696C3ACA2FDE92A67FD9D38`）
+- 本 run 切片：`MBmod/CombatAI/logs/run-0496f7b6-20260914-longbattle.log`（1,608,480 bytes / 5194 行，SHA256 `585DCEAD2A90C9B357BD39D723E43C3085301A9360B83A995733ECBA4F6FCA14`）
+
 ## 4. 本轮未证明（运行期债，不得据本文件判 GO）
 
 1. **可执行的五场场景已全部执行完毕**：场景 1、2、5 = **PASS**；场景 3（玩家接管）、场景 4（Rejoin）与场景 5 子项（拆分）在**本次采样口径下不适用**（§3a/§3b/§3c），其中 **Rejoin 分支仍未验证**（不得声称结构上永久不可达）。这不等于"条件 5 已满足"——条件 5 的判定权在 Astra 复审与用户，本文件不判 GO。
