@@ -333,6 +333,40 @@
 - 全量快照：`MBmod/CombatAI/logs/CombatBrain-2026-09-14-full-1600.log`（52,159,044 bytes / 402,155 行，SHA256 `D6B80D36DD7CFD07A8347166934DEF1A834F2D1892EBE5E2748D0B96A5ECEAE9`）
 - 本 run 切片：`MBmod/CombatAI/logs/run-4156cc25-20260914-twobattles.log`（488,112 bytes / 1594 行，SHA256 `5437418055FD9FCAD8CA36C0482B2E00965104D67F80EF5F19177336178E3118`）
 
+## 3k. r3 第七个运行期样本：**健康局中途覆盖 → 全场断流（S5 负样本第 3 次，最强）**（2026-09-14，run=`4e885a4e17c8421f81f9ba421ecfc0fb`）
+
+**绑定**：同部署（r3 `395fe13` / DLL `7E5FC25A…`，本 run 前无重部署）；`20:49:48.537 [SetOrderObserver] 观测已挂载（prefixes=3）`；**无快进**（mission 346.7s / 墙钟 355.6s ≈ 0.975）；新日志窗口 5,613 行**异常 0**。
+**战斗配置（观测值）**：Team 0 = 635（步158/射159/骑160/骑射158）、Team 1 = 616（步173/骑96/骑97/骑射250）——即 §3j session=1 同型**混编场**（非 1020v1020 纯步/射场）；`agents=2032`、`BattleDuration=347.43s`。
+
+### 时间线（mission time）
+
+| t（s） | 事件 | 要点 |
+|---|---|---|
+| 0.544 | `Intent(Rejoin rev1)` | 部署期 `Team 1 f=0 mission=SupportMainEffort`；**本次未落地**（t=5.085 意图转 Advance） |
+| 5.536–220.029 | **`BehaviorSelected` ×379、`OrderApplied` ×15**（Hold/Advance 交替 rev2→rev16） | **健康路径**：每 0.5s 连续选中，逐次落地 |
+| 18.226 / 159.816 / 179.477 | `Exit(LostAIControl)` + `Restore` ×3 | 资格丢失→恢复后**均重新武装并落地** |
+| **220.528** | **`ExternalReplaced`**（外部 `ot=5`，`relatedSeq=422`） | 覆盖发生在**健康选中的正中间**（覆盖前 0.5s 仍在选中：`220.0285`） |
+| 230.030 | `Exit(SelectionTimeout)` + `Restore` | Δ=**9.507s**（自覆盖）/ **10.001s**（自末次选中） |
+| 240.035 | `SuspensionRetry`（rev16）+ `Intent(Advance rev17)` | 冷却满 10s 后具名意图变化 → **授予第 1 次重取** |
+| 250.039 | `Exit(SelectionTimeout)` + `Restore` | 重取后仍 10.0s 无任何选中 |
+| 280.705 | `SuspensionRetry`（rev17）+ `Intent(Hold rev18)` | **第 2 次重取**（达 `MaxSuspendedReattempts=2` 上限） |
+| 281.7 / 283.7 / 285.2 | `Intent(Advance rev19 / Hold rev20 / Advance rev21)` | 冷却内 → **一律未授予**（连续变号不重取） |
+| 290.706 | `Exit(SelectionTimeout)` + `Restore` | 第 3 次超时；此后预算耗尽，无重取；战斗至 347.43s 结束 |
+
+**汇总（末）**：`selected=379 applied=15 replaced=1 externalWhileActive=61 edgeRetries=0 externalDuration=285.233s stableSoFar=14 unverified=0 dropped=0 intentChange=15 weightFlap=0 lastSelectedAt=220.029s suspensionRetries=2 restoreFailures=0`；`Exit`×6（`LostAIControl`×3 + `SelectionTimeout`×3）**全部配对 `Restore`**。
+
+### 判定
+
+- **S5-edgeRetry = 负样本（第 3 次，且是最强的一次）**：覆盖发生在**引擎正在每 0.5s 连续选中**的健康局中；覆盖后 **`BehaviorSelected` = 0、持续 127.3s 至战斗结束**（`lastSelectedAt=220.029s` 冻结），期间 CB **成功重取 2 次**（`SuspensionRetry`×2，各持有 10s 交付窗口）**引擎仍未回调一次**。→ S5 正向形态第三次未取得；三次覆盖样本（§3i/§3j/§3k）**全部**呈"覆盖后该行为不再被引擎选中"。
+- **S2 = PASS（第 2 次样本）**：两次 `SuspensionRetry` 各对应一次具名意图真变化（rev16→17、rev17→18），每次只授予一次；冷却内的 rev19/20/21 与上限后的意图变化**均未授予**，`suspensionRetries=2` 恰达上限。
+- **S1 = PASS（再确认）**：连续变号（rev19/20/21，间隔 1–2s）**零重取**。
+- **S3 = PASS（×3）**：三次 `SelectionTimeout` 分别在覆盖后 9.507s／重取后 10.0s／重取后 10.0s 触发，全部配对 `Restore`，`restoreFailures=0`。
+- **S4 = PASS（直接）**：首次超时释放后 `ExternalAfterExit`×**190**，从 230.030 连续覆盖到 347.218（**117.2s**），普通执行器获得持续窗口。
+- **健康路径 = PASS（强）**：覆盖前 220s 内 `applied=15 / stableSoFar=14`、`selected=379`、`weightFlap=0`、`unverified=0`、`dropped=0`、异常 0；三次 `LostAIControl` 后均恢复接管。
+- **归因（复现 §3j 观察，第 4 次）**：本场 `[OrderTraceAgg]` 亦为 `CombatBrainRouteA=0/o0`（applied=15），Route A 写入仍不进 `CommandProvenance` 聚合。
+
+**日志归档**：全量快照 `MBmod/CombatAI/logs/CombatBrain-2026-09-14-full-2056.log`（53,009,560 bytes / 407,767 行，SHA256 `7223BB15…`）；本 run 切片 `MBmod/CombatAI/logs/run-4e885a4e-20260914-mixed-battle.log`（403,826 bytes / 1330 行，SHA256 `E3E60C97…`）。
+
 ## 4. 本轮未证明（运行期债，不得据本文件判 GO）
 
 1. **可执行的五场场景已全部执行完毕**：场景 1、2、5 = **PASS**；场景 3（玩家接管）、场景 4（Rejoin）与场景 5 子项（拆分）在**本次采样口径下不适用**（§3a/§3b/§3c）——其中 **Rejoin 的成功路径已于 §3j 取得 1 次运行期样本**（失败路径 `NavigationFailed` 仍无样本；不得声称结构上永久不可达）。这不等于"条件 5 已满足"——条件 5 的判定权在 Astra 复审与用户，本文件不判 GO。
@@ -342,7 +376,7 @@
 5. **r3 新增口径待裁决（J-2，§3d）**：预算耗尽后本场不可自愈 → 「一场内一次坏窗口 = 本场 Route A 退役」是否接受。
 6.「玩家队豁免生效」验收点（§3a 表格末行）尚未采样；J-3（证据表满时计数不一致）、J-4（超时暂停依赖先清后设次序）为低危未修项。
 7. CPS §14.1 **条件 5 仍未满足**（Astra 复审未回签；本文件不判 GO）。
-8. **S5 正向形态仍缺样本（§3i + §3j 连续两场负样本）**：两场都呈"`ExternalReplaced` 真实发生 → 覆盖后引擎不再选中该 Behavior → 9.5–10.0s 按期限 `Exit(SelectionTimeout)`"，`edgeRetries` 均为 0。按 §3j 口径，正向形态在 r3 前构建上出现过（§2 `run=ba84a11b`，Δ=5.00s），故**不是结构不可达**；是否继续等样本或接受离线证据替代，**判定权在 Astra**（交接件 §4-1）。
+8. **S5 正向形态仍缺样本（§3i + §3j + §3k 连续三场负样本）**：三场都呈"`ExternalReplaced` 真实发生 → 覆盖后引擎不再选中该 Behavior → 9.5–10.0s 按期限 `Exit(SelectionTimeout)`"，`edgeRetries` 均为 0。§3k 是其中最强的一次：覆盖发生于**每 0.5s 连续选中的健康局中**，覆盖后 **127.3s 零选中至战斗结束**，期间 CB 两次重取（各 10s 窗口）引擎仍未回调。按 §3j 口径，正向形态在 r3 前构建上出现过（§2 `run=ba84a11b`，Δ=5.00s），故**不是结构不可达**；但 r3 上 3/3 全负 ⇒ 是否继续等样本或接受离线证据替代，**判定权在 Astra**（交接件 §4-1）。
 9. **Route A 归因渠道口径（§3j 新观察）**：Route A 的写入不进 `CommandProvenance` 聚合（`RouteAOrderAdapter` 不调用 `Record`），因此 `[OrderTraceAgg] CombatBrainRouteA` 恒为 `0/o0`；Route A 的归因只存在于 `[RouteAEvent] source=CombatBrainRouteA` 渠道。这直接影响 S5 验收项「`OrderTraceAgg` 归因与执行器一致」的判定口径，需裁决后才能在验收表上落判定。
 
 ## 5. 复现命令
@@ -363,7 +397,7 @@ Get-Content $env:TEMP\CombatBrain.log -Wait -Tail 200 | Select-String -Pattern '
 
 - 已完成场景：场景 1（重跑，**PASS**）、场景 2（热关闭，**PASS**）、场景 5（增援/清空，**PASS**，限定见 §3c）。
 - 本次采样不适用（分支仍未验证）：场景 3（玩家接管，§3a，口径属产品/规范裁决项）、场景 4 的 **`NavigationFailed` 失败路径**（§3b，成功路径已由 §3j 取得 1 次样本）、场景 5 子项「拆分」（§3c）。
-- r3 运行期样本累计七场：①`c81c4f5e`（§3e）②`6223ad9b`（§3f）③`ce970979`（§3g）④`d43c302e`（§3h）⑤`0496f7b6`（§3i）⑥`4156cc25` session=1（§3j，混编场，含 Rejoin 样本）⑦`4156cc25` session=2（§3j，申报场次 1016v994 纯步/射）。**唯一缺口 = S5 正向形态（`ExternalReplaced → EdgeRetry → OrderApplied`）**。
+- r3 运行期样本累计八场：①`c81c4f5e`（§3e）②`6223ad9b`（§3f）③`ce970979`（§3g）④`d43c302e`（§3h）⑤`0496f7b6`（§3i）⑥`4156cc25` session=1（§3j，混编场，含 Rejoin 样本）⑦`4156cc25` session=2（§3j，申报场次 1016v994 纯步/射）⑧`4e885a4e`（§3k，混编场，健康局中途覆盖 → 全场断流；S2 第二样本 + S1/S3/S4 再确认）。**唯一缺口 = S5 正向形态（`ExternalReplaced → EdgeRetry → OrderApplied`），已 3/3 全负**。
 - 仍待采样：「玩家队豁免生效」验收点（§3a 表格末行）。
 - 已开卡处置：**CB-REPAIR-0004**（占位不开火 → 周期重占位，`runtime_failure`），台账 **`IN_PROGRESS`**（按派单不关闭，须 Astra 复审通过 + 部署/运行期证据齐备才可关）：r1 `723b457` → 质检 t8 = needs_revision（R4-1）→ r2 `bc8449a` → **Astra 判 FAIL（P1 周期重占位）** → r3 `395fe13` → **质检 t12 = pass-with-runtime-debt（双向独立复现，见 §3d）**。§3c 数据已按实测更正（699 = 425 + 窗口内 0 + 其后 274）。
 - 待裁决：**J-2**（预算耗尽后本场不可自愈 → 「一场内一次坏窗口 = 本场 Route A 退役」是否接受）；低危未修：J-3、J-4。

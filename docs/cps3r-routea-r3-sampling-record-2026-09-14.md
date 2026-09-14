@@ -123,6 +123,28 @@ session=2 关键链：`t=320.027–325.030` 连续选中×11 → **`t=325.529 Ex
 
 **遗留缺口**：**S5 正向形态（`ExternalReplaced → EdgeRetry → OrderApplied`）**连续两场未取得；是否继续等样本或接受离线证据替代 → 交 Astra 裁定（交接件 §4-1）。
 
+## 2h. 第七个运行期样本（run=`4e885a4e…`，健康局中途覆盖 → 全场断流）——S5 负样本第 3 次（最强）
+
+同部署（`395fe13` / DLL `7E5FC25A…`）；`20:49:48.537` 观测挂载 `prefixes=3`；**无快进**（mission 346.7s / 墙钟 355.6s ≈ 0.975）；窗口 5,613 行**异常 0**。
+战斗（观测值）：Team 0 = 635（步158/射159/骑160/骑射158）、Team 1 = 616（步173/骑96/骑97/骑射250）——**混编场**（同 §2g session=1 型）；`agents=2032`、`BattleDuration=347.43s`。
+
+关键链：`t=5.536–220.029` **连续选中 379 次、落地 15 次**（健康）→ **`t=220.528 ExternalReplaced`**（覆盖前 0.5s 仍在选中）→ `t=230.030 Exit(SelectionTimeout)`+`Restore`（Δ=9.507s 自覆盖 / 10.001s 自末次选中）→ `t=240.035 SuspensionRetry`+`Intent(Advance rev17)`（第 1 次重取）→ `t=250.039` 超时 → `t=280.705 SuspensionRetry`+`Intent(Hold rev18)`（第 2 次重取，达上限）→ rev19/20/21 冷却内未授予 → `t=290.706` 超时。
+汇总（末）：`selected=379 applied=15 replaced=1 externalWhileActive=61 edgeRetries=0 externalDuration=285.233s stableSoFar=14 unverified=0 dropped=0 intentChange=15 weightFlap=0 lastSelectedAt=220.029s suspensionRetries=2 restoreFailures=0`；`Exit`×6（`LostAIControl`×3 + `SelectionTimeout`×3）全配对 `Restore`。
+
+| # | 结果 |
+|---|---|
+| **S5 edgeRetry** | **负样本（第 3 次，最强）**：覆盖发生在**每 0.5s 连续选中的健康局**中；覆盖后 `BehaviorSelected`=**0**，**持续 127.3s 至战斗结束**（`lastSelectedAt=220.029s` 冻结），期间 CB 两次重取（各 10s 窗口）**引擎仍未回调一次** |
+| **S2** | **PASS（第 2 次样本）**：两次 `SuspensionRetry` 各对应一次具名意图真变化（rev16→17、rev17→18），每次仅授予一次；冷却内 rev19/20/21 与达上限后的变化一律未授予（`suspensionRetries=2` 恰达上限） |
+| S1 | **PASS（再确认）**：连续变号（rev19/20/21，间隔 1–2s）零重取 |
+| S3 | **PASS（×3）**：三次 `SelectionTimeout`（覆盖后 9.507s、重取后 10.0s ×2）全部配对 `Restore` |
+| S4 | **PASS（直接）**：首次超时释放后 `ExternalAfterExit`×190，230.030→347.218（**117.2s**）连续窗口 |
+| 健康路径 | **PASS（强）**：覆盖前 `applied=15 / stableSoFar=14 / selected=379`、`weightFlap=0`、`unverified=0`、异常 0；3 次 `LostAIControl` 后均恢复接管 |
+| 归因 | 复现 §2g 观察（第 4 次）：`[OrderTraceAgg] CombatBrainRouteA=0/o0`（applied=15） |
+
+**归档**：全量 `logs/CombatBrain-2026-09-14-full-2056.log`（53,009,560 bytes / 407,767 行，SHA256 `7223BB15…`）；切片 `logs/run-4e885a4e-20260914-mixed-battle.log`（403,826 bytes / 1330 行，SHA256 `E3E60C97…`）。
+
+**结论**：S5 正向形态 **3/3 全负**（§2f/§2g/§2h），且本次证明"覆盖后断流"与"是否健康选中"无关——覆盖前一秒引擎仍在正常选中，覆盖后立刻永久停止。**是否继续等样本或接受离线证据替代 → 交 Astra 裁定**；机制侧判定改由 CB-REPAIR-0005 只读探针（已实现、离线验收完成、**未部署**）承接。
+
 ## 2. 本轮采样验收点（Astra 回签要求的最小集）
 
 | # | 验收点 | 判定方法 | 通过标准 |
