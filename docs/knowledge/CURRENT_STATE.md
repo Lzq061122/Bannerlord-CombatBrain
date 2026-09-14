@@ -34,7 +34,8 @@ active_task: CB-REPAIR-0004 r3 受控部署 + 运行期采样（台账 IN_PROGRE
 - **Astra 离线回签通过（2026-09-14）**：CB-REPAIR-0004 r3（`395fe13`）**离线复审通过、允许进入受控部署采样**；`395fe13` 允许部署测试但**尚未取得运行期验收**；**无必须继续修改的阻断代码**；条件 5 仍未满足、CPS-4/GO 仍不批准；最终 GO 前仍须裁决**玩家豁免口径**（产品/规范事项）。非阻断待整理（P2）：重试事件 revision 配对；t12 源码不可重建。
 - **CB-REPAIR-0004（占位不开火 → 周期重占位）离线已闭，卡未关**：r1 `723b457` → 质检 needs_revision（R4-1）→ r2 `bc8449a` → **Astra 判 FAIL（P1）**（连续态势数值变化可在超时释放后下一拍重武装，占空比 ≈99.83%）→ **r3 `395fe13`**（重武装改为具名/离散/有界：意图真变化 + 10s 冷却 + 本暂停期授予 <2；可观测 `SuspensionRetry`/`suspensionRetries=`），**质检 t12 独立复核 = pass-with-runtime-debt**（真 r2/r3 生产构建双向复现：r2 三类变化 duty 98.75~99.88%、r3 acquires=1 且 40/100/150s 零重取、执行器 75~93% 连续窗口；CHURN 下 acquires 封顶 3）。派单 = `prompts/active/CombatBrain-CB-REPAIR-0004-r3-周期重占位返修派单-2026-09-14.md`（CB-PROMPT-0041）。**台账 `IN_PROGRESS` + `review_state=PASSED`（离线通过）**：须运行期采样验收齐备才可关。
 - **当前动作**：按 Astra 回签执行 **r3 受控部署 + 运行期采样**（绑定 commit / 部署 DLL SHA / run·session / MCM 与战斗配置；采样项见 `docs/cps3r-routea-r3-sampling-record-2026-09-14.md`）。
-- **条件 5 仍未满足**：不判 GO（判定权在 Astra 复审与用户）。
+- **r3 首个运行期样本（2026-09-14，run `c81c4f5e…`，见运行场景档 §3e）**：部署绑定 `395fe13` / DLL `7E5FC25A…`（src=dst）；MCM E 模式 + 观测在位（`prefixes=3`）；200v200、`BattleDuration=314.38s`、无快进。事件链仅三条：`t=0.550 Intent(Hold)` → **`t=10.550 Exit(reason=SelectionTimeout)` + `Restore`** → 余场 304s 全为原版写（721 条 `ExternalAfterExit`）、**零再武装**。**判定：S1 PASS（强）／S3 PASS／S4 间接 PASS／S5 部分（`restoreFailures=0`、0 异常；本场无外部覆盖故 edgeRetry 无样本）／S2 本场未触发（无合格事件，无样本、不判 fail）**。附加事实：本场 `applied=0`、`selected=0` —— 引擎从未选中其 Behavior（「占位不开火」成因），r3 把该状态限制为 10s 并令本场退役（符合 J-2 语义）。
+- **条件 5 仍未满足**：不判 GO（判定权在 Astra 复审与用户）；r3 运行期仍需补 **S2**（暂停期出现合格意图变化）与 **S5 edgeRetry 路径**（需外部覆盖）两类样本。
 
 ## Active Task
 

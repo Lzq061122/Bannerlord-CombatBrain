@@ -18,9 +18,27 @@
 | 部署时间 / 游戏进程 | **2026-09-14**（deploy.ps1 EXIT=0，ModuleData 已同步）；部署前硬门：`Get-Process Bannerlord` 为空 ✓ |
 | MCM 配置 | `Cps3Mode = E_RouteA`；**`Cps3ObserverEnabled = true`**（G-1 硬约束：无观测 Route A 不执行）；RouteA 专用开关按 E 模式自动武装 |
 | 战斗配置 | 自定义战斗、**200v200 步兵野战**；**BattleSize 建议恢复为 6**；**本轮不要用游戏快进**（前一轮快进使响应延迟不可作证据） |
-| run / session | **待填**（`[RouteA] run=<32位id>`；一场一文件时改名前先归档日志） |
+| run / session | **`c81c4f5e6d7d47bba5a81b7174eb1f0e`**（session=1；2026-09-14 10:59:57 → 11:05:24） |
+| 战斗规模 / 时长 | `[Bench] agents=401`（200v200）、`BattleDuration=314.38s`、无快进痕迹 |
+| 观测确认 | `10:59:52.071 [SetOrderObserver] 观测已挂载 prefixes=3` ✓ |
 
-**采样前操作**：① 确认无 `Bannerlord` 进程后再部署；② 部署后核对 src/dst SHA 一致；③ 开新战斗前 `Move-Item $env:TEMP\CombatBrain.log "$env:TEMP\CombatBrain.runN.log"` 隔离场次（避免多场混写）；④ 首查 `13:xx:xx [SetOrderObserver] 观测已挂载 prefixes=3` 确认观测在位。
+**采样前操作**：① 确认无 `Bannerlord` 进程后再部署；② 部署后核对 src/dst SHA 一致；③ 场次隔离由 Captain 侧用"日志字节偏移 + 新 run id"实现（无需用户改名日志）；④ 首查 `[SetOrderObserver] 观测已挂载 prefixes=3` 确认观测在位。
+
+## 2b. 本轮采样结果（run=`c81c4f5e…`）
+
+**事件链**：`t=0.550 Intent(Hold, rev=1)` → `t=10.550 Exit(reason=SelectionTimeout)` + `Restore(SelectionTimeout)` → 之后约 304s 全为 `ExternalAfterExit`（721 条原版 Movement 写）、**无再武装**。
+**汇总（末）**：`selected=0 applied=0 replaced=0 externalWhileActive=0 edgeRetries=0 externalDuration=0.000s stableSoFar=0 intentChange=0 weightFlap=0 lastSelectedAt=never suspensionRetries=0 restoreFailures=0`；全窗口 4525 行**异常 0**。
+
+| # | 结果 |
+|---|---|
+| S1 连续变号不重取 | **PASS（强）**：释放后 304s 零再武装；`suspensionRetries=0` |
+| S2 合格意图变化仅一次 `SuspensionRetry` | **本场未触发**（`intentChange=0`）→ 无样本，不判 fail |
+| S3 `SelectionTimeout` + `Restore` | **PASS**：武装后**恰好 10.00s** 触发，`Restore` 紧跟，`restoreFailures=0` |
+| S4 释放后执行器持续可用 | **间接 PASS**：释放后不再阻塞，721 条原版 Movement 写贯穿余场；本场 CB 侧无 Movement 提案样本 |
+| S5 健康 `EdgeRetry`／归因／`RestoreFailures=0` | **部分**：`restoreFailures=0`、`weightFlap=0`、0 异常 ✓；本场无外部覆盖（`replaced=0`）→ edgeRetry 路径无样本 |
+
+**待补样本**：①S2（暂停期间出现合格意图变化）②S5 的 edgeRetry 路径（需发生外部覆盖，形态参照 `run=ba84a11b`）。
+**附加事实**：本场 Route A 未落地任何命令（`applied=0`，引擎从未选中其 Behavior）——即「占位不开火」成因；r3 把该状态限制为 10s 并令本场退役（符合 J-2 语义）。
 
 ## 2. 本轮采样验收点（Astra 回签要求的最小集）
 

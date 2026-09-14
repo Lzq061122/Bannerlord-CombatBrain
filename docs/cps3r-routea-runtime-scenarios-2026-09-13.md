@@ -151,6 +151,35 @@
 **已闭合**：R4-1（空 Release 解锁暂停）随 r2 闭合；**F-3（`0f` 哨兵）/ F-4（`edgeRetries` 落账口径）随 r2/r3 闭合**（`HasExternal` 具名取代哨兵、`edgeRetries=授权次数` 语义与断言）；F-5 与运行期债仍在。
 **复核环境**：质检 harness 留在 `%TEMP%\qc-t12`（`drv-r2`/`drv-r3` + `Program.cs`），可供 Astra 或后续复跑（临时目录，非仓库产物）。
 
+## 3e. r3 受控部署后的运行期样本（2026-09-14，run=`c81c4f5e6d7d47bba5a81b7174eb1f0e`）
+
+**部署绑定**：commit `395fe13`；部署 DLL SHA `7E5FC25A0EF0559D718B0D5E42994141846291501E3342F94E6C0B1F713FD8D6`（src=dst，MATCH）；MCM `Cps3Mode=E_RouteA` + `Cps3ObserverEnabled=true`（`10:59:52.071 [SetOrderObserver] 观测已挂载 prefixes=3`）；自定义战斗 200v200（`[Bench] agents=401`，avgAi 0.02~0.07ms）；`BattleDuration=314.38s`，无快进痕迹。
+
+**生命周期事件（本场仅 3 条）**：
+
+| 时刻 | 事件 |
+|---|---|
+| 10:59:57.689（t=0.550） | `event=Intent intent=Hold revision=1`（武装） |
+| 11:00:07.699（t=10.550） | **`event=Exit reason=SelectionTimeout`** |
+| 11:00:07.699 | `event=Restore reason=SelectionTimeout` |
+| 之后 → 11:05:24（约 304s） | **721 条 `ExternalAfterExit`**（原版 Movement 写持续），**无任何再武装** |
+
+**该场汇总（末）**：`selected=0 applied=0 replaced=0 externalWhileActive=0 edgeRetries=0 externalDuration=0.000s stableSoFar=0 intentChange=0 weightFlap=0 lastSelectedAt=never suspensionRetries=0 restoreFailures=0`；全窗口（4525 行）**异常类行 0**。
+
+**逐项判定（Astra 回签最小集）**：
+
+| # | 验收点 | 结果 |
+|---|---|---|
+| S1 | 连续变号不重取 | **PASS（强）**：释放后 304 秒零再武装（对照 r2/Astra 为每 10s 重取、duty ≈99.83%）；`suspensionRetries=0` |
+| S2 | 合格意图变化仅一次 `SuspensionRetry` | **本场未触发**（`intentChange=0`，无合格离散事件）→ **无样本，不判 fail** |
+| S3 | 零选中后按期限 `SelectionTimeout` + `Restore` | **PASS**：武装后**恰好 10.00s**（t=0.550 → 10.550）触发；`Restore` 紧跟；`restoreFailures=0` |
+| S4 | 释放后普通执行器持续可用 | **间接 PASS**：释放后所有权不再阻塞（`BlocksExecutor=false`），721 条原版 Movement 写贯穿余场；**本场 CB 侧无 Movement 提案样本** |
+| S5 | 健康 `EdgeRetry`／归因／`RestoreFailures=0` | **部分**：`restoreFailures=0`、`weightFlap=0`、0 异常 ✓；`edgeRetries=0` 因本场无外部覆盖（`replaced=0`）→ **健康 EdgeRetry 路径本场无样本** |
+
+**附加事实（重要）**：本场 Route A **未落地任何命令**（`applied=0`）——武装后引擎**从未选中**其 Behavior（`selected=0`、`lastSelectedAt=never`），这正是「占位不开火」的成因；r3 的 10s 交付上限把该状态限制为 10 秒并令本场 Route A 退役（符合 J-2 裁决语义「一场内一次坏窗口 = 本场退役」）。
+
+**仍需补的样本**：①**S2**——需一场"暂停期间出现合格意图变化"的战斗；②**S5 的 edgeRetry 路径**——需一场发生外部覆盖的战斗（形态参照早期 `run=ba84a11b`：`ExternalReplaced → EdgeRetry → OrderApplied`）。
+
 ## 4. 本轮未证明（运行期债，不得据本文件判 GO）
 
 1. **可执行的五场场景已全部执行完毕**：场景 1、2、5 = **PASS**；场景 3（玩家接管）、场景 4（Rejoin）与场景 5 子项（拆分）在**本次采样口径下不适用**（§3a/§3b/§3c），其中 **Rejoin 分支仍未验证**（不得声称结构上永久不可达）。这不等于"条件 5 已满足"——条件 5 的判定权在 Astra 复审与用户，本文件不判 GO。
