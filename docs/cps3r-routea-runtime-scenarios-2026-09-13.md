@@ -123,14 +123,43 @@
 - **未定论部分**：引擎侧「为何停止选中」为 Inferred（窗口内每 0.5s 恰 1 次原生 Movement 写 ⇒ FormationAI 节拍仍在，胜出者非 Route A Behavior）；建议并入下轮采样的最小观测，不单独立卡。
 - **下轮采样验收点（部署与采样经用户裁决排在 Astra 回签之后）**：`ExternalReplaced` 后 **≤10s** 应出现 `Exit(reason=SelectionTimeout)`；超时释放后普通执行器须获得**持续**（非单帧）Movement 窗口；`SelectionTimeout` 触发频率理想为 0 或仅出现于真实覆盖失效处。
 
+## 3d. CB-REPAIR-0004 r3 与独立复核（2026-09-14）
+
+**SHA 对应（J-5，防下一轮对不上号）**：r1 = `723b457`；r2 = **`bc8449a`**（派单 §1 写的起点 `6f632ae` 是 r2 的**早期同标题提交、已被 amend 取代、不在祖先链**，两者差 7 行注释）；r3 = **`395fe13`**（= 当时的 HEAD）。部署基线仍为 `9a2afe4`，上述三者**均未部署**。
+
+**r3 修复语义**（`RouteAControl.cs`）：删除 r2 的「`situationSignal` 变化即解锁」；暂停期持续让出 Movement 所有权；重武装须**同时**满足①真实战术意图变化（`intent != 暂停时锁存的 _suspendedIntent`，源自 Formation Mission/相位映射）②冷却 `ReArmCooldownSeconds=10f` ③本暂停期授予次数 `< MaxSuspendedReattempts=2`；合格事件只授一次尝试，仍无 `BehaviorSelected` → 再次期限内 `Release(SelectionTimeout)` 并恢复暂停；预算重置＝真实选中回调／非超时真实释放／`BeginSession`；可观测 `RouteAEventKind.SuspensionRetry` + 汇总 `suspensionRetries=`。
+
+**独立复核（质检 t12，verdict = pass-with-runtime-debt）**：以 `git archive` 把 r2/r3 分别只读抽到 `%TEMP%` 并各自构建**生产** DLL，再驱动生产 `RouteAControl` + `RouteASituationStamp.Update` + `FormationCommandExecutor.ExecuteWinner`（weights 端仅 `IRouteAWeights` 替身，逻辑零复制；未 checkout、未加 worktree、未写 repo）。
+
+| 场景（60Hz 驱动） | r2 = `bc8449a` | r3 = `395fe13` |
+|---|---|---|
+| 每拍 `X+=0.001`、零选中 | **复现 Astra P1**：释放@10.0167、重取@**10.0333**，每 10s 一次；100s duty **99.85%**、acquires 10、执行器仅 9 拍(0.15%) | acquires=1；40/100/150s **零重取**；duty 25%/10%/6.67%；执行器 75%/90%/93.33% 且为连续窗口 |
+| 兵数变化 | duty **98.75%**（P1 之洞不限于位置变化） | 同上（acquires=1，零重取） |
+| 12 维向量微变 | duty **99.88%** | 同上（acquires=1，零重取） |
+| 合格离散事件 | — | acquires=2 + `SuspensionRetryEvents=1`（只授一次、具名可观测） |
+| CHURN（意图每拍抖动 + 连续变号） | — | 150s acquires 封顶 **3**、Retry 封顶 **2** → 无周期重占位 |
+| HEALTH（稳定选中） | `selected=80 applied=2 replaced=1 edgeRetries=1 lastSelectedAt=39.517s suspensionRetries=0` | 与 r2 **逐字段一致** → 交付窗口刷新与单次边沿授权无回归 |
+
+质量门（t12 实跑）：`--no-incremental` build 0/0；OfflineTests ALL PASS **1297/0**（Check 站点 1100→1120）；`RouteAStaticChecks.ps1` 20 条 `[PASS]`、exit 0；trivia-strip 静态 setter **4=4**；`git diff --check` 两口径 exit 0。未部署三重确认（无 Bannerlord 进程、deployed SHA `A39AC964…` vs 新构建 `7E5FC25A…`、日志 mtime 未变且 `SelectionTimeout`/`lastSelectedAt` 各 0 行）。
+
+**J-1（反向验证产物登记，按未验证形式闭合）**：开发侧给出的反向验证结果为 `REVERSE-CHECK PASS=1280 FAIL=17`，具名失败断言示例：`r3 position micro change: never re-arms during continuous situation changes`、`r3 unit count change: every tick's Movement proposal reaches the executor (sustained window)`、`r3 situation vector change: no suspension retry granted without a qualifying event`、`r3 qualifying event inside the cooldown is not granted (bounded rate)`、`r3 after the attempt budget is spent the control keeps yielding (executor writes every tick)`；临时改动已撤销（无 TEMP 残留），复跑 1297/0。**该产物未按契约字段登记 → 质检按「未验证」记账**；风险由更强的等价证据（真 r2 生产构建复现 P1 + r3 判否）闭合，故未阻塞本卡。本文件此处即为补登。
+
+**J-2（口径，待裁决/交 Astra）**：预算重置路径实际只有「持所有权时的真实选中」「非超时真实释放」「`BeginSession`」；**预算耗尽后不再持有所有权 ⇒ 本场战斗内不可自愈**（CHURN 实测 acquires 封顶 3）。安全方向正确，但 CPS-4 须明确写明「**一场内出现一次坏窗口 = 本场 Route A 退役**」，是否接受需产品/规范裁决。
+
+**J-3 / J-4（low，未修）**：J-3 证据表满时 `_suspendedReattempts` 与 `SuspensionRetry` 事件可能不一致；J-4 超时暂停依赖"先清后设"次序（r2 已留陷阱注释）。
+
+**已闭合**：R4-1（空 Release 解锁暂停）随 r2 闭合；**F-3（`0f` 哨兵）/ F-4（`edgeRetries` 落账口径）随 r2/r3 闭合**（`HasExternal` 具名取代哨兵、`edgeRetries=授权次数` 语义与断言）；F-5 与运行期债仍在。
+**复核环境**：质检 harness 留在 `%TEMP%\qc-t12`（`drv-r2`/`drv-r3` + `Program.cs`），可供 Astra 或后续复跑（临时目录，非仓库产物）。
+
 ## 4. 本轮未证明（运行期债，不得据本文件判 GO）
 
 1. **可执行的五场场景已全部执行完毕**：场景 1、2、5 = **PASS**；场景 3（玩家接管）、场景 4（Rejoin）与场景 5 子项（拆分）在**本次采样口径下不适用**（§3a/§3b/§3c），其中 **Rejoin 分支仍未验证**（不得声称结构上永久不可达）。这不等于"条件 5 已满足"——条件 5 的判定权在 Astra 复审与用户，本文件不判 GO。
-2. **未取得样本的分支**：① "新 Formation 对象身份隔离"（对象未销毁重建）；② **Rejoin 分支及其 `NavigationFailed` 路径**（本次采样不适用，未验证）；③ F-2「重试已用后再次 `replaced=true` → 立即 `Release(ExternalOverridePersisted)`」；④ §3c 的 `edgeRetries=0` / 占位不开火——根因已定位，处置**仍在返修中（r3）**。
+2. **未取得样本的分支**：① "新 Formation 对象身份隔离"（对象未销毁重建）；② **Rejoin 分支及其 `NavigationFailed` 路径**（本次采样不适用，未验证）；③ F-2「重试已用后再次 `replaced=true` → 立即 `Release(ExternalOverridePersisted)`」；④ §3c 的 `edgeRetries=0` / 占位不开火——根因已定位，r3 已修复并经独立复核（§3d），**但新构建未部署、无运行期样本**。
 3. `replaced=false` 路径（不释放、不消耗重试、仅计数）被大量观测（`externalWhileActive` 3 / 12 / **1780**），但其对所有权与抖动的实际影响仍无定论（§3c 的占位不开火现象正属此域）。
 4. F-5（Release 位于 Harmony postfix 栈内改权重）无运行期证据；H-2（E 模式帧成本须按「RouteA + 观测」复合口径评定）未评定——另注意场景 5 采样使用了快进与低 BattleSize，其数字不得与其他场次混比。
-5.「玩家队豁免生效」验收点（§3a 表格末行）尚未采样。
-6. CPS §14.1 **条件 5 仍未满足**（Astra 复审未回签；本文件不判 GO）。
+5. **r3 新增口径待裁决（J-2，§3d）**：预算耗尽后本场不可自愈 → 「一场内一次坏窗口 = 本场 Route A 退役」是否接受。
+6.「玩家队豁免生效」验收点（§3a 表格末行）尚未采样；J-3（证据表满时计数不一致）、J-4（超时暂停依赖先清后设次序）为低危未修项。
+7. CPS §14.1 **条件 5 仍未满足**（Astra 复审未回签；本文件不判 GO）。
 
 ## 5. 复现命令
 
@@ -151,7 +180,7 @@ Get-Content $env:TEMP\CombatBrain.log -Wait -Tail 200 | Select-String -Pattern '
 - 已完成场景：场景 1（重跑，**PASS**）、场景 2（热关闭，**PASS**）、场景 5（增援/清空，**PASS**，限定见 §3c）。
 - 本次采样不适用（分支仍未验证）：场景 3（玩家接管，§3a，口径属产品/规范裁决项）、场景 4（**Rejoin，仍未验证**，§3b）、场景 5 子项「拆分」（§3c）。
 - 仍待采样：「玩家队豁免生效」验收点（§3a 表格末行）。
-- 已开卡处置：**CB-REPAIR-0004**（占位不开火，`runtime_failure`）——**仍在返修中（r3，派单 CB-PROMPT-0041）**，台账 `IN_PROGRESS`；r1 `723b457` → 质检 t8 needs_revision（R4-1）→ r2 `bc8449a` → **Astra 判 FAIL（P1 周期重占位）**；§3c 数据已按实测更正（699 = 425 + 窗口内 0 + 其后 274）。
+- 已开卡处置：**CB-REPAIR-0004**（占位不开火 → 周期重占位，`runtime_failure`），台账 **`IN_PROGRESS`**（按派单不关闭，须 Astra 复审通过 + 部署/运行期证据齐备才可关）：r1 `723b457` → 质检 t8 = needs_revision（R4-1）→ r2 `bc8449a` → **Astra 判 FAIL（P1 周期重占位）** → r3 `395fe13` → **质检 t12 = pass-with-runtime-debt（双向独立复现，见 §3d）**。§3c 数据已按实测更正（699 = 425 + 窗口内 0 + 其后 274）。
+- 待裁决：**J-2**（预算耗尽后本场不可自愈 → 「一场内一次坏窗口 = 本场 Route A 退役」是否接受）；低危未修：J-3、J-4。
 - 未定论：引擎侧「为何停止选中」（Inferred，建议并入下轮采样最小观测）；**下轮采样验收点**见 §3c 末行（部署与采样排在 Astra 回签之后）。
-- 辅助工具：`MBmod/CombatAI/tools/routea-rejoin-check.ps1`（Rejoin/场景条件只读体检）。
 - 辅助工具：`MBmod/CombatAI/tools/routea-rejoin-check.ps1`（Rejoin/场景条件只读体检）。
