@@ -13,10 +13,10 @@ status_schema: 1
 branch: main
 worktree: E:\Agent\6a9268112aeaf49072bef052   # machine-local locator（非身份）
 last_verified_commit: 9a2afe4bdded41e1ace602382e462aa1e7b5687d
-last_verified_at: 2026-09-13  # 离线 1241 PASS/0 FAIL + 已部署 + Route A 运行期场景 1 重跑 / 场景 2 通过
+last_verified_at: 2026-09-13  # 离线 1241 PASS/0 FAIL + 已部署（现网 DLL）；此后代码提交均未部署
 owner: captain / integration-owner（角色位，非 session）
-state: WAITING_EXTERNAL       # 等 Astra 对 CPS3R Route A 复审；场景 1、2、5 已 PASS，场景 3、4 与「拆分」判 N/A（不可达）
-active_task: none             # 无进行中实现任务（三张返修卡已闭环）
+state: WAITING_EXTERNAL       # 等 Astra 复审；场景 1、2、5 已 PASS；场景 3、4 与「拆分」本次采样不适用（Rejoin 仍未验证）
+active_task: CB-REPAIR-0004（r3 返修中，台账 IN_PROGRESS；不部署、不采样）
 ```
 
 ---
@@ -24,19 +24,20 @@ active_task: none             # 无进行中实现任务（三张返修卡已闭
 ## Current Mainline
 
 - **主线 = CPS（战场命令控制面收口）**：CPS-0 provenance 落地 → CPS-1 唯一命令仲裁 → CPS-2 双路线 PoC → CPS-3 运行期 A/B 验证 → CPS-3R Route A 修复收口 + 覆盖失效返修（现状）→ CPS-4 硬门清单 & GO/NO-GO。
-- 分支 `main`，**已验证代码基线 `9a2afe4`**（2026-09-11「fix(cps): Route A 覆盖语义裁决与 externalDuration 口径统一」）；当前 HEAD 在此之后仅有文档提交（`f6634f7` 测试指南 §0a）。
+- 分支 `main`，**已验证且已部署的代码基线 `9a2afe4`**（2026-09-11「fix(cps): Route A 覆盖语义裁决与 externalDuration 口径统一」）；**HEAD 已在其之后包含未部署的 Route A 代码提交**（CB-REPAIR-0004：`723b457`、`bc8449a`，及 r3 在途）——这些提交**未经运行期验证，也不在现网 DLL 中**。
 - **功能冻结令生效中**：CPS GO 前禁新文化战术 / 新 Formation Mission / 新兵种角色 / 新播报 / 新主动移动 Glue / 新状态机 / 新直接 SetOrder 调用点。
 
 ## Current Phase
 
 - **CPS-3R Route A 已修复并部署**（代码基线 `9a2afe4`；部署校验 src/dst SHA 一致，`Modules\CombatBrain`；游戏进程退出硬门通过）。
-- **运行期验证（可执行场景已全部完成）**：场景 1（E_RouteA 采样）重跑 **未复现**「被外部覆盖后长时间不重落地」缺陷（`ExternalReplaced` → 5.00s 内 `EdgeRetry` → `OrderApplied`）；场景 2（战斗中热关闭）**PASS**（`Exit(Disabled)` + `Restore`，`restoreFailures=0`，关闭后无重新武装）；场景 5（增援/清空）**PASS**（run `b0e2e0a4`：6 次 Exit 全部配对 Restore，含 3 次 `LostAIControl`、1 次 `EmptyOrInvalid`；`restoreFailures=0`、`weightFlap=0`；每次退出后重新 `OrderApplied`；`identity` 恒为 1 = 同一对象重挂载）。**场景 3、4 与场景 5 子项「拆分」不可达 → N/A**（§3a/§3b/§3c）。**注意**：场景 5 采样使用了游戏快进与低 BattleSize，响应延迟不构成证据。
-- **条件 5 仍未满足**：不判 GO（判定权在 Astra 复审与用户）；另 §3c 记录一处待查 discrepancy（`replaced=1` 但 `edgeRetries=0`，占位不开火），用户裁决本轮不开卡。
+- **运行期验证（可执行场景已全部完成）**：场景 1（E_RouteA 采样）重跑 **未复现**「被外部覆盖后长时间不重落地」缺陷（`ExternalReplaced` → 5.00s 内 `EdgeRetry` → `OrderApplied`）；场景 2（战斗中热关闭）**PASS**（`Exit(Disabled)` + `Restore`，`restoreFailures=0`，关闭后无重新武装）；场景 5（增援/清空）**PASS**（run `b0e2e0a4`：6 次 Exit 全部配对 Restore，含 3 次 `LostAIControl`、1 次 `EmptyOrInvalid`；`restoreFailures=0`、`weightFlap=0`；每次退出后重新 `OrderApplied`；`identity` 恒为 1 = 同一对象重挂载）。**场景 3、4 与场景 5 子项「拆分」在本次采样口径下不适用（§3a/§3b/§3c）；其中 Rejoin 分支仍未验证，不得声称结构上永久不可达。** **注意**：场景 5 采样使用了游戏快进与低 BattleSize，响应延迟不构成证据。
+- **CB-REPAIR-0004 返修在途（占位不开火 → 周期重占位）**：r1 `723b457` → 质检 needs_revision（R4-1）→ r2 `bc8449a`（空 Release 解锁已修，离线 1268 PASS）→ **Astra 独立复审判 FAIL（P1）**：连续态势数值变化可在超时释放后下一拍重新武装，占空比约 99.83%。**r3 派单 = `prompts/active/CombatBrain-CB-REPAIR-0004-r3-周期重占位返修派单-2026-09-14.md`（registry CB-PROMPT-0041，ACTIVE）**；台账保持 `IN_PROGRESS`，修复完成交回 Astra 复审。
+- **条件 5 仍未满足**：不判 GO（判定权在 Astra 复审与用户）。
 
 ## Active Task
 
-- `none`（无进行中实现任务）。在途：**Astra 对 CPS3R Route A 的外部复审**。
-- 任何 Agent 不得因「无 active task」推断「项目完成」——当前是 `WAITING_EXTERNAL`。
+- **CB-REPAIR-0004（r3）返修进行中**：占位不开火/周期重占位；台账 `IN_PROGRESS`，派单 CB-PROMPT-0041；不部署、不做游戏内采样。在途外部：**Astra 对 CPS3R Route A 的复审**。
+- 任何 Agent 不得因「无 active task」推断「项目完成」——当前是 `WAITING_EXTERNAL`，且有一张返修卡未闭环。
 
 ## Completed Major Milestones
 
@@ -61,9 +62,10 @@ active_task: none             # 无进行中实现任务（三张返修卡已闭
 ## Known Blockers
 
 1. **Astra re-review 未回**（CPS3R Route A：修复已部署，等外部复审回签后方可按命令链推进 CPS-4）。
-2. **条件 5 未满足（判定权在 Astra 与用户）**：Route A 的可执行运行期场景已全部完成——场景 1、2、5 **PASS**；场景 3（玩家接管）、场景 4（Rejoin）、场景 5 子项（拆分）经核实**不可达**并改判 N/A。本文件不据此判 GO；另 §3c 有一处 `edgeRetries=0` 待查 discrepancy（未开卡）。详见 `docs/cps3r-routea-runtime-scenarios-2026-09-13.md`。
-3. **口径分歧（待裁决，未改代码）**：Route A 的玩家队排除**不受** MCM 开关 `PlayerTeamExemptionEnabled` 约束，与其它 7 个模块口径不一致；当前仅作 Descriptive 记录，冻结令下不擅自收敛。
-4. ~~`docs/` 目录未纳入 Git tracking~~ → 已解决：`AGENTS.md` + `docs/knowledge/` 三个 canonical 文件已纳入 tracking（commit `62502e9`、`d5743dd` 及 Traffic Cutover commit）。既有 CPS 报告是否入库仍待决策（不属本 cutover）。
+2. **条件 5 未满足（判定权在 Astra 与用户）**：Route A 的可执行运行期场景已全部完成——场景 1、2、5 **PASS**；场景 3（玩家接管）、场景 4（Rejoin）、场景 5 子项（拆分）在**本次采样口径下不适用**（**Rejoin 分支仍未验证**，不得声称结构上永久不可达）。本文件不据此判 GO。详见 `docs/cps3r-routea-runtime-scenarios-2026-09-13.md`。
+3. **CB-REPAIR-0004 未闭环（Astra 判 FAIL/P1）**：占位不开火 → r2 修复后仍存在「连续态势数值变化 → 超时释放后下一拍重新武装」的周期重占位（Astra 复现占空比约 99.83%）。r3 返修中（派单 CB-PROMPT-0041）；**新提交未部署**（现网 DLL 仍为 `9a2afe4` 基线）。该卡闭环前不得推进条件 5。
+4. **口径分歧（属产品/规范裁决项，未裁决、未改代码）**：Route A 的玩家队排除**不受** MCM 开关 `PlayerTeamExemptionEnabled` 约束，与其它 7 个模块口径不一致；当前仅作 Descriptive 记录，冻结令下不擅自收敛。
+5. ~~`docs/` 目录未纳入 Git tracking~~ → 已解决：`AGENTS.md` + `docs/knowledge/` 三个 canonical 文件已纳入 tracking（commit `62502e9`、`d5743dd` 及 Traffic Cutover commit）。既有 CPS 报告是否入库仍待决策（不属本 cutover）。
 
 ## Known Engineering Debt
 
@@ -73,15 +75,16 @@ active_task: none             # 无进行中实现任务（三张返修卡已闭
 
 ## Latest Verification
 
-- **证据等级：git log + 三张返修卡质量门（t2/t4/t6）+ 部署校验 + 运行期场景 1/2/5 实测。**
-- 离线：Release 0 错 0 警；**OfflineTests 1241 PASS / 0 FAIL**；静态 setter 扫描 4=4 无新增调用点（代码基线 `9a2afe4`）。
+- **证据等级：git log + 三张已闭环返修卡质量门（t2/t4/t6）+ 部署校验 + 运行期场景 1/2/5 实测。**
+- 离线：Release 0 错 0 警；**OfflineTests 1241 PASS / 0 FAIL**（基线 `9a2afe4`；CB-REPAIR-0004 r2 的 `bc8449a` 已达 **1268 PASS**，但**未部署、未经运行期验证**）；静态 setter 扫描 4=4 无新增调用点。
 - 运行期：场景 1 重跑未复现覆盖失效缺陷；场景 2 热关闭 `Exit(Disabled)`+`Restore` PASS；场景 5 增援/清空 6 次 Exit 全部配对 Restore、每次重新接管、`restoreFailures=0` PASS（含快进采样，延迟不作证据）。明细见 `docs/cps3r-routea-runtime-scenarios-2026-09-13.md`。
-- 范围说明：场景 3、4 与「拆分」为 **N/A（不可达，非失败）**；未取得样本的分支：新 Formation 对象身份隔离、Rejoin/`NavigationFailed`、F-2 的 Release 分支；F-5、H-2 无运行期证据；§3c 的 `edgeRetries=0` 待查。
+- 范围说明：场景 3、4 与「拆分」为**本次采样不适用**（Rejoin 仍未验证）；未取得样本的分支：新 Formation 对象身份隔离、Rejoin/`NavigationFailed`、F-2 的 Release 分支；F-5、H-2 无运行期证据；**CB-REPAIR-0004（占位不开火/周期重占位）未闭环**。
 - OfflineTests 与运行期语义不同权：离线绿 ≠ 运行期绿（历史有 provenance/生命周期语义失败先例）。
 
 ## Evidence Pointers
 
-- `docs/cps3r-routea-runtime-scenarios-2026-09-13.md`（Route A 运行期场景记录：场景 1、2、5 **PASS**；场景 3、4 与「拆分」改判 N/A；含 run id、判定命令、§3c 待查 discrepancy 与体检工具 `MBmod/CombatAI/tools/routea-rejoin-check.ps1`）
+- `docs/cps3r-routea-runtime-scenarios-2026-09-13.md`（Route A 运行期场景记录：场景 1、2、5 **PASS**；场景 3、4 与「拆分」本次采样不适用（Rejoin 仍未验证）；含 run id、判定命令、§3c 的 CB-REPAIR-0004 返修轮次与体检工具 `MBmod/CombatAI/tools/routea-rejoin-check.ps1`）
+- `MBmod/CombatAI/prompts/active/CombatBrain-CB-REPAIR-0004-r3-周期重占位返修派单-2026-09-14.md`（r3 派单，registry CB-PROMPT-0041）
 - `docs/cps3r-routea-final-blocker-report.md`（Route A 收口报告，commit a879688 同源）
 - `docs/cps4-hardgate-checklist-2026-09-08.md`（硬门清单）
 - `docs/cps3r-routea-astra-review-submission-2026-09-08.md`（Astra 复审提交物）
@@ -90,7 +93,7 @@ active_task: none             # 无进行中实现任务（三张返修卡已闭
 
 ## Staleness Notes
 
-- 本文件状态验证到代码基线 `9a2afe4`。若 Git HEAD 前进至新 commit 且未完成新验证 → 本文件**不自动**把新 HEAD 当已验证状态；应回报 `state may be stale / repository advanced beyond last verified baseline`。该基线之后的 HEAD 均为文档提交，代码内容与 `9a2afe4` 一致。
-- 运行期部分覆盖场景 1、2、5 与已裁决 N/A 项（场景 3、4 及「拆分」）；场景 5 采样含游戏快进与低 BattleSize，其数字不得与实时场次混比；任何「Route A 运行期已验证」的表述都必须同时限定场次与采样条件。
+- 本文件状态验证到代码基线 `9a2afe4`。若 Git HEAD 前进至新 commit 且未完成新验证 → 本文件**不自动**把新 HEAD 当已验证状态；应回报 `state may be stale / repository advanced beyond last verified baseline`。**当前 HEAD 已超出该基线且含未部署的 Route A 代码提交（CB-REPAIR-0004 r1/r2，r3 在途）——这些提交既未部署也未运行期验证，不得当作已验证状态。**
+- 运行期部分覆盖场景 1、2、5 与本次采样不适用项（场景 3、4 及「拆分」；Rejoin 仍未验证）；场景 5 采样含游戏快进与低 BattleSize，其数字不得与实时场次混比；任何「Route A 运行期已验证」的表述都必须同时限定场次与采样条件。
 - 维护责任：Captain / Integration Owner 唯一直接维护；普通 Sub-agent 只能提建议与 evidence。
 - 本文件由 MBmod manager 按 v1.1 Phase A 规范代建（2026-09-09），后续归属 Captain / Integration Owner。

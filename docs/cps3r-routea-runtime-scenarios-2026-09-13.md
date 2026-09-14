@@ -51,7 +51,9 @@
    `f.Team.IsPlayerTeam || f.PlayerOwner != null || f.HasPlayerControlledTroop || f.IsPlayerTroopInFormation`
    叠加 `:140 e.AiControlled = f.IsAIControlled`（不满足 → `LostAIControl`）。
 
-∴ Route A 只能武装「非玩家队 + 无领主所有者 + 无玩家兵员 + AI 控制」的编队（实测为 `team=1`）；而玩家在 UI 上无法对非玩家队编队下令 → 该动作不可达。**不得把场景 3 记为 FAIL，也不得记为 PASS；正确状态是 N/A（口径不可执行）**。
+∴ Route A 只能武装「非玩家队 + 无领主所有者 + 无玩家兵员 + AI 控制」的编队（实测为 `team=1`）；而玩家在 UI 上无法对非玩家队编队下令 → 该动作在**本次采样口径下不适用**。**不得把场景 3 记为 FAIL，也不得记为 PASS**。
+
+> 口径限定（Astra r3 派单 §5）：**玩家豁免属产品/规范裁决项**。本文件只陈述上述代码事实，不就其是否应永久如此下结论，也不借返修卡顺手修改实现。
 
 **替代的可达路径（覆盖原意图「外部接管时 Route A 不得抢回」）**：
 
@@ -64,20 +66,20 @@
 
 **附带记录（口径分歧，冻结令下不改代码）**：其它 7 个模块（Protect / Brace / Cavalry / Skirmish / Morale / FormationSlot / FormationControlLease）的玩家队豁免均受 MCM 开关 `CombatBrainSettings.PlayerTeamExemptionEnabled` 约束（可关闭），**Route A 完全不看该开关**（上列两处均无条件）。属 Descriptive 观察，是否收敛口径待 CPS-4 / 后续裁决，本文件不作规范结论。
 
-## 3b. 场景 4（Rejoin）：**N/A —— 实战两条件不共存**（用户裁决 2026-09-13）
+## 3b. 场景 4（Rejoin）：**本次采样不适用；该分支仍未验证**（用户 2026-09-13 裁决 + Astra r3 派单口径修正）
 
 **代码条件**（Rejoin 只有一条产生路径）：
 1. `FormationCommandPolicy.cs:156-157`：仅当 `formationMission == SupportMainEffort` **且** `phase == Deployment` 才映射为 Rejoin（其余映射 Advance/Hold）
 2. `RouteAOrderAdapter.cs:224-241`：MainBody 有效（`strength>0 && confidence>0`）+ **非贴身接敌**（已知敌编队 >12m，`RouteARejoinContactMeters`）+ MainBody 点在边界内 + 起终点 NavMesh 有效且**路径距离可算**
 3. `RouteAControl.cs:100`：已选 Rejoin 但校验失败 → `Exit(NavigationFailed)`，不落地任何命令
 
-**实测（不可达判定依据）**：
+**实测（本次采样不适用的判定依据）**：
 - 三场 E 模式（`4c6212a1` / `ba84a11b` / `a408fc92`）：`Rejoin` 意图 **0 次**、落地 **0 次**、`NavigationFailed` **0 次**
 - 全日志 ~35 场：`phase=Deployment` 均由游戏自动结束，时长 **5–20s**（绝大多数 5–6s，最长 21s）——**玩家停等无法有效延长该窗口**（实测两处 20–21s 与 5–6s 并存，与是否等待无稳定相关）
 - 被武装编队在部署期内恒为 `mission=Reserve`（`ReserveClassifier`：未接敌 + 非主动任务 + 距 MainBody ≤30m → Reserve → 意图 Hold）：实测 `13:53:13.777`、`01:11:08.778` 两个部署窗口内均为 `Reserve`
-- ∴ `SupportMainEffort` 样本（全部出现在 Engage）与 Deployment 窗口**时间上不重叠**
+- ∴ 上述采样中 `SupportMainEffort` 样本（全部出现在 Engage）与 Deployment 窗口**时间上不重叠**
 
-**结论**：Rejoin 在当前代码与游戏参数下**实战不可达**；不得记为 FAIL，也不得记为 PASS，正确状态是 **N/A（口径不可执行）**。原清单该条（Astra 提交物 §6「Rejoin 触发场景：目标=MainBody、导航失败路径不执行」）无运行期证据支撑，属未验证项。
+**结论（口径按 Astra r3 派单 §5 修正）**：Rejoin 在**本次采样配置下未取得样本**，故本次采样场景**不适用**；**该分支仍未验证，不得声称代码结构上永久不可达**（本文件此前"实战不可达"的表述已按此修正）。原清单该条（Astra 提交物 §6「Rejoin 触发场景：目标=MainBody、导航失败路径不执行」）仍属**未验证项**，需后续以专门配置或观测手段补验。
 
 **替代可达路径（覆盖"目标/MainBody/导航校验"的相邻语义）**：
 
@@ -112,14 +114,19 @@
 
 - **数据更正（2026-09-14，按 mission time 复核）**：本节早前写的「覆盖后仍有 333 次 `BehaviorSelected`」**有误**。实测该 session `BehaviorSelected` 共 **699** 次 = 覆盖前 **425** + 判定窗口 (215.03s, 979.43s) 内 **0** + 其后 **274**。窗口内只有 `SetterBegin/SetterCompleted/ExternalWhileActive` 各 1529 条，`Exit/Restore/Intent/EdgeRetry` 全 0。
 - **根因**：`Evidence.EdgeRetry` 唯一触发点 `RouteAControl.cs:180` ← `TrySelect` ← `RouteAOrderAdapter.cs:27` ← `RouteABehavior.TickOccasionally`；引擎只对 FormationAI **胜出的 ActiveBehavior** 按 0.5s 节拍回调（反编译契约由 `OfflineTests/RouteAStaticChecks.ps1` 锁定）→ 该窗口 Route A 的 Behavior 未被选中 ⇒ `TrySelect` 从未被调用 ⇒ armed 边沿重试永不执行；且 0 Exit ⇒ 未 Release ⇒ `BlocksExecutor(true, Movement)` 仍为真（`FormationCommandExecutor.cs:117`）→ **持有所有权却不落地**。
-- **处置**：CB-REPAIR-0004 已开卡并提交修复 `723b457`（`DeliveryDeadlineSeconds=10f` 交付上限 → `Release(RouteAExit.SelectionTimeout)` + 暂停重取直至局势变化号更新；汇总新增 `lastSelectedAt=`），**待质检 t8 独立复核**。
-- **未定论部分**：引擎侧「为何停止选中」为 Inferred（窗口内每 0.5s 恰 1 次原生 Movement 写 ⇒ FormationAI 节拍仍在，胜出者非 Route A Behavior）；需另开卡（涉 `Ai/` 文件与运行期采样）。
-- **下轮采样验收点**：`ExternalReplaced` 后 **≤10s** 应出现 `Exit(reason=SelectionTimeout)`，且执行器恢复写 Movement。
+- **处置（含返修轮次，截至 2026-09-14）**：
+  - r1 `723b457`：`DeliveryDeadlineSeconds=10f` 交付上限 → `Release(RouteAExit.SelectionTimeout)` + 暂停重取；汇总新增 `lastSelectedAt=`。
+  - 质检 t8 = **needs_revision**（R4-1：`_deliverySuspended=false` 位于 `previous == null` 早退之前 → no-op Release 静默作废暂停）。
+  - r2 `bc8449a`（同标题的早期提交 `6f632ae` 已被 amend 取代；当前 HEAD）：交付暂停仅由**真实释放**终结（+ 具名 `HasExternal` / 授权语义修正）；离线 **1268 PASS / 0 FAIL**。
+  - **Astra 独立复审判 r2 = FAIL（P1，周期重占位）**：普通态势数值变化（Astra 复现为 60Hz、每拍 `X+=0.001`、全程零 `BehaviorSelected`）在超时释放后**下一拍即重新武装** → 10.000s 释放、10.0167s 重取，占空比约 **99.83%**，普通执行器只获单帧窗口。
+  - **r3 派单 = `prompts/active/CombatBrain-CB-REPAIR-0004-r3-周期重占位返修派单-2026-09-14.md`（registry CB-PROMPT-0041，ACTIVE）**：要求重武装只能由**具名、离散、可解释、有界**的条件触发（不得再把原始 `situationSignal` 任意变化当作战术变化），并补 6 项组合回归 + 反向验证；**台账 CB-REPAIR-0004 保持 `IN_PROGRESS`**，不部署、不采样、不推进部署基线。
+- **未定论部分**：引擎侧「为何停止选中」为 Inferred（窗口内每 0.5s 恰 1 次原生 Movement 写 ⇒ FormationAI 节拍仍在，胜出者非 Route A Behavior）；建议并入下轮采样的最小观测，不单独立卡。
+- **下轮采样验收点（部署与采样经用户裁决排在 Astra 回签之后）**：`ExternalReplaced` 后 **≤10s** 应出现 `Exit(reason=SelectionTimeout)`；超时释放后普通执行器须获得**持续**（非单帧）Movement 窗口；`SelectionTimeout` 触发频率理想为 0 或仅出现于真实覆盖失效处。
 
 ## 4. 本轮未证明（运行期债，不得据本文件判 GO）
 
-1. **可执行的五场场景已全部执行完毕**：场景 1、2、5 = **PASS**；场景 3（玩家接管）、场景 4（Rejoin）与场景 5 子项（拆分）经代码与实测核实**不可达**，改判 **N/A**（§3a/§3b/§3c）。这不等于"条件 5 已满足"——条件 5 的判定权在 Astra 复审与用户，本文件不判 GO。
-2. **未取得样本的分支**：① "新 Formation 对象身份隔离"（对象未销毁重建）；② **Rejoin 分支及其 `NavigationFailed` 路径**（不可达）；③ F-2「重试已用后再次 `replaced=true` → 立即 `Release(ExternalOverridePersisted)`」；④ §3c 记录的 `edgeRetries=0` discrepancy 根因。
+1. **可执行的五场场景已全部执行完毕**：场景 1、2、5 = **PASS**；场景 3（玩家接管）、场景 4（Rejoin）与场景 5 子项（拆分）在**本次采样口径下不适用**（§3a/§3b/§3c），其中 **Rejoin 分支仍未验证**（不得声称结构上永久不可达）。这不等于"条件 5 已满足"——条件 5 的判定权在 Astra 复审与用户，本文件不判 GO。
+2. **未取得样本的分支**：① "新 Formation 对象身份隔离"（对象未销毁重建）；② **Rejoin 分支及其 `NavigationFailed` 路径**（本次采样不适用，未验证）；③ F-2「重试已用后再次 `replaced=true` → 立即 `Release(ExternalOverridePersisted)`」；④ §3c 的 `edgeRetries=0` / 占位不开火——根因已定位，处置**仍在返修中（r3）**。
 3. `replaced=false` 路径（不释放、不消耗重试、仅计数）被大量观测（`externalWhileActive` 3 / 12 / **1780**），但其对所有权与抖动的实际影响仍无定论（§3c 的占位不开火现象正属此域）。
 4. F-5（Release 位于 Harmony postfix 栈内改权重）无运行期证据；H-2（E 模式帧成本须按「RouteA + 观测」复合口径评定）未评定——另注意场景 5 采样使用了快进与低 BattleSize，其数字不得与其他场次混比。
 5.「玩家队豁免生效」验收点（§3a 表格末行）尚未采样。
@@ -142,8 +149,9 @@ Get-Content $env:TEMP\CombatBrain.log -Wait -Tail 200 | Select-String -Pattern '
 ## 6. 登记状态
 
 - 已完成场景：场景 1（重跑，**PASS**）、场景 2（热关闭，**PASS**）、场景 5（增援/清空，**PASS**，限定见 §3c）。
-- 已裁决不可执行（N/A）：场景 3（玩家接管，§3a）、场景 4（Rejoin，§3b）、场景 5 子项「拆分」（§3c）。
+- 本次采样不适用（分支仍未验证）：场景 3（玩家接管，§3a，口径属产品/规范裁决项）、场景 4（**Rejoin，仍未验证**，§3b）、场景 5 子项「拆分」（§3c）。
 - 仍待采样：「玩家队豁免生效」验收点（§3a 表格末行）。
-- 已开卡处置：**CB-REPAIR-0004**（占位不开火 / `replaced=1` 但 `edgeRetries=0`，`runtime_failure`）——根因已定位，修复 `723b457` 已提交，待质检 t8 复核；§3c 数据已按实测更正（699 = 425 + 窗口内 0 + 其后 274）。
-- 未定论：引擎侧「为何停止选中」（Inferred）；**下轮采样验收点**见 §3c 末行。
+- 已开卡处置：**CB-REPAIR-0004**（占位不开火，`runtime_failure`）——**仍在返修中（r3，派单 CB-PROMPT-0041）**，台账 `IN_PROGRESS`；r1 `723b457` → 质检 t8 needs_revision（R4-1）→ r2 `bc8449a` → **Astra 判 FAIL（P1 周期重占位）**；§3c 数据已按实测更正（699 = 425 + 窗口内 0 + 其后 274）。
+- 未定论：引擎侧「为何停止选中」（Inferred，建议并入下轮采样最小观测）；**下轮采样验收点**见 §3c 末行（部署与采样排在 Astra 回签之后）。
+- 辅助工具：`MBmod/CombatAI/tools/routea-rejoin-check.ps1`（Rejoin/场景条件只读体检）。
 - 辅助工具：`MBmod/CombatAI/tools/routea-rejoin-check.ps1`（Rejoin/场景条件只读体检）。

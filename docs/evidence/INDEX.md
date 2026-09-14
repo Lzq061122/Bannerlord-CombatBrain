@@ -57,7 +57,8 @@
 - `docs/cps3r-routea-final-blocker-report.md`（Route A 收口）
 - `docs/cps3r-routea-astra-review-submission-2026-09-08.md`（Astra 复审提交物）
 - `docs/cps4-hardgate-checklist-2026-09-08.md`（硬门清单）
-- `docs/cps3r-routea-runtime-scenarios-2026-09-13.md`（**Route A 运行期场景记录**；场景 1 重跑 / 场景 2 热关闭 / 场景 5 增援·清空 **PASS**（场景 5 含快进与低 BattleSize 限定）；场景 3 玩家接管、场景 4 Rejoin、场景 5 子项「拆分」经核实**不可达，改判 N/A**；含 run id、判定命令、§3c 待查 discrepancy 与体检工具 `MBmod/CombatAI/tools/routea-rejoin-check.ps1`）
+- `docs/cps3r-routea-runtime-scenarios-2026-09-13.md`（**Route A 运行期场景记录**；场景 1、2、5 **PASS**（场景 5 含快进与低 BattleSize 限定）；场景 3 玩家接管、场景 4 Rejoin、场景 5 子项「拆分」为**本次采样不适用**——**Rejoin 分支仍未验证**，不得声称结构上永久不可达；含 run id、判定命令、§3c 的 CB-REPAIR-0004 返修轮次（r1 `723b457` → 质检 needs_revision → r2 `bc8449a` → **Astra FAIL/P1 周期重占位** → r3 在途）与体检工具 `MBmod/CombatAI/tools/routea-rejoin-check.ps1`）
+- `MBmod/CombatAI/prompts/active/CombatBrain-CB-REPAIR-0004-r3-周期重占位返修派单-2026-09-14.md`（r3 派单，registry `CB-PROMPT-0041` ACTIVE；Astra 判 r2 = FAIL/P1：连续态势数值变化可在超时释放后下一拍重武装）
 - `docs/cps3r-routea-astra-rereview-brief-2026-09-14.md`（**第二轮 Astra 复审汇报件**：三张返修卡 + Observer 硬约束、离线 1241 PASS、部署、运行期场景 1/2/5 PASS 与场景 3/4 N/A、CB-REPAIR-0004 占位不开火披露、给 Astra 的四个裁决问题、复现命令）
 - legacy CONTEXT §4 CPS 卡史 / CPS-3R 综述（CPS GO/ADR 闭环后迁入本域）
 - CPS 相关 ADR（route 选择/GO 链）未到准入时机，不创建（见 adr/README §5）。
