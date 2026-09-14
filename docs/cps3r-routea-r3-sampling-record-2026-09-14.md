@@ -22,6 +22,8 @@
 | 战斗规模 / 时长 | `[Bench] agents=401`（200v200）、`BattleDuration=314.38s`、无快进痕迹 |
 | 观测确认 | `10:59:52.071 [SetOrderObserver] 观测已挂载 prefixes=3` ✓ |
 
+> **无效场次记录（2026-09-14 12:18–12:32，共 5 场：269.84s / 239.82s / 185.41s / 242.4s / 137.13s / 272.92s）**：这几场**不计入任何证据**——日志中 `[RouteA]` / `[RouteAEvent]` 行数为 **0**（最后一条 Route A 行停在 12:18:17.477，属样本②的尾巴），而同期观测层在跑（`[Cps2Observation]` 97 条、`[Obs]` 385 条、`[ControlLease]` 997 条）→ 说明 `RouteAExecutionEnabled` 的四个条件里 **`Mode == E_RouteA`（或 RouteA 专用开关）这一项未满足**，Route A 根本没有启动。判定前置：**下一场必须在 MCM 把模式选为 `E_RouteA`**（选 E 会自动武装 RouteA 专用开关），并在开打后确认日志出现 `[RouteA] run=…` 行。
+
 **采样前操作**：① 确认无 `Bannerlord` 进程后再部署；② 部署后核对 src/dst SHA 一致；③ 场次隔离由 Captain 侧用"日志字节偏移 + 新 run id"实现（无需用户改名日志）；④ 首查 `[SetOrderObserver] 观测已挂载 prefixes=3` 确认观测在位。
 
 ## 2b. 本轮采样结果（run=`c81c4f5e…`）
