@@ -46,7 +46,7 @@ active_task: CB-REPAIR-0004 r3 受控部署 + 运行期采样（台账 IN_PROGRE
 ## Active Task
 
 - **CB-REPAIR-0004 r3：受控部署 + 运行期采样**（台账 `IN_PROGRESS`、`review_state=PASSED`；派单 CB-PROMPT-0041）。采样验收点：①连续变号不重取（`suspensionRetries`=0）②合格意图变化仅一次 `SuspensionRetry` ③零选中后按期限 `SelectionTimeout` + `Restore` ④普通 Movement 持续恢复 ⑤健康 `EdgeRetry`、归因与 `RestoreFailures=0`。
-- **CB-REPAIR-0005：Route A「覆盖后断流」只读诊断探针**（台账 `IN_PROGRESS`；派单 `CB-PROMPT-0043`；`source_type=maintenance`，按策略无需独立 review）。**实现 + 离线验收已完成**（Release 0 错 0 警；OfflineTests 1320 PASS/0 FAIL；setter 站点 4=4 无新增），落地面 = 新增只读行 `[RouteASilence]`（覆盖后每 ≥1s 一拍、上限 10 拍 + 超时释放前一拍），用于判定「`ExternalReplaced` 后引擎胜出者是否仍是 Route A 行为」，把该 Inferred 结论变为可判定。**按卡要求不部署**（现网 DLL 仍为 r3 `7E5FC25A…`）；部署时序需与 CB-REPAIR-0004 采样收口一起裁决。
+- **CB-REPAIR-0005：Route A「覆盖后断流」只读诊断探针 —— 已 COMPLETED**（`a6a4ec5`，`commit_root=repo`；派单 `CB-PROMPT-0043`、交付报告 `CB-PROMPT-0044`；`source_type=maintenance`，按策略无需独立 review）。**实现 + 离线验收完成**：Release 0 错 0 警；OfflineTests **1320 PASS / 0 FAIL**（r3 基线 1297，+23）；`RouteAStaticChecks` 20 项 PASS 且生产 setter 站点 **4=4 无新增**。落地面 = 新增只读行 `[RouteASilence]`（覆盖后每 ≥1s 一拍、上限 10 拍 + 超时释放前一拍），用于判定「`ExternalReplaced` 后引擎胜出者是否仍是 Route A 行为」，把该 Inferred 结论变为可判定。**按卡要求不部署**（现网 DLL 仍为 r3 `7E5FC25A…`）；部署时序需与 CB-REPAIR-0004 采样收口一起裁决。
 - 任何 Agent 不得因「无 active task」推断「项目完成」——当前是 `WAITING_EXTERNAL`，且 CB-REPAIR-0004 的运行期验收未完成。
 
 ## Completed Major Milestones
