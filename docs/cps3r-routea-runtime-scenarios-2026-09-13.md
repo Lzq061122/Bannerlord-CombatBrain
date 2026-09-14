@@ -180,6 +180,32 @@
 
 **仍需补的样本**：①**S2**——需一场"暂停期间出现合格意图变化"的战斗；②**S5 的 edgeRetry 路径**——需一场发生外部覆盖的战斗（形态参照早期 `run=ba84a11b`：`ExternalReplaced → EdgeRetry → OrderApplied`）。
 
+## 3f. r3 第二个运行期样本：健康路径与生命周期（2026-09-14，run=`6223ad9bc00045aa8bf188cd16214883`）
+
+**绑定**：同一部署（commit `395fe13` / DLL `7E5FC25A…`）；MCM E 模式 + 观测在位；`agents=601`；`BattleDuration=505.51s`；无快进；全窗口 6668 行**异常 0**。
+
+**汇总（末）**：`selected=746 applied=9 replaced=0 externalWhileActive=1 edgeRetries=0 externalDuration=0.000s stableSoFar=9 unverified=0 dropped=0 intentChange=3 weightFlap=0 lastSelectedAt=493.531s suspensionRetries=0 restoreFailures=0`
+
+**生命周期（6 组 Exit/Restore 全配对）**：
+
+| t（s） | 事件 |
+|---|---|
+| 0.55 | `Intent(Hold)`；1.46 `ExternalWhileActive`（1 次外部写，**非覆盖**）；1.55 `OrderApplied(Hold)` |
+| 17.15 | `Exit(LostAIControl)` + `Restore` |
+| 64.39 / 101.46 / 188.91 / 221.11 / 313.61 | 重新武装并 `OrderApplied`（每次都在资格恢复后） |
+| 99.46 / 185.90 / 204.52 / 260.82 | 期间 4 次 `Exit(LostAIControl)` + `Restore`（均配对） |
+| **439.26 → 448.29 → 470.42** | **意图真变化链 Hold→Advance→Retreat→Hold，每次都 `OrderApplied` 落地**（`intentChange=3`） |
+| 493.58 | `Exit(EmptyOrInvalid)` + `Restore`（编队清空/战斗收束） |
+
+**判定**：
+- **健康路径回归 = PASS（强）**：`applied=9`、`stableSoFar=9`、`selected=746`、`lastSelectedAt=493.531s`（交付窗口持续刷新）、`weightFlap=0`、`restoreFailures=0`、`unverified=0`、`dropped=0` → r3 未损害正常执行链；
+- **生命周期恢复 = PASS**：`Exit`×6（`LostAIControl`×5 + `EmptyOrInvalid`×1）**全部配对 `Restore`**，且每次资格恢复后都能重新武装；
+- **S4 = PASS（直接形态）**：释放期间原版写入正常（`ExternalAfterExit` 21 条），Route A 未占位阻塞；
+- **S2 仍无样本**：本场未进入暂停（无 `SelectionTimeout`，`suspensionRetries=0`）；
+- **S5 的 edgeRetry 路径仍无样本**：本场 `replaced=0`（无外部覆盖，1 次 `ExternalWhileActive` 按 F-2 语义不释放、不消耗预算）。
+
+**结论**：本场为「健康路径 + 多轮生命周期」强样本；**S2 与 S5-edgeRetry 两类样本仍需在后续场次中自然出现**（均为条件组合型，非每场必现）。
+
 ## 4. 本轮未证明（运行期债，不得据本文件判 GO）
 
 1. **可执行的五场场景已全部执行完毕**：场景 1、2、5 = **PASS**；场景 3（玩家接管）、场景 4（Rejoin）与场景 5 子项（拆分）在**本次采样口径下不适用**（§3a/§3b/§3c），其中 **Rejoin 分支仍未验证**（不得声称结构上永久不可达）。这不等于"条件 5 已满足"——条件 5 的判定权在 Astra 复审与用户，本文件不判 GO。

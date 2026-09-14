@@ -40,6 +40,20 @@
 **待补样本**：①S2（暂停期间出现合格意图变化）②S5 的 edgeRetry 路径（需发生外部覆盖，形态参照 `run=ba84a11b`）。
 **附加事实**：本场 Route A 未落地任何命令（`applied=0`，引擎从未选中其 Behavior）——即「占位不开火」成因；r3 把该状态限制为 10s 并令本场退役（符合 J-2 语义）。
 
+## 2c. 第二个运行期样本（run=`6223ad9b…`）——健康路径 + 多轮生命周期
+
+同部署（`395fe13` / `7E5FC25A…`）；`agents=601`、`BattleDuration=505.51s`、无快进、窗口 6668 行**异常 0**。
+汇总（末）：`selected=746 applied=9 replaced=0 externalWhileActive=1 edgeRetries=0 stableSoFar=9 intentChange=3 weightFlap=0 lastSelectedAt=493.531s suspensionRetries=0 restoreFailures=0`。
+
+| # | 结果 |
+|---|---|
+| 健康路径回归 | **PASS（强）**：`applied=9`/`stableSoFar=9`、`lastSelectedAt=493.531s`（交付窗口持续刷新）、`weightFlap=0`、`restoreFailures=0`、`unverified=0`、`dropped=0` |
+| 生命周期恢复 | **PASS**：`Exit`×6（`LostAIControl`×5 + `EmptyOrInvalid`×1）**全部配对 `Restore`**；每次资格恢复后都能重新武装 |
+| **意图真变化链** | Hold→Advance→Retreat→Hold（`intentChange=3`），**每次都 `OrderApplied` 落地** |
+| S4 释放期间执行器可用 | **PASS（直接形态）**：释放期间原版写入正常（`ExternalAfterExit` 21 条），未占位阻塞 |
+| S2 | **仍无样本**（本场未进入暂停、无 `SelectionTimeout`） |
+| S5 edgeRetry | **仍无样本**（`replaced=0`，本场无外部覆盖） |
+
 ## 2. 本轮采样验收点（Astra 回签要求的最小集）
 
 | # | 验收点 | 判定方法 | 通过标准 |
