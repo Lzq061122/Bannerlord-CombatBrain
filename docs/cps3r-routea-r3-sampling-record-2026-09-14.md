@@ -12,10 +12,10 @@
 | 项 | 值 |
 |---|---|
 | 代码 commit | **`395fe13`**（CB-REPAIR-0004 r3） |
-| 部署时 repo HEAD | 待部署时填写（应仅领先于 `395fe13` 的文档提交） |
+| 部署时 repo HEAD | `ae533ec`（仅含 `395fe13` 之后的文档提交，无代码差异） |
 | 仓库构建产物 SHA256 | `7E5FC25A0EF0559D718B0D5E42994141846291501E3342F94E6C0B1F713FD8D6` |
-| 部署目标 DLL SHA256 | **待部署后填写**（部署前现网为 `A39AC964F8A80589A5E06D1FAD2C17674316BE039AC43BF28A8CE7513B73FB22` = 09-11 基线） |
-| 部署时间 / 游戏进程 | 待填（**硬门：`Get-Process Bannerlord` 必须为空**） |
+| 部署目标 DLL SHA256 | **`7E5FC25A0EF0559D718B0D5E42994141846291501E3342F94E6C0B1F713FD8D6`**（= src，MATCH=True） |
+| 部署时间 / 游戏进程 | **2026-09-14**（deploy.ps1 EXIT=0，ModuleData 已同步）；部署前硬门：`Get-Process Bannerlord` 为空 ✓ |
 | MCM 配置 | `Cps3Mode = E_RouteA`；**`Cps3ObserverEnabled = true`**（G-1 硬约束：无观测 Route A 不执行）；RouteA 专用开关按 E 模式自动武装 |
 | 战斗配置 | 自定义战斗、**200v200 步兵野战**；**BattleSize 建议恢复为 6**；**本轮不要用游戏快进**（前一轮快进使响应延迟不可作证据） |
 | run / session | **待填**（`[RouteA] run=<32位id>`；一场一文件时改名前先归档日志） |
