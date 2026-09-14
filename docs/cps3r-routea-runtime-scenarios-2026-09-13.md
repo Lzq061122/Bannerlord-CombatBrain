@@ -364,6 +364,8 @@
 - **S4 = PASS（直接）**：首次超时释放后 `ExternalAfterExit`×**190**，从 230.030 连续覆盖到 347.218（**117.2s**），普通执行器获得持续窗口。
 - **健康路径 = PASS（强）**：覆盖前 220s 内 `applied=15 / stableSoFar=14`、`selected=379`、`weightFlap=0`、`unverified=0`、`dropped=0`、异常 0；三次 `LostAIControl` 后均恢复接管。
 - **归因（复现 §3j 观察，第 4 次）**：本场 `[OrderTraceAgg]` 亦为 `CombatBrainRouteA=0/o0`（applied=15），Route A 写入仍不进 `CommandProvenance` 聚合。
+- **新增判别事实（关键，Descriptive）**：本场 `ExternalWhileActive` **覆盖前仅 3 次（全部落在部署拍 t=5.295）**，**覆盖后 58 次**（自 t=221.030 起约每 0.5s 一次持续到 290.528）——即**覆盖之后原生侧持续每拍写该编队 Movement**，而 CB 行为同期零选中。另一侧：全场 `BehaviorSelected` 只有两处 >3s 空档（18.027→37.884 **19.9s**、159.531→165.351 **5.8s**，均在 `LostAIControl` 窗口内），其余时段严格每 0.5s 连续 ⇒ **覆盖后 127.3s 的静默不是引擎节拍问题，而是胜出权不再回到 Route A 行为**。
+  **推断（Inferred，未证）**：`ExternalReplaced`（CB 落地后 ≤1s 内出现外部写）标记的正是"原生 FormationAI 重新接管该编队 Movement"的时刻；此后原生行为持续胜出，armed 单次边沿重试失去被兑现的前提。**该推断需由 CB-REPAIR-0005 只读探针（`[RouteASilence]` 的 `activeIdx/activeType/weights`）判定**，不得仅凭日志形态下结论。
 
 **日志归档**：全量快照 `MBmod/CombatAI/logs/CombatBrain-2026-09-14-full-2056.log`（53,009,560 bytes / 407,767 行，SHA256 `7223BB15…`）；本 run 切片 `MBmod/CombatAI/logs/run-4e885a4e-20260914-mixed-battle.log`（403,826 bytes / 1330 行，SHA256 `E3E60C97…`）。
 

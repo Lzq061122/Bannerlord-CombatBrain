@@ -140,6 +140,7 @@ session=2 关键链：`t=320.027–325.030` 连续选中×11 → **`t=325.529 Ex
 | S4 | **PASS（直接）**：首次超时释放后 `ExternalAfterExit`×190，230.030→347.218（**117.2s**）连续窗口 |
 | 健康路径 | **PASS（强）**：覆盖前 `applied=15 / stableSoFar=14 / selected=379`、`weightFlap=0`、`unverified=0`、异常 0；3 次 `LostAIControl` 后均恢复接管 |
 | 归因 | 复现 §2g 观察（第 4 次）：`[OrderTraceAgg] CombatBrainRouteA=0/o0`（applied=15） |
+| **新增判别事实** | `ExternalWhileActive` **覆盖前 3 次（全在部署拍 5.295）/ 覆盖后 58 次**（221.030→290.528，约每 0.5s 一次）⇒ 覆盖后**原生侧持续每拍接管 Movement**，CB 行为同期零选中；全场 `BehaviorSelected` 仅两处 >3s 空档（均在 `LostAIControl` 窗口 19.9s / 5.8s）⇒ 127.3s 静默**不是节拍问题** |
 
 **归档**：全量 `logs/CombatBrain-2026-09-14-full-2056.log`（53,009,560 bytes / 407,767 行，SHA256 `7223BB15…`）；切片 `logs/run-4e885a4e-20260914-mixed-battle.log`（403,826 bytes / 1330 行，SHA256 `E3E60C97…`）。
 
