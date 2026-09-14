@@ -64,7 +64,7 @@ active_task: CB-REPAIR-0004（r3 返修中，台账 IN_PROGRESS；不部署、�
 1. **Astra re-review 未回**（CPS3R Route A：修复已部署，等外部复审回签后方可按命令链推进 CPS-4）。
 2. **条件 5 未满足（判定权在 Astra 与用户）**：Route A 的可执行运行期场景已全部完成——场景 1、2、5 **PASS**；场景 3（玩家接管）、场景 4（Rejoin）、场景 5 子项（拆分）在**本次采样口径下不适用**（**Rejoin 分支仍未验证**，不得声称结构上永久不可达）。本文件不据此判 GO。详见 `docs/cps3r-routea-runtime-scenarios-2026-09-13.md`。
 3. **CB-REPAIR-0004 尚未闭环（离线已闭、卡未关、未部署）**：占位不开火 → r2 被 Astra 判 FAIL/P1（周期重占位，占空比 ≈99.83%）；**r3 `395fe13` 已消除该机制并经质检 t12 双向独立复现判否（r3 acquires=1、40/100/150s 零重取、执行器 75~93% 连续窗口）**，verdict = pass-with-runtime-debt。台账仍 `IN_PROGRESS`（须 Astra 复审通过 + 部署/运行期证据齐备才可关）；**新提交均未部署**（现网 DLL 仍为 `9a2afe4` 基线）。该卡闭环前不得推进条件 5。
-4. **待裁决（新增，J-2）**：r3 的预算重置只在「持所有权时真实选中／非超时真实释放／`BeginSession`」发生 ⇒ **预算耗尽后本场不可自愈**（CHURN 实测 acquires 封顶 3）。CPS-4 须明确「一场内一次坏窗口 = 本场 Route A 退役」是否接受（属产品/规范裁决；已列入交 Astra 的问题清单）。
+4. **路线 A「本场退役」口径（已裁决，J-2）**：r3 的预算重置只在「持所有权时真实选中／非超时真实释放／`BeginSession`」发生 ⇒ **预算（≤2 次重取）耗尽后本场不可自愈**（CHURN 实测 acquires 封顶 3）。用户 2026-09-14 **裁决接受**：一场内出现一次坏窗口 = **本场 Route A 退役**；已写入 `docs/cps4-hardgate-checklist-2026-09-08.md`（2026-09-14 更新节）并保留在交 Astra 的问题清单。判定含义：采样中"该场后续无 Route A 活动"属既定语义，不得当作新缺陷；自愈机制如需另立卡设计。
 5. **口径分歧（属产品/规范裁决项，未裁决、未改代码）**：Route A 的玩家队排除**不受** MCM 开关 `PlayerTeamExemptionEnabled` 约束，与其它 7 个模块口径不一致；当前仅作 Descriptive 记录，冻结令下不擅自收敛。
 6. ~~`docs/` 目录未纳入 Git tracking~~ → 已解决：`AGENTS.md` + `docs/knowledge/` 三个 canonical 文件已纳入 tracking（commit `62502e9`、`d5743dd` 及 Traffic Cutover commit）。既有 CPS 报告是否入库仍待决策（不属本 cutover）。
 

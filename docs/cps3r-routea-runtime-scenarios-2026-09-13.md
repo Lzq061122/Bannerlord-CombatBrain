@@ -144,7 +144,7 @@
 
 **J-1（反向验证产物登记，按未验证形式闭合）**：开发侧给出的反向验证结果为 `REVERSE-CHECK PASS=1280 FAIL=17`，具名失败断言示例：`r3 position micro change: never re-arms during continuous situation changes`、`r3 unit count change: every tick's Movement proposal reaches the executor (sustained window)`、`r3 situation vector change: no suspension retry granted without a qualifying event`、`r3 qualifying event inside the cooldown is not granted (bounded rate)`、`r3 after the attempt budget is spent the control keeps yielding (executor writes every tick)`；临时改动已撤销（无 TEMP 残留），复跑 1297/0。**该产物未按契约字段登记 → 质检按「未验证」记账**；风险由更强的等价证据（真 r2 生产构建复现 P1 + r3 判否）闭合，故未阻塞本卡。本文件此处即为补登。
 
-**J-2（口径，待裁决/交 Astra）**：预算重置路径实际只有「持所有权时的真实选中」「非超时真实释放」「`BeginSession`」；**预算耗尽后不再持有所有权 ⇒ 本场战斗内不可自愈**（CHURN 实测 acquires 封顶 3）。安全方向正确，但 CPS-4 须明确写明「**一场内出现一次坏窗口 = 本场 Route A 退役**」，是否接受需产品/规范裁决。
+**J-2（口径，已裁决）**：预算重置路径实际只有「持所有权时的真实选中」「非超时真实释放」「`BeginSession`」；**预算耗尽后不再持有所有权 ⇒ 本场战斗内不可自愈**（CHURN 实测 acquires 封顶 3）。安全方向正确。**用户 2026-09-14 裁决：接受该语义**——「**一场内出现一次坏窗口 = 本场 Route A 退役**」，已写入 `docs/cps4-hardgate-checklist-2026-09-08.md`（2026-09-14 更新节），并保留在交 Astra 的问题清单（brief §5 问题 4）供外部复核。判定含义：采样中"该场后续无 Route A 活动"属既定语义，不得当作新缺陷；若未来要求自愈，须另立卡设计具名/离散/有界的自愈触发。
 
 **J-3 / J-4（low，未修）**：J-3 证据表满时 `_suspendedReattempts` 与 `SuspensionRetry` 事件可能不一致；J-4 超时暂停依赖"先清后设"次序（r2 已留陷阱注释）。
 
