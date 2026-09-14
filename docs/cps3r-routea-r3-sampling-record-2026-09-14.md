@@ -95,6 +95,34 @@
 
 **归档**：全量 `logs/CombatBrain-2026-09-14-full.log`（SHA256 `63ECC4A9…`）；切片 `logs/run-0496f7b6-20260914-longbattle.log`（SHA256 `585DCEAD…`，5194 行）。
 
+## 2g. 第六个运行期样本（run=`4156cc25…`，一个 run 两场）——Rejoin 样本 + S5 负样本再现
+
+同部署（`395fe13` / DLL `7E5FC25A…`，DLL mtime `09-14 09:34:23`，本 run 前无重部署）；`15:34:58.687` 观测挂载 `prefixes=3`；**无快进**（mission/墙钟 ≈ 1.0）；新窗口 1,430,342 bytes / 12,563 行**异常 0**。
+
+> **run / session 语义**：`RunId` 为进程级 `static readonly`（`RouteAOrderAdapter.cs:95`），`session` 每场 mission 递增 → **一个 run 可跨多场**。此前样本 ②–⑤ 均 `session=1`。
+
+| 场次 | 时间 / 时长 | 实测开战编队 | 汇总（末） |
+|---|---|---|---|
+| **session=1**（非申报场，混编） | 15:35:05–15:48:48 / `BattleDuration=770.9s` | Team 0 = 635（步158/射159/骑80/骑射158/骑80）、Team 1 = 616（步173/骑96/骑97/骑射250） | `selected=282 applied=11 replaced=0 externalWhileActive=3 edgeRetries=0 externalDuration=0.000s stableSoFar=11 unverified=0 dropped=0 intentChange=3 weightFlap=0 lastSelectedAt=657.527s suspensionRetries=0 restoreFailures=0` |
+| **session=2**（**本次申报**：约 1020v1020 纯步/射各半） | 15:50:10–15:59:19 / `BattleDuration=548.99s` | Team 0 = **1016**（步507/射508/骑1）、Team 1 = **994**（步489/射505）；`agents=2032` | `selected=221 applied=1 replaced=1 externalWhileActive=18 edgeRetries=0 externalDuration=9.003s stableSoFar=0 unverified=0 dropped=0 intentChange=0 weightFlap=0 lastSelectedAt=325.030s suspensionRetries=0 restoreFailures=0` |
+
+session=2 关键链：`t=320.027–325.030` 连续选中×11 → **`t=325.529 ExternalReplaced`** → `t=335.035 Exit(SelectionTimeout)` + `Restore`（Δ=9.507s 自覆盖 / 10.005s 自末次选中）→ `t=335.035–548.761` `ExternalAfterExit`×188，**零再武装**。`Exit`×2 全配对 `Restore`。
+
+| # | 结果 |
+|---|---|
+| **Rejoin 分支** | **首次取得运行期样本（session=1）**：部署期（`15:35:00.695–15:35:05.285 phase=Deployment`，`Team 1 f=0 mission=SupportMainEffort`，`MB=(844,729) str=366 conf=0.59` 有效）→ `t=0.542 Intent(Rejoin rev1)` → `t=4.034 BehaviorSelected + OrderApplied(ot=1)`；`NavigationFailed=0`。**仅成功路径**，失败路径仍无样本 |
+| **S5 edgeRetry** | **负样本（第 2 次）**：覆盖真实发生但 `edgeRetries=0`、覆盖后再未被选中（`lastSelectedAt=325.030 < 325.529`）→ 正向形态仍缺样本 |
+| S1 | **PASS（再次）**：超时释放后 **213.7s 零再武装**（同期 188 次外部写） |
+| S2 | **无样本**（session=2 暂停期 `intentChange=0`；session=1 无 `SelectionTimeout`） |
+| S3 | **PASS**：Δ=10.005s（自末次选中）/ 9.507s（自覆盖），`Restore` 紧随 |
+| S4 | **PASS（直接）**：释放后 188 次连续 `ExternalAfterExit` 跨越 213.7s |
+| 健康路径（session=1） | `applied=11 / stableSoFar=11`、`lastSelectedAt` 至 657.527s、`Exit`×8 全 `LostAIControl` 且全配对 `Restore`、`weightFlap=0`、`restoreFailures=0`、异常 0 |
+| 归因（新观察） | `[RouteAEvent] source=CombatBrainRouteA` 36 条 = 12 次落地×3，自洽；但 `[OrderTraceAgg]` 两场均 `CombatBrainRouteA=0/o0`、`[OrderTrace]` 31 条中 0 条。结构原因：`RouteAOrderAdapter.cs:33-36` 不调用 `CommandProvenance.Instance.Record`（唯一调用点 `FormationCommandExecutor.cs:147`）→ 需口径裁决，本轮不改码 |
+
+**归档**：全量快照 `logs/CombatBrain-2026-09-14-full-1600.log`（52,159,044 bytes / 402,155 行，SHA256 `D6B80D36…`）；本 run 切片 `logs/run-4156cc25-20260914-twobattles.log`（488,112 bytes / 1594 行，SHA256 `54374180…`）。
+
+**遗留缺口**：**S5 正向形态（`ExternalReplaced → EdgeRetry → OrderApplied`）**连续两场未取得；是否继续等样本或接受离线证据替代 → 交 Astra 裁定（交接件 §4-1）。
+
 ## 2. 本轮采样验收点（Astra 回签要求的最小集）
 
 | # | 验收点 | 判定方法 | 通过标准 |
