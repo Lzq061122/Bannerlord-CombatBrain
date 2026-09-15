@@ -59,6 +59,25 @@
 
 **这正是 CB-REPAIR-0005 探针要判定的事**：`[RouteASilence]` 行会给出覆盖后 `activeIdx`（胜出者是否仍是 Route A 行为）、`activeType`（谁在胜出）、`weights`（CB 侧权重是否仍为 `10/0/0/0`）、`aiSame/aiCtl`（AI 对象与资格是否仍成立）。**探针已就绪但未部署**——部署会替换现网 r3 DLL，故需裁决（见 §5 问题 6/7/8）。
 
+## 0c. 本轮新增证据：归因缺环与 P2 债务（2026-09-15，均已过独立复核）
+
+> 两项只读调查由开发组完成（团队 `combatbrain-开发组-20260915`：Captain + 开发 + 质检；**零产品代码改动、未部署、未启动游戏**）。以下为**已过独立复核**的结论；引用请以 SHA 锚点为准。
+
+| 主题 | 交付物（锚点） | 复核链（均为独立实跑） | 终态 |
+|---|---|---|---|
+| ① Route A 归因缺环：落地写入不进 `CommandProvenance`/`[OrderTraceAgg]` | `MBmod/CombatAI/tools/cps3r-routea-attribution-gap-report-2026-09-15.md` = **38,425 B / SHA256 `F8F800D3EF8CA58F7D1666B289CEC2A3A7E102BE7F925BAE2E1CFCA95AD7294D`** | review r1 → needs_revision（3 medium）→ 修 → **verification r2 = PASS**；其后 2 条 low 随合并返修落修并 **verification r3 = PASS** | 结论成立、文档自洽 |
+| ② P2 债务整理：重试事件 revision 配对 + 历史提交源码可复现性 | `MBmod/CombatAI/tools/cps3r-routea-p2-debt-consolidation-2026-09-15.md` = **42,868 B / SHA256 `889269FB37AB8EE9B31C25B55226F6E46498C0D56A6862520B74F70A2029B39D`** | review r1 → needs_revision（1 high + 2 medium）→ 修 → verification r2 → needs_revision（1 medium：两计数器口径混用）→ 修 → **verification r3 = PASS** | 结论成立、文档自洽 |
+
+**① 关键结论（Observed，静态可证）**：`CommandProvenance.Instance.Record` 的**生产唯一调用点** = `CombatBrain/Ai/FormationCommandExecutor.cs:147`；Route A 走旁路 `RouteAOrderAdapter.cs:33-36`（`CommandSourceScope.Enter(CombatBrainRouteA)` + `SetMovementOrder`，调用来源 `:302`），**从不调用 `Record`** ⇒ `[OrderTraceAgg] CombatBrainRouteA` 恒为 `0/o0`（含该字段的行 17/46、19/48、20/49 全为 0；全库 `CombatBrainRouteA=[1-9]` 命中 **0**）；Route A 的归因只存在于 `[RouteAEvent] source=CombatBrainRouteA` 渠道（同 run 自洽：`OrderApplied` = `SetterBegin(source=CombatBrainRouteA)` = 12（`run=4156cc25`）/ 15（`run=4e885a4e`），同期 `[OrderTrace]` 593 条中 0 条含 Route A）。
+**影响（Inferred）**：S5 验收项中"`OrderTraceAgg` 归因与执行器一致"在当前实现下**不可满足**；CPS-4 归因基线须据此改写。**收敛方案代价清单（未改码）**：A 文档口径（可立即执行）／C 记录为待裁（不改码）／B 适配器接线 `Record`（改码；须先裁定冻结令 §7.2 与 CB-REPAIR-0004 未关台账）／D 两渠道聚合合并（改码，风险最高，不建议）——请在 §5-9 裁决方向。
+
+**② 关键结论**
+- **P2-1（配对口径）**：`SuspensionRetry`/`EdgeRetry` 的 `revision` = **解锁/被消费时该身份已生效的 revision**（回指），配对方向按事件类型分立：`SuspensionRetry` 的配对 `Intent` 在**其后**，`EdgeRetry` 的配对 `Intent` 在**其前**。全库去重后 `SuspensionRetry` **7 条 / 3 run**（原始命中 21 行系三份**累积快照**重复所致），配对 **7/7**；`EdgeRetry` 唯一 **1** 条（`ba84a11b` seq=551 t=250.5362）。
+- **上限口径（重要，已固化文档硬约束）**：日志汇总字段 `suspensionRetries=` 是 **session 累计**（`RouteAEvidence.cs:218`，仅 `BeginSession`/`:89` `Array.Clear(_stats)` 清零）；**期内预算** `_suspendedReattempts`（`RouteAControl.cs:105/:136/:179/:185/:287/:381`，全 private、**不出现在任何日志**）才是与 `MaxSuspendedReattempts`(2) 比较的对象。反例：`run=d43c302e` 汇总打印 **3**，而按暂停期分段期内最大 **2**（P1={252}、P2={1871,1997}）⇒ **两计数器不可互相替代**；文档已写入"禁止用汇总值与 2 比较、期内计数须按事件分段重建"的硬约束。
+- **P2-2（可复现性）**：**源码级可复现成立**——`git archive 395fe13 -- CombatBrain OfflineTests` 多次执行 zip **逐字节相同**（SHA256 `8194E8A791089334B6DE96348641B88C284C031A006E9C0A736AE5A3AE0AC17A` / 431,203 B / 113 文件），离仓构建 **0 警 0 错**；**二进制级不保证一致**——同源但 obj/out 目录不同的三次构建得三个不同 SHA（`F62F6642…`/`3D86DADB…`/`066A1F9C…`，均 ≠ 现网 `ADCC641E…`），"同目录重复构建是否稳定"未做正交对照 ⇒ 记为 **Unknown**。
+
+**遗留（不阻断）**：① verification r3 记 1 条 low——② 报告 `:42`「二者可相差任意大」措辞过强（实测 3 vs 2），建议后续顺手改为「可显著不等，**不得互相替代**」；② **运行期债未消**：诊断构建 `a24e921` 已部署但**零运行期样本**，本轮 pass 仅覆盖"文档证据与磁盘一致"，**不构成 S5／条件 5／CPS-4 的通过证据**。
+
 ## 0. 一句话状态
 
 上一轮提交后，共落地 **3 张已闭环返修卡 + 1 项观测硬约束**，**已部署**（现网 = `9a2afe4`），并完成**可执行的运行期场景 1 重跑 + 场景 2 + 场景 5**（均 PASS）；
@@ -161,6 +180,7 @@
 6. **S5 正向形态的验收口径**：请裁决——**①接受离线证据替代**（三次覆盖样本均证明"覆盖后引擎不再回调 CB 行为"这一失败形态，armed 重试的兑现前提不成立），据此关闭 CB-REPAIR-0004 的运行期验收；还是**②要求先做机制确认**（见问题 7）；或**③要求继续采样**（请给出可接受的等待上限/场次）。
 7. **是否授权部署 CB-REPAIR-0005 诊断构建**：该卡只读探针已实现且离线验收通过（`a6a4ec5`；OfflineTests 1320 PASS/0 FAIL；setter 站点 4=4；**零语义差已断言**），**未部署**。部署后可判定覆盖瞬间"胜出者是否是 Route A 行为"（`activeIdx/activeType/weights/aiSame/aiCtl`）。**代价**：现网 DLL 由 r3 变为诊断构建，CB-REPAIR-0004 的 r3 采样绑定随之中断——请裁决是否授权、以及是否需以"零语义差 + 离线等价"为前提继续把诊断构建上的样本计入 r3 运行期验收。
 8. **若 S5 正向形态在当前实现下不可达，是否需要重新设计"覆盖恢复"语义**：现有机制把恢复的希望寄托于"引擎在 10s 内重新选中 CB 行为"（armed 单次边沿重试）；§0b 的 3/3 全负 + "覆盖后外部 Movement 写入由 3 次增至 58 次（分布非均匀，最大间隔 31.0s；来源仍为 `ExternalUnknown`，'原生胜出'待探针确认）"提示该前提可能长期不成立。是否另立卡（冻结令下需先裁决）改为 CB 侧主动、具名、有界的重取？
+9. **归因口径收敛方向（新增，见 §0c①）**：Route A 落地写入不进 `CommandProvenance`/`[OrderTraceAgg]` 是**结构性事实**（生产唯一 `Record` 调用点在普通执行器；Route A 走旁路）。请裁决采用哪一方案：**A** 只改文档口径（不改码，可立即执行）／**C** 记录为待裁事项（不改码）／**B** 适配器接线调用 `Record`（改码；须先裁定是否触碰冻结令 §7.2 与 CB-REPAIR-0004 未关台账）／**D** 两渠道聚合合并（改码，风险最高，不建议）。并请确认 S5 验收项中"`OrderTraceAgg` 归因与执行器一致"应改写为何种口径。
 
 ## 6. 复现方式（只读，不改仓库/不启动游戏）
 
@@ -187,6 +207,9 @@ dotnet run --project "OfflineTests\OfflineTests.csproj" -c Debug
 - **CB-REPAIR-0005 派单 / 交付报告**：`prompts/active/CombatBrain-CB-REPAIR-0005-RouteA覆盖后断流只读诊断派单-2026-09-14.md`（registry `CB-PROMPT-0043`）、`tools/CombatBrain-CB-REPAIR-0005-交付报告-2026-09-14.md`（`CB-PROMPT-0044`）
 - **归档日志（研究用途）**：`MBmod/CombatAI/logs/CombatBrain-2026-09-14-full-1600.log`（`D6B80D36…`）与 `-full-2056.log`（`7223BB15…`）；切片 `run-4156cc25-…-twobattles.log`（`54374180…`）、`run-4e885a4e-…-mixed-battle.log`（`E3E60C97…`）、`run-0496f7b6-…-longbattle.log`（`585DCEAD…`）
 - 上一轮复审提交物：`docs/cps3r-routea-astra-review-submission-2026-09-08.md`
+- **本轮新增调查与复核件（§0c，均在 `MBmod/CombatAI/tools/`）**：
+  - ① 归因缺环报告 `cps3r-routea-attribution-gap-report-2026-09-15.md`（`F8F800D3…`）；其复核 `cps3r-routea-attribution-review-2026-09-15.md`（needs_revision）与 `cps3r-routea-attribution-verification-r2-2026-09-15.md`（**PASS**）
+  - ② P2 债务整理报告 `cps3r-routea-p2-debt-consolidation-2026-09-15.md`（`889269FB…`）；其复核 `cps3r-routea-p2-debt-review-2026-09-15.md`、`cps3r-routea-p2-debt-verification-r2-2026-09-15.md`（needs_revision）与 `cps3r-routea-consolidated-verification-r3-2026-09-15.md`（**PASS**）
 - Route A 收口报告：`docs/cps3r-routea-final-blocker-report.md`
 - 验证命令链与采样前置：`测试指南.md`（§0a = E 模式前置）
 - 返修台账：`MBmod/CombatAI/prompts/repairs/registry.json`（CB-REPAIR-0001…0004）
