@@ -192,9 +192,9 @@
 5. **低危未修（J-3/J-4）**：J-3 证据表满时 `_suspendedReattempts` 与 `SuspensionRetry` 事件可能不一致；J-4 超时暂停依赖"先清后设"次序（已留陷阱注释）。
 6. **J-1（记账口径）**：开发侧反向验证产物（`REVERSE-CHECK PASS=1280 FAIL=17` + 具名失败断言）未按任务契约字段登记 → 质检按**未验证**记账，风险已由 t12 更强的等价证据（真 r2 生产构建复现 P1）闭合；已在运行场景档 §3d 补登。
 7. **口径分歧（Descriptive，未改代码）**：Route A 的玩家队排除**不受** MCM 开关 `PlayerTeamExemptionEnabled` 约束，与其它 7 个模块口径不一致。
-8. **状态陈旧纪律**：`CURRENT_STATE.last_verified_commit = 9a2afe4`（离线已验证基线）；**现网 DLL 现为诊断构建 `a24e921`（`ADCC641E…`，2026-09-15 部署；r3 `7E5FC25A…` 已备份可回滚）**——诊断构建与 r3 均**未取得完整运行期验收**，不得当作已验证状态；`main` HEAD 已在其后（含 r1/r2/r3 与证据文档提交），不得把新 HEAD 当作已验证状态。
-9. **下轮最小采样项（按 §0b 更新）**：a) 连续变号期间不得重取 → **已达成（多场）**；b) 合格意图变化后允许且仅允许一次重取 → **已达成（2 样本，上限/冷却实机确认）**；c) `ExternalReplaced` 后 ≤10s `Exit(reason=SelectionTimeout)` 且执行器恢复 Movement 写 → **已达成（Δ=9.507–10.006s；执行器实得连续窗口：§3j ≈213.7s、§3k 三段合计 ≈97.2s）**；d) 无重入异常、`RestoreFailures==0` → **已达成（8 场全 0，异常 0）**。**唯一未达成 = 健康 `EdgeRetry` 被兑现（S5 正向形态）**。
-10. **归因口径问题（新，Descriptive，需裁决）**：Route A 的写入**不进** `CommandProvenance` 聚合——`RouteAOrderAdapter` 只 `CommandSourceScope.Enter`+`SetMovementOrder`，不调用 `CommandProvenance.Instance.Record`（全仓唯一调用点 = `FormationCommandExecutor.cs:147`）⇒ `[OrderTraceAgg]` 恒为 `CombatBrainRouteA=0/o0`（4 场复现），Route A 的归因只存在于 `[RouteAEvent] source=CombatBrainRouteA` 渠道（内部自洽：36 条 = 12 次落地×3）。这影响 §4.9(d) 中「`OrderTraceAgg` 归因正常」的判定口径。
+8. **状态陈旧纪律（2026-09-15 回填更正，以 §0e 为准）**：Astra 2026-09-15 裁定把验证基线推进至**生产语义 `395fe13`**，`a24e921` 另记**等价诊断证据**（限定见 §0e 第 7 项）；**现网 DLL 已回滚为 r3 `395fe13`（`7E5FC25A…`）**，诊断构建已卸载；`main` HEAD 已在其后（含 r1/r2/r3 与证据文档提交），不得把新 HEAD 当作已验证状态。
+9. **下轮最小采样项（按 §0b 更新）**：a) 连续变号期间不得重取 → **已达成（多场）**；b) 合格意图变化后允许且仅允许一次重取 → **已达成（2 样本，上限/冷却实机确认）**；c) `ExternalReplaced` 后 ≤10s `Exit(reason=SelectionTimeout)` 且执行器恢复 Movement 写 → **已达成（Δ=9.507–10.006s；执行器实得连续窗口：§3j ≈213.7s、§3k 三段合计 ≈97.2s）**；d) 无重入异常、`RestoreFailures==0` → **已达成（8 场全 0，异常 0）**。**唯一未达成 = 健康 `EdgeRetry` 被兑现（S5 正向形态）→ 已由 Astra 2026-09-15 裁定选①收口（§0e 第 6 项）。**
+10. **归因口径问题（Descriptive；Astra 2026-09-15 裁定采用方案 A：只改文档口径、不改码）**：Route A 的写入**不进** `CommandProvenance` 聚合——`RouteAOrderAdapter` 只 `CommandSourceScope.Enter`+`SetMovementOrder`，不调用 `CommandProvenance.Instance.Record`（全仓唯一调用点 = `FormationCommandExecutor.cs:147`）⇒ `[OrderTraceAgg]` 恒为 `CombatBrainRouteA=0/o0`（4 场复现），Route A 的归因只存在于 `[RouteAEvent] source=CombatBrainRouteA` 渠道（内部自洽：36 条 = 12 次落地×3）。**落修口径（§0e 第 9 项）**：S5 归因改为以 `[RouteAEvent]` 的 `OrderApplied/SetterBegin/SetterCompleted` **自洽**验 Route A；`[OrderTraceAgg]` 只验普通执行器与释放后窗口——即上文 §4.9(d) 中「`OrderTraceAgg` 归因正常」**不再作为** Route A 的归因判据。
 
 ## 5. 请 Astra 裁决的问题
 
@@ -238,5 +238,34 @@ dotnet run --project "OfflineTests\OfflineTests.csproj" -c Debug
   - ② P2 债务整理报告 `cps3r-routea-p2-debt-consolidation-2026-09-15.md`（`889269FB…`）；其复核 `cps3r-routea-p2-debt-review-2026-09-15.md`、`cps3r-routea-p2-debt-verification-r2-2026-09-15.md`（needs_revision）与 `cps3r-routea-consolidated-verification-r3-2026-09-15.md`（**PASS**）
 - Route A 收口报告：`docs/cps3r-routea-final-blocker-report.md`
 - 验证命令链与采样前置：`测试指南.md`（§0a = E 模式前置）
-- 返修台账：`MBmod/CombatAI/prompts/repairs/registry.json`（CB-REPAIR-0001…0004）
+- 返修台账：`MBmod/CombatAI/prompts/repairs/registry.json`（CB-REPAIR-0001…0006）
 - 现行验证态：`docs/knowledge/CURRENT_STATE.md`
+
+---
+
+## 0e. Astra 复审裁定回填（2026-09-15）——**本轮九项裁定 + 3 条 P2**
+
+> 性质：本块是 **Astra 2026-09-15 复审结论的回填登记**（原文见 Astra 复审指令件与裁定文本；registry `CB-PROMPT-0040`，状态 `COMPLETED`——本轮无需再激活）。
+> 效力：本块对 §5 的九问逐条给出裁定；与正文其他块冲突时**以本块为准**（正文各块保留为历史证据，不改写其正文）。现行验证态唯一权威仍是 `docs/knowledge/CURRENT_STATE.md`。
+
+| # | 问题（§5） | Astra 2026-09-15 裁定 |
+|---|---|---|
+| 1 | 条件 5 是否满足 | **判 PASS**（**但**账面在文档落修前保持未通过；**不推出** CPS-4/GO） |
+| 2 | 采样不适用是否可接受 | 接受；`NavigationFailed` 失败路径与更多 Rejoin 样本列 **P2 运行期债**（不阻断 0004；不得声称结构不可达） |
+| 3 | CB-REPAIR-0004 是否阻断 GO | **不阻断**；**已具备关闭条件**（裁定 7） |
+| 4 | J-2 口径 | **实现忠实、无更高规范硬冲突**；「坏窗口」明确定义为「**本暂停期两次重取耗尽且无真实选中**」（**不是**"首次超时即退役"） |
+| 5 | 玩家队豁免口径 | 列 **GO 前产品口径裁决项**（不阻断本轮收口） |
+| 6 | S5 验收口径 | **选①**：接受「离线证据 + 本轮机制观测」替代，**停止继续等正样本**，无需先取原生权重 |
+| 7 | 诊断构建样本等价性 | **可计入** r3 运行期验收，**限定为「r3 的诊断衍生构建」**；绑定须含 `395fe13→a24e921` 差分 / DLL SHA / run·session / 同配置 / 1327·20·4=4 / 异常 0；**不得称同一 DLL、不得外推原生权重** |
+| 8 | 是否重新设计覆盖恢复语义 | **另立设计决策卡**，但列 **DEFERRED**（冻结期不授权改码，不阻断本轮收口） |
+| 9 | 归因口径收敛方向 | **选 A**：只改文档口径——S5 归因改为以 `[RouteAEvent]` 的 `OrderApplied/SetterBegin/SetterCompleted` **自洽**验 Route A；`[OrderTraceAgg]` 只验普通执行器与释放后窗口 |
+
+**证据链结论**：**PASS**（探针 P1 已闭、无代码阻断）。
+
+**3 条 P2（均不阻断 CB-REPAIR-0004，列运行期/工程债）**：①重试事件 revision 配对；②t12 源码不可重建；③`NavigationFailed` 失败路径与 J-3（证据表满时计数不一致）、J-4（超时暂停依赖先清后设次序）。
+
+**裁定后的验证基线**：推进至**生产语义 `395fe13`**；`a24e921`（诊断构建）**另记为等价诊断证据**（限定见上表第 7 项）；**CPS-4 保持 Pending、GO 不通过**。
+
+**Astra 裁定后的现网与归档现状（回填）**：诊断构建 `a24e921`（`ADCC641E…`）完成采样后**已回滚回 r3 `395fe13`**（现网 DLL SHA256 = `7E5FC25A0EF0559D718B0D5E42994141846291501E3342F94E6C0B1F713FD8D6`，228,352 B，与 `E:\MBmod\_backups\CombatBrain-r3-395fe13-7E5FC25A.dll` 一致）；部署 DLL 内 `[RouteASilence]` 字面量 = **False**（探针已随回滚移除）；采样记录见 `docs/cps3r-routea-diagnostic-sampling-2026-09-15.md`（含裁定 2 要求的等价性绑定 §9）。
+
+**对 §5 的净影响**：九问**全部已裁**，§5 不再是"待裁决"状态；本件的 open 项自本块起仅剩 **P2 三条 + 玩家豁免（GO 前产品口径）**。

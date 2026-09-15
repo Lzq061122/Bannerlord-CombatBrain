@@ -381,11 +381,11 @@
 2. **未取得样本的分支**：① "新 Formation 对象身份隔离"（对象未销毁重建）；② **Rejoin 的成功路径**已于 §3j 取得 1 次样本（部署期 `SupportMainEffort`），**但 `NavigationFailed` 失败路径仍无样本**；③ F-2「重试已用后再次 `replaced=true` → 立即 `Release(ExternalOverridePersisted)`」；④ §3c 的 `edgeRetries=0` / 占位不开火——根因已定位，r3 已修复并经独立复核（§3d），运行期形态见 §3i/§3j。
 3. `replaced=false` 路径（不释放、不消耗重试、仅计数）被大量观测（`externalWhileActive` 3 / 12 / **1780**），但其对所有权与抖动的实际影响仍无定论（§3c 的占位不开火现象正属此域）。
 4. F-5（Release 位于 Harmony postfix 栈内改权重）无运行期证据；H-2（E 模式帧成本须按「RouteA + 观测」复合口径评定）未评定——另注意场景 5 采样使用了快进与低 BattleSize，其数字不得与其他场次混比。
-5. **r3 新增口径待裁决（J-2，§3d）**：预算耗尽后本场不可自愈 → 「一场内一次坏窗口 = 本场 Route A 退役」是否接受。
+5. **r3 新增口径（J-2，§3d）——已于 2026-09-15 由 Astra 复核裁定**：实现忠实、无更高规范硬冲突；「坏窗口」被明确为「**本暂停期两次重取耗尽且无真实选中**」（**不是**"首次超时即退役"）；预算耗尽后本场不可自愈的语义维持，自愈机制另立设计决策卡且列 **DEFERRED**（冻结期不授权改码，不阻断本轮收口）。
 6.「玩家队豁免生效」验收点（§3a 表格末行）尚未采样；J-3（证据表满时计数不一致）、J-4（超时暂停依赖先清后设次序）为低危未修项。
-7. CPS §14.1 **条件 5 仍未满足**（Astra 复审未回签；本文件不判 GO）。
-8. **S5 正向形态仍缺样本（§3i + §3j + §3k 连续三场负样本）**：三场都呈"`ExternalReplaced` 真实发生 → 覆盖后引擎不再选中该 Behavior → 9.5–10.0s 按期限 `Exit(SelectionTimeout)`"，`edgeRetries` 均为 0。§3k 是其中最强的一次：覆盖发生于**每 0.5s 连续选中的健康局中**，覆盖后 **127.3s 零选中至战斗结束**，期间 CB 两次重取（各 10s 窗口）引擎仍未回调。按 §3j 口径，正向形态在 r3 前构建上出现过（§2 `run=ba84a11b`，Δ=5.00s），故**不是结构不可达**；但 r3 上 3/3 全负 ⇒ 是否继续等样本或接受离线证据替代，**判定权在 Astra**（交接件 §4-1）。
-9. **Route A 归因渠道口径（§3j 新观察）**：Route A 的写入不进 `CommandProvenance` 聚合（`RouteAOrderAdapter` 不调用 `Record`），因此 `[OrderTraceAgg] CombatBrainRouteA` 恒为 `0/o0`；Route A 的归因只存在于 `[RouteAEvent] source=CombatBrainRouteA` 渠道。这直接影响 S5 验收项「`OrderTraceAgg` 归因与执行器一致」的判定口径，需裁决后才能在验收表上落判定。
+7. CPS §14.1 **条件 5**：本件撰写时（Astra 复审未回签）记为未满足；**Astra 2026-09-15 复审已判 PASS**（裁定 6，账面以 `docs/knowledge/CURRENT_STATE.md` 为准；该 PASS 不推出 CPS-4/GO）。
+8. **S5 正向形态缺样本（§3i + §3j + §3k 连续三场负样本；已由 Astra 2026-09-15 裁定收口）**：三场都呈"`ExternalReplaced` 真实发生 → 覆盖后引擎不再选中该 Behavior → 9.5–10.0s 按期限 `Exit(SelectionTimeout)`"，`edgeRetries` 均为 0。§3k 是其中最强的一次：覆盖发生于**每 0.5s 连续选中的健康局中**，覆盖后 **127.3s 零选中至战斗结束**，期间 CB 两次重取（各 10s 窗口）引擎仍未回调。按 §3j 口径，正向形态在 r3 前构建上出现过（§2 `run=ba84a11b`，Δ=5.00s），故**不是结构不可达**；r3 上 3/3 全负，**Astra 2026-09-15 裁定选①**（接受离线证据 + 本轮机制观测，停止继续等正样本、无需先取原生权重），机制侧结论见 §3l。
+9. **Route A 归因渠道口径（§3j 新观察；Astra 2026-09-15 裁定采用方案 A：只改文档口径、不改码）**：Route A 的写入不进 `CommandProvenance` 聚合（`RouteAOrderAdapter` 不调用 `Record`），因此 `[OrderTraceAgg] CombatBrainRouteA` 恒为 `0/o0`；Route A 的归因只存在于 `[RouteAEvent] source=CombatBrainRouteA` 渠道。**落修口径**：S5 归因改为以 `[RouteAEvent]` 的 `OrderApplied/SetterBegin/SetterCompleted` 自洽验 Route A；`[OrderTraceAgg]` 只验普通执行器与释放后窗口（落点：`docs/cps3r-routea-r3-sampling-record-2026-09-14.md` §2 的 S5 行）。
 
 ## 5. 复现命令
 
@@ -408,6 +408,6 @@ Get-Content $env:TEMP\CombatBrain.log -Wait -Tail 200 | Select-String -Pattern '
 - r3 运行期样本累计八场：①`c81c4f5e`（§3e）②`6223ad9b`（§3f）③`ce970979`（§3g）④`d43c302e`（§3h）⑤`0496f7b6`（§3i）⑥`4156cc25` session=1（§3j，混编场，含 Rejoin 样本）⑦`4156cc25` session=2（§3j，申报场次 1016v994 纯步/射）⑧`4e885a4e`（§3k，混编场，健康局中途覆盖 → 全场断流；S2 第二样本 + S1/S3/S4 再确认）。**唯一缺口 = S5 正向形态（`ExternalReplaced → EdgeRetry → OrderApplied`），已 3/3 全负**。
 - 仍待采样：「玩家队豁免生效」验收点（§3a 表格末行）。
 - 已开卡处置：**CB-REPAIR-0004**（占位不开火 → 周期重占位，`runtime_failure`），台账 **`IN_PROGRESS`**（按派单不关闭，须 Astra 复审通过 + 部署/运行期证据齐备才可关）：r1 `723b457` → 质检 t8 = needs_revision（R4-1）→ r2 `bc8449a` → **Astra 判 FAIL（P1 周期重占位）** → r3 `395fe13` → **质检 t12 = pass-with-runtime-debt（双向独立复现，见 §3d）**。§3c 数据已按实测更正（699 = 425 + 窗口内 0 + 其后 274）。
-- 待裁决：**J-2**（预算耗尽后本场不可自愈 → 「一场内一次坏窗口 = 本场 Route A 退役」是否接受）；低危未修：J-3、J-4。
+- **已裁定/已登记（Astra 2026-09-15 复审）**：**J-2** 已裁（实现忠实、无更高规范硬冲突；「坏窗口」定义为「本暂停期两次重取耗尽且无真实选中」，见 §3d 与 §4.5）且机制已由 §3l 观测确立；**S5 选①**（接受离线证据 + 本轮机制观测，停止等正样本）；**条件 5 判 PASS**（不推出 CPS-4/GO）；**归因口径选 A**（只改文档口径，落点见 `docs/cps3r-routea-r3-sampling-record-2026-09-14.md` §2 与 `docs/knowledge/CURRENT_STATE.md`）；**覆盖恢复语义** 另立设计决策卡（DEFERRED）。低危未修：J-3、J-4（列 P2，不阻断 CB-REPAIR-0004）。
 - 未定论：引擎侧「为何停止选中」（Inferred，建议并入下轮采样最小观测）；**下轮采样验收点**见 §3c 末行（部署与采样排在 Astra 回签之后）。
 - 辅助工具：`MBmod/CombatAI/tools/routea-rejoin-check.ps1`（Rejoin/场景条件只读体检）。

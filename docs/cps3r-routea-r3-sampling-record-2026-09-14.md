@@ -144,9 +144,9 @@ session=2 关键链：`t=320.027–325.030` 连续选中×11 → **`t=325.529 Ex
 
 **归档**：全量 `logs/CombatBrain-2026-09-14-full-2056.log`（53,009,560 bytes / 407,767 行，SHA256 `7223BB15…`）；切片 `logs/run-4e885a4e-20260914-mixed-battle.log`（403,826 bytes / 1330 行，SHA256 `E3E60C97…`）。
 
-**结论**：S5 正向形态 **3/3 全负**（§2f/§2g/§2h），且本次证明"覆盖后断流"与"是否健康选中"无关——覆盖前一秒引擎仍在正常选中，覆盖后立刻永久停止。**是否继续等样本或接受离线证据替代 → 交 Astra 裁定**；机制侧判定改由 CB-REPAIR-0005 只读探针（已实现、离线验收完成、**未部署**）承接。
+**结论**：S5 正向形态 **3/3 全负**（§2f/§2g/§2h），且本次证明"覆盖后断流"与"是否健康选中"无关——覆盖前一秒引擎仍在正常选中，覆盖后立刻永久停止。**S5 口径已由 Astra 2026-09-15 裁定收口（选①：接受离线证据 + 本轮机制观测，停止继续等正样本，裁定 6/7）**；机制侧判定由 CB-REPAIR-0005 只读探针承接——该探针已于 2026-09-15 部署为**诊断构建 `a24e921`**、完成采样（14 条 `[RouteASilence]`）并回滚回 r3。
 
-**口径更正（Astra P1 复审，2026-09-14 晚）**：① 上文 S4 的 `117.2s` **不得**写作"单一连续放行窗口"（区间内 CB 两次重新持有所有权，实得三段窗口 ≈10.0s/30.7s/56.5s，合计 ≈97.2s）；② 58 次外部写**分布非均匀**（含 11.0s 与 31.0s 间隔，最大 31.0s），来源仍是 `ExternalUnknown`，**不得**写作"已证明原生持续胜出"——"原生行为胜出"仍是待 `[RouteASilence]` 探针确认的推断。
+**口径更正（Astra P1 复审，2026-09-14 晚）**：① 上文 S4 的 `117.2s` **不得**写作"单一连续放行窗口"（区间内 CB 两次重新持有所有权，实得三段窗口 ≈10.0s/30.7s/56.5s，合计 ≈97.2s）；② 58 次外部写**分布非均匀**（含 11.0s 与 31.0s 间隔，最大 31.0s），来源仍是 `ExternalUnknown`，**不得**写作"已证明原生持续胜出"——本档撰写时"原生行为胜出"仍是待 `[RouteASilence]` 探针确认的推断；**2026-09-15 该推断已由探针观测确立（14/14 为 `activeIdx=0`/`activeType=BehaviorCharge`），见 `docs/cps3r-routea-diagnostic-sampling-2026-09-15.md` 与 `docs/cps3r-routea-runtime-scenarios-2026-09-13.md` §3l——本句的"推断"限定保留为当时口径（不改写历史结论）。**
 
 ## 2. 本轮采样验收点（Astra 回签要求的最小集）
 
@@ -156,7 +156,9 @@ session=2 关键链：`t=320.027–325.030` 连续选中×11 → **`t=325.529 Ex
 | S2 | **合格意图变化仅一次 `SuspensionRetry`** | `event=SuspensionRetry` 计数 | 出现**恰好一次**，且伴随可见的意图变化；不得出现第 2 次以上周期重取 |
 | S3 | **零选中后按期限 `SelectionTimeout` + `Restore`** | `event=Exit reason=SelectionTimeout` 与随后 `event=Restore` | `ExternalReplaced`（或被选中停止）后 **≤10s** 出现；`Restore` 紧随、`restoreFailures=0` |
 | S4 | **普通 Movement 持续恢复** | 该编队执行器写入 | 释放后普通执行器获得**持续**（非单帧）Movement 写窗口，之后原版正常接管（`ExternalAfterExit`） |
-| S5 | **健康路径与归因** | `[RouteA]` 汇总 + `[OrderTraceAgg]` | 正常选中场景 `edgeRetries` 语义正确（=授权次数）；`OrderTraceAgg` 归因与执行器一致；`restoreFailures=0`、无异常行 |
+| S5 | **健康路径与归因**（归因判据已按 Astra 裁定 5 改为**口径 A**） | `[RouteA]` 汇总 + **`[RouteAEvent]` 的 `OrderApplied`/`SetterBegin`/`SetterCompleted` 自洽** | 正常选中场景 `edgeRetries` 语义正确（=授权次数）；**归因以 `[RouteAEvent]` 三方自洽判定（Route A 落地计数只看本渠道）**；`[OrderTraceAgg]` **只**用于验普通执行器与释放后窗口（`ExternalAfterExit`），**不**用作 Route A 落地一致性判据——当前实现下 `[OrderTraceAgg] CombatBrainRouteA` 恒为 `0/o0`，属结构性事实，旧判据「`OrderTraceAgg` 归因与执行器一致」在当前实现下不可满足；`restoreFailures=0`、无异常行 |
+
+> **归因口径裁决（Astra 2026-09-15，裁定 5，方案 A）**：S5 的归因项按上式判定 = 以 `[RouteAEvent]` 的 `OrderApplied/SetterBegin/SetterCompleted` **自洽**（36 条 = 12 次落地×3）验证 Route A 落地；`[OrderTraceAgg]` 仅用于普通执行器与释放后窗口。**只改文档口径、不改码**（冻结令生效中，不新增 `CommandProvenance.Instance.Record` 接线）。旧判据的互斥性已在 `MBmod/CombatAI/tools/cps3r-routea-attribution-gap-report-2026-09-15.md` §4（S5-①）与 `…-attribution-verification-r2-…` 中记录（**该两份已复核报告正文不改**，仅在本表与 `docs/knowledge/CURRENT_STATE.md` 注明「裁定 A 已采纳」）。同时提示：S5 的**归因项**与 S5 的**正向形态**（`ExternalReplaced → EdgeRetry → OrderApplied`，3/3 全负、经裁定 6/7 选①收口）是两个独立缺口。
 
 **判定命令**：
 

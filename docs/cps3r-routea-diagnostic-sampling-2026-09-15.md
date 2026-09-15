@@ -76,9 +76,25 @@ Select-String $env:TEMP\CombatBrain.log -Pattern 'run=6e2a87d2' |
 Select-String $env:TEMP\CombatBrain.log -Pattern '\[RouteA\] run=' | Select-Object -Last 4
 ```
 
-## 8. 不得扩大结论
+## 9. 等价性绑定（Astra 2026-09-15 裁定 2 要求的字段清单）
 
-1. 本轮样本来自**诊断构建**，不等于 r3 DLL 的样本（等价性待 Astra 认定）。
+> 裁定 2：诊断样本**可计入** r3 运行期验收，限定为「**r3 的诊断衍生构建**」，绑定必须含下列字段；**不得称同一 DLL、不得外推原生权重**。
+
+| # | 绑定项 | 值 |
+|---|---|---|
+| 1 | **构建差分** | `395fe13`（r3）→ `a24e921`（诊断衍生构建），链上插入 `38962f5`、`2ba07d6`、`8f8538f`（均为文档/报告类提交）；源码差异面 = 只读探针 `[RouteASilence]`（CB-REPAIR-0005，`a6a4ec5`）+ 输出边界隔离（CB-REPAIR-0006 r1，`a24e921`） |
+| 2 | **DLL SHA（部署态）** | `ADCC641E04231DD628BB80F1FAFF887062D81C76894467D83D394A682AAF397C`（231,424 B；src=dst **MATCH=True**）；**≠ r3 DLL** `7E5FC25A0EF0559D718B0D5E42994141846291501E3342F94E6C0B1F713FD8D6`（228,352 B） |
+| 3 | **run / session** | `run=14ff27b0` s1 / s2 / s3 ＋ `run=6e2a87d2` s1（共 4 场 mission） |
+| 4 | **同配置** | 自定义战斗（`MCM Cps3Mode = E_RouteA`、`Cps3ObserverEnabled` 随 E 武装；每场开局均有 `[SetOrderObserver] 观测已挂载 … prefixes=3`）；**未使用快进**；非部署文件 `SubModule.xml` `67DE43EC…` / `ModuleData/opponent_priors.json` `6697CBD0…` 部署前后 src=dst MATCH（配置面零变化） |
+| 5 | **离线门（1327 / 20 / 4=4）** | OfflineTests **1327 PASS / 0 FAIL**（r3 基线 1297 ⇒ +30）；`RouteAStaticChecks` **20 项 PASS**；生产 setter 站点去 trivia **4 = 4 无新增** |
+| 6 | **异常 0** | 采样窗口 44,497 行内 `Exception` 命中 **0**（§1） |
+| 7 | **回滚事实（限定语）** | 采样后已回滚回 r3（dst SHA = 备份 SHA `7E5FC25A…`；部署 DLL 内 `[RouteASilence]` 字面量 = **False**）⇒ 本节样本属于**已完成并已卸载**的诊断衍生构建 |
+
+**限定（不得扩大）**：① 样本只证明「该诊断衍生构建上」的机制观测，**不得**表述为 r3 DLL 同字节样本；② 不得据该观测外推原生行为权重的数值（候选解释仍为 Inferred，需另取证）；③ 本节的计数与 SHA 事实来源 = `MBmod/CombatAI/tools/CB-REPAIR-0006-部署前核对-2026-09-15.md`（§7 部署执行、§8 采样与回滚）与本件 §1/§2/§6。
+
+## 10. 不得扩大结论
+
+1. 本轮样本来自**诊断构建**，不等于 r3 DLL 的样本；**等价性的认定 = Astra 2026-09-15 裁定 2**（可计入，限定为「r3 的诊断衍生构建」，绑定字段见 §9）。
 2. `activeType=BehaviorCharge` 证明"原生行为在胜出"，**不证明**原生权重的具体数值（候选解释见 §4.4，未验）。
 3. 单次覆盖窗口只有 10s（交付期限）；"窗口内未被选中"**不等于**"永久不可达"。
-4. 本件**不判**条件 5 / CPS-4 / GO，也不据此关闭任何返修卡。
+4. 本件**不判**条件 5 / CPS-4 / GO，也不据此关闭任何返修卡（S5 与关闭条件由 Astra 裁定的 6/7 与本闭环清单承接）。
