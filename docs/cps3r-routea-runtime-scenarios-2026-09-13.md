@@ -369,6 +369,12 @@
 
 **日志归档**：全量快照 `MBmod/CombatAI/logs/CombatBrain-2026-09-14-full-2056.log`（53,009,560 bytes / 407,767 行，SHA256 `7223BB15…`）；本 run 切片 `MBmod/CombatAI/logs/run-4e885a4e-20260914-mixed-battle.log`（403,826 bytes / 1330 行，SHA256 `E3E60C97…`）。
 
+## 3l. 诊断构建运行期采样（2026-09-15，`a24e921`）——**机制问题已由观测确立**
+
+独立档：`docs/cps3r-routea-diagnostic-sampling-2026-09-15.md`。要点：4 场 mission（2 个 run，1949–2032 agents，无快进，窗口 44,497 行**异常 0**）中 **3 次 `ExternalReplaced` 覆盖**；`[RouteASilence]` 共 **14 条**采样拍，**全部**为 `activeIdx=0` / `activeType=BehaviorCharge` / `aiSame=1` / `aiCtl=1` / Route A 侧权重恰一个 `10.00`。⇒ **覆盖后引擎的胜出者是原生 charge 行为，并保持整个 10s 交付窗口**；CB 行为不再被回调（`edgeRetries=0`），由交付期限释放（M4 Δ=9.502s 自覆盖 / 10.002s 自末次选中）。
+
+**本结论替换 §3k 的 Inferred 表述**（§3k 原文保留为历史证据）；§3i/§3j/§3k 的"覆盖后 127.3s / 223s / 2694s 零选中"现象由此获得机制解释。**不得扩大**：样本来自**诊断构建**（≠ r3 DLL，等价性待 Astra 认定）；单窗口未选中 ≠ 永久不可达；本件不判条件 5 / CPS-4 / GO。
+
 ## 4. 本轮未证明（运行期债，不得据本文件判 GO）
 
 1. **可执行的五场场景已全部执行完毕**：场景 1、2、5 = **PASS**；场景 3（玩家接管）、场景 4（Rejoin）与场景 5 子项（拆分）在**本次采样口径下不适用**（§3a/§3b/§3c）——其中 **Rejoin 的成功路径已于 §3j 取得 1 次运行期样本**（失败路径 `NavigationFailed` 仍无样本；不得声称结构上永久不可达）。这不等于"条件 5 已满足"——条件 5 的判定权在 Astra 复审与用户，本文件不判 GO。
