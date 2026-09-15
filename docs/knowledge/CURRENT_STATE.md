@@ -103,7 +103,7 @@ active_task: none（收口执行清单 T1–T10 已完成：口径落修已提�
 
 ## Evidence Pointers
 
-- `docs/cps3r-routea-diagnostic-sampling-2026-09-15.md`（诊断构建 `a24e921` 运行期采样：探针行全量、绑定表、归档 SHA；**Astra 裁定 2 的等价性绑定（差分包）见其 §9**）
+- `docs/cps3r-routea-diagnostic-sampling-2026-09-15.md`（诊断构建 `a24e921` 运行期采样：探针行全量、绑定表、归档 SHA；**Astra 裁定 2 的等价性绑定（差分包）见其 §8**）
 - `MBmod/CombatAI/tools/cps3r-routea-attribution-gap-report-2026-09-15.md`（归因渠道缺环调查报告）+ `…-attribution-verification-r2-…`（独立复核）、`MBmod/CombatAI/tools/cps3r-routea-p2-debt-consolidation-2026-09-15.md` + `…-consolidated-verification-r3-…`（P2 债务合并与复核）——**归因口径 A 已采纳（Astra 2026-09-15），落点在采样表 §2 的 S5 行、`docs/cps4-hardgate-checklist-2026-09-08.md` 的 2026-09-15 更新节、与本节状态档；该两份已复核报告正文不改（其 `:146/:147/:149/:158/:172` 的「待裁/需裁决」表述以本处口径覆盖，属历史证据）。**
 - `MBmod/CombatAI/tools/CB-REPAIR-0006-部署前核对-2026-09-15.md`（§7 部署执行、§8 采样与回滚）
 - `docs/cps3r-routea-runtime-scenarios-2026-09-13.md`（Route A 运行期场景记录：场景 1、2、5 **PASS**；场景 3 与「拆分」采样不适用；Rejoin 成功路径见 **§3j**、失败路径仍无样本；§3c 的 CB-REPAIR-0004 根因与轮次、**§3d 的 r1→r2→r3 SHA 对应与 t12 双向独立复现**、§3e–§3k r3 运行期样本、**§3l 诊断构建采样（机制已由观测确立）**；含 run id、判定命令与体检工具 `MBmod/CombatAI/tools/routea-rejoin-check.ps1`）

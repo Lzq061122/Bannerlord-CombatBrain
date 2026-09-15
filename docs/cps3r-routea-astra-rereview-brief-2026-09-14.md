@@ -266,6 +266,6 @@ dotnet run --project "OfflineTests\OfflineTests.csproj" -c Debug
 
 **裁定后的验证基线**：推进至**生产语义 `395fe13`**；`a24e921`（诊断构建）**另记为等价诊断证据**（限定见上表第 7 项）；**CPS-4 保持 Pending、GO 不通过**。
 
-**Astra 裁定后的现网与归档现状（回填）**：诊断构建 `a24e921`（`ADCC641E…`）完成采样后**已回滚回 r3 `395fe13`**（现网 DLL SHA256 = `7E5FC25A0EF0559D718B0D5E42994141846291501E3342F94E6C0B1F713FD8D6`，228,352 B，与 `E:\MBmod\_backups\CombatBrain-r3-395fe13-7E5FC25A.dll` 一致）；部署 DLL 内 `[RouteASilence]` 字面量 = **False**（探针已随回滚移除）；采样记录见 `docs/cps3r-routea-diagnostic-sampling-2026-09-15.md`（含裁定 2 要求的等价性绑定 §9）。
+**Astra 裁定后的现网与归档现状（回填）**：诊断构建 `a24e921`（`ADCC641E…`）完成采样后**已回滚回 r3 `395fe13`**（现网 DLL SHA256 = `7E5FC25A0EF0559D718B0D5E42994141846291501E3342F94E6C0B1F713FD8D6`，228,352 B，与 `E:\MBmod\_backups\CombatBrain-r3-395fe13-7E5FC25A.dll` 一致）；部署 DLL 内 `[RouteASilence]` 字面量 = **False**（探针已随回滚移除）；采样记录见 `docs/cps3r-routea-diagnostic-sampling-2026-09-15.md`（含裁定 2 要求的等价性绑定 §8）。
 
 **对 §5 的净影响**：九问**全部已裁**，§5 不再是"待裁决"状态；本件的 open 项自本块起仅剩 **P2 三条 + 玩家豁免（GO 前产品口径）**。
