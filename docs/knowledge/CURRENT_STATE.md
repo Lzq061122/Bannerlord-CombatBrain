@@ -74,6 +74,7 @@ active_task: none（收口执行清单 T1–T10 已完成：口径落修已提�
 - `opponent_priors.json` 未随 deploy 拷贝 → 已 fallback 常量表（P1 遗留）。
 - review-findings P1×4 / P2×6 未处理（截至 2026-09-01 清单口径，后续已有 CPS 相关新卡）。
 - `_kb` 镜像修复：Phase A Quarantine 中，留待 Phase E 前修 sync（不删、不重建、不改 sync 脚本）。
+- **收口期独立审计残留（低危，可读性类，Captain 2026-09-15 裁定不阻塞、不在本轮修改）**：①`docs/cps3r-routea-astra-rereview-brief-2026-09-14.md` 的 §5（提问口径）与 §0e（裁定回填）分置两处，属有意历史留存；②P2 存在两套编号（§0e 的 Astra 三条 / 本档的 P2-1…4），已互相锚定；③`MBmod/CombatAI/tools/cps3r-routea-p2-debt-consolidation-2026-09-15.md` 的措辞返修未落（该档属已复核证据，按纪律不改正文）。三项均不支撑任何结论；明细见 `MBmod/CombatAI/tools/astra-ruling-landing-inventory-2026-09-15.md` §4b 与 `…closure-stale-statement-audit-2026-09-15.md`。
 
 ## Known Blockers
 
