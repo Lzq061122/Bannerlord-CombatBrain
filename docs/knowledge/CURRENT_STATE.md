@@ -82,7 +82,9 @@ active_task: none（收口执行清单 T1–T10 已完成：口径落修已提�
 2. **条件 5：Astra 2026-09-15 评审判 PASS，本文件已按裁定登记（裁定 6）。但该 PASS 不推出 CPS-4/GO——CPS-4 保持 Pending、GO 不通过。** Route A 的可执行运行期场景：场景 1、2、5 **PASS**；场景 3（玩家接管）与场景 5 子项（拆分）在**采样口径下不适用**；场景 4（Rejoin）**成功路径已取得运行期样本**（§3j），`NavigationFailed` 失败路径仍无样本（列 P2 运行期债，不得声称结构上永久不可达）；**S5 正向形态按裁定 6/7 选①（接受离线证据 + 本轮机制观测），停止继续等正样本**。详见 `docs/cps3r-routea-runtime-scenarios-2026-09-13.md`。
 3. **CB-REPAIR-0004：已闭环（`COMPLETED`，2026-09-15）**：占位不开火 → r2 被 Astra 判 FAIL/P1（周期重占位，占空比 ≈99.83%）→ **r3 `395fe13` 已消除该机制并经质检 t12 双向独立复现判否（r3 acquires=1、40/100/150s 零重取、执行器 75~93% 连续窗口）**，verdict = pass-with-runtime-debt。**Astra 2026-09-15 裁定具备关闭条件（裁定 7）后，用户授权关闭**：`repair-close` 已执行（`commit=238e31a56dd89f637d057499defb1cd6c0fc34a2`、证据 4 条 PASS、`repair-verify=ALL CONSISTENT`）；验证基线 = 生产语义 `395fe13`；运行期样本 = r3 类构建覆盖事件累计 6 次、S5 正向形态 0 次，按裁定 2/3 认定。**现网 DLL = r3 `395fe13`（`7E5FC25A…`）。**
 4. **路线 A「本场退役」口径（已裁决，J-2；Astra 2026-09-15 复核为忠实实现）**：r3 的预算重置只在「持所有权时真实选中／非超时真实释放／`BeginSession`」发生 ⇒ **预算（≤2 次重取）耗尽后本场不可自愈**（CHURN 实测 acquires 封顶 3）。用户 2026-09-14 **裁决接受**：一场内出现一次坏窗口 = **本场 Route A 退役**；Astra 2026-09-15 确认其实现忠实、无更高规范硬冲突，并把「坏窗口」明确为「**本暂停期两次重取耗尽且无真实选中**」（**不是**"首次超时即退役"）；已写入 `docs/cps4-hardgate-checklist-2026-09-08.md`（2026-09-14 更新节 + 2026-09-15 裁定节）。判定含义：采样中"该场后续无 Route A 活动"属既定语义，不得当作新缺陷；自愈机制另立卡设计（当前 DEFERRED，见裁定 4）。
-5. **口径分歧（属产品/规范裁决项，未裁决、未改代码）**：Route A 的玩家队排除**不受** MCM 开关 `PlayerTeamExemptionEnabled` 约束，与其它 7 个模块口径不一致；当前仅作 Descriptive 记录，冻结令下不擅自收敛。**Astra 2026-09-15 裁定：列为 GO 前的产品口径裁决项**（不阻断 CB-REPAIR-0004）。
+5. **【规范一致性缺陷 · CPS-4 GO 前置项】Route A 玩家队排除未接 MCM 开关 `PlayerTeamExemptionEnabled`**：`CONSTITUTION.md` §7.3（`:163-:166`）要求玩家队豁免「按各功能既有 MCM 开关语义、**语义统一、不逐功能发明**」，而 Route A 路径 grep 该开关 **0 命中**（`RouteAOrderAdapter.cs:159` 把玩家队与真实手动接管信号合并为 `PlayerOwned`；`RouteAControl.cs:55` 无条件 `Exit(PlayerOwned)`；`FormationCommandExecutor.cs:69,123` 同口径）⇒ 开关关闭时玩家队仍被排除。**默认正确路径** = 玩家队受开关控制 + 手动接管信号（`PlayerOwner`/`HasPlayerControlledTroop`/`IsPlayerTroopInFormation`）无条件保护，并拆分退出原因；**维持特例须走显式 Waiver 或改规范**。**已立卡登记（不改码）**：`CB-REPAIR-0008`（`BLOCKED`/冻结期）。来源：外部独立审阅（GPT 2026-09-15）。
+
+6. **【CPS-4 推进剩余项 · 按证据缺口组织】**（用户 2026-09-15 指示推进；外部审阅同意路径但要求维持 Pending/NO-GO）：①**文档类**：条件 14 = ADR 未写（骨架见 `MBmod/CombatAI/CombatBrain CPS-4 推进评估报告-致外部独立审阅-2026-09-15.md` §9），首个扩展域建议 **Facing → Arrangement → 非野战**；②**需新取实机证据**：条件 6（**专指**游戏中玩家手动下令 → CB 1 拍内停且不抢回）、条件 10（攻城 fail-open）、条件 12（当前控制面 500 人复测）；③**先审计既有日志、只补缺失分支**：条件 7（两评估周期恢复、租约清零）、条件 9（对象替换/Index 复用/Mission 结束）；④**先用既有日志做确定性统计**：条件 11（状态不变 2s 内无相反命令）。**样本限制**：诊断衍生构建 `a24e921` 可用于证明机制，但不得称与 r3 同 DLL、**不得用于条件 12 性能结论**。**条件 5 无需重跑 P3**（外部审阅确认，依据已登记于硬门表注释节）。
 6. ~~`docs/` 目录未纳入 Git tracking~~ → 已解决：`AGENTS.md` + `docs/knowledge/` 三个 canonical 文件已纳入 tracking（commit `62502e9`、`d5743dd` 及 Traffic Cutover commit）。既有 CPS 报告是否入库仍待决策（不属本 cutover）。
 
 ## Known Engineering Debt
@@ -113,7 +115,7 @@ active_task: none（收口执行清单 T1–T10 已完成：口径落修已提�
 - `docs/cps3r-routea-final-blocker-report.md`（Route A 收口报告，commit a879688 同源）
 - `docs/cps4-hardgate-checklist-2026-09-08.md`（硬门清单）
 - `docs/cps3r-routea-astra-review-submission-2026-09-08.md`（Astra 复审提交物）
-- `MBmod/CombatAI/prompts/repairs/registry.json`（CB-REPAIR-0001/0002/0003/**0004**/0005/0006 均 `COMPLETED`；**0007 = 覆盖恢复语义重新设计，`BLOCKED`/DEFERRED（Astra 裁定 4，冻结期不改码）**）
+- `MBmod/CombatAI/prompts/repairs/registry.json`（CB-REPAIR-0001/0002/0003/**0004**/0005/0006 均 `COMPLETED`；**0007 = 覆盖恢复语义重新设计，`BLOCKED`/DEFERRED（Astra 裁定 4）**；**0008 = Route A 玩家队豁免未接 `PlayerTeamExemptionEnabled`（CONSTITUTION §7.3 语义统一），`BLOCKED`/冻结期不改码（CPS-4 GO 前置项，GPT 2026-09-15 审阅）**）
 - 测试链：《测试指南.md》（repo 根）— 编译 → 回归 → 部署 → 提交，顺序不得绕过；§0a 为 E 模式采样前置（ObserverEnabled 硬约束）
 
 ## Staleness Notes
