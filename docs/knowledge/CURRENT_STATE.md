@@ -85,7 +85,7 @@ active_task: none（收口执行清单 T1–T10 已完成：口径落修已提�
 5. **【规范一致性缺陷 · CPS-4 GO 前置项】Route A 玩家队排除未接 MCM 开关 `PlayerTeamExemptionEnabled`**：`CONSTITUTION.md` §7.3（`:163-:166`）要求玩家队豁免「按各功能既有 MCM 开关语义、**语义统一、不逐功能发明**」，而 Route A 路径 grep 该开关 **0 命中**（`RouteAOrderAdapter.cs:159` 把玩家队与真实手动接管信号合并为 `PlayerOwned`；`RouteAControl.cs:55` 无条件 `Exit(PlayerOwned)`；`FormationCommandExecutor.cs:69,123` 同口径）⇒ 开关关闭时玩家队仍被排除。**默认正确路径** = 玩家队受开关控制 + 手动接管信号（`PlayerOwner`/`HasPlayerControlledTroop`/`IsPlayerTroopInFormation`）无条件保护，并拆分退出原因；**维持特例须走显式 Waiver 或改规范**。**已立卡登记（不改码）**：`CB-REPAIR-0008`（`BLOCKED`/冻结期）。来源：外部独立审阅（GPT 2026-09-15）。
 
 6. **【CPS-4 推进剩余项 · 按证据缺口组织】**（用户 2026-09-15 指示推进；外部审阅同意路径但要求维持 Pending/NO-GO）：①**文档类**：条件 14 = ADR 未写（骨架见 `MBmod/CombatAI/CombatBrain CPS-4 推进评估报告-致外部独立审阅-2026-09-15.md` §9），首个扩展域建议 **Facing → Arrangement → 非野战**；②**需新取实机证据**：条件 6（**专指**游戏中玩家手动下令 → CB 1 拍内停且不抢回）、条件 10（攻城 fail-open）、条件 12（当前控制面 500 人复测）；③**先审计既有日志、只补缺失分支**：条件 7（两评估周期恢复、租约清零）、条件 9（对象替换/Index 复用/Mission 结束）；④**先用既有日志做确定性统计**：条件 11（状态不变 2s 内无相反命令）。**样本限制**：诊断衍生构建 `a24e921` 可用于证明机制，但不得称与 r3 同 DLL、**不得用于条件 12 性能结论**。**条件 5 无需重跑 P3**（外部审阅确认，依据已登记于硬门表注释节）。
-6. ~~`docs/` 目录未纳入 Git tracking~~ → 已解决：`AGENTS.md` + `docs/knowledge/` 三个 canonical 文件已纳入 tracking（commit `62502e9`、`d5743dd` 及 Traffic Cutover commit）。既有 CPS 报告是否入库仍待决策（不属本 cutover）。
+7. ~~`docs/` 目录未纳入 Git tracking~~ → 已解决：`AGENTS.md` + `docs/knowledge/` 三个 canonical 文件已纳入 tracking（`62502e9`、`d5743dd` 及 Traffic Cutover commit）；**既有 CPS 报告的入库已于 2026-09-15 收口**（CPS-2 研究、CPS-3 运行期 A/B 报告、Route A 收工报告与上一轮 Astra 提交、CPS-4 硬门表，分 4 批提交；历史件均带「历史快照」溯源块）。
 
 ## Known Engineering Debt
 
