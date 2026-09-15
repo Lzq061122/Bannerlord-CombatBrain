@@ -1,7 +1,7 @@
 # CB-REPAIR-0004 r3 受控部署与运行期采样记录（2026-09-14）
 
 > 依据：Astra 2026-09-14 离线回签「离线 PASS、允许进入受控部署采样」。
-> 状态（2026-09-15 更新，Astra 裁定后）：`395fe13` 允许部署测试且**已部署**（现网 r3，`7E5FC25A…`；诊断构建 `a24e921` 采样后已回滚回 r3）；**运行期验收已按 Astra 2026-09-15 裁定 2/3 认定**（诊断衍生构建样本计入）；台账 CB-REPAIR-0004 保持 `IN_PROGRESS`、`review_state=PASSED`（离线通过）——**已具备关闭条件（裁定 7），关闭待用户授权**。
+> 状态（2026-09-15 更新，Astra 裁定后）：`395fe13` 允许部署测试且**已部署**（现网 r3，`7E5FC25A…`；诊断构建 `a24e921` 采样后已回滚回 r3）；**运行期验收已按 Astra 2026-09-15 裁定 2/3 认定**（诊断衍生构建样本计入）；**台账 CB-REPAIR-0004 已于 2026-09-15 关闭（`COMPLETED`，`commit=238e31a5…`，证据 4 条 PASS，`repair-verify=ALL CONSISTENT`）**、`review_state=PASSED`（离线通过）。
 > 约束：**条件 5 经 Astra 2026-09-15 评审判 PASS（裁定 6）**；**CPS-4/GO 仍不批准**（该 PASS 不推出 CPS-4/GO）；最终 GO 前仍须裁决玩家豁免口径（列 GO 前产品口径裁决项）。
 > 本文件是本次采样的**唯一绑定表**：跑完把 run id / 日志交回 Captain 登记；未登记 `run/session` 的采样不算证据。
 
@@ -117,7 +117,7 @@ session=2 关键链：`t=320.027–325.030` 连续选中×11 → **`t=325.529 Ex
 | S3 | **PASS**：Δ=10.005s（自末次选中）/ 9.507s（自覆盖），`Restore` 紧随 |
 | S4 | **PASS（直接）**：释放后 188 次连续 `ExternalAfterExit` 跨越 213.7s |
 | 健康路径（session=1） | `applied=11 / stableSoFar=11`、`lastSelectedAt` 至 657.527s、`Exit`×8 全 `LostAIControl` 且全配对 `Restore`、`weightFlap=0`、`restoreFailures=0`、异常 0 |
-| 归因（新观察） | `[RouteAEvent] source=CombatBrainRouteA` 36 条 = 12 次落地×3，自洽；但 `[OrderTraceAgg]` 两场均 `CombatBrainRouteA=0/o0`、`[OrderTrace]` 31 条中 0 条。结构原因：`RouteAOrderAdapter.cs:33-36` 不调用 `CommandProvenance.Instance.Record`（唯一调用点 `FormationCommandExecutor.cs:147`）→ 需口径裁决，本轮不改码 |
+| 归因（新观察；口径已裁） | `[RouteAEvent] source=CombatBrainRouteA` 36 条 = 12 次落地×3，自洽；但 `[OrderTraceAgg]` 两场均 `CombatBrainRouteA=0/o0`、`[OrderTrace]` 31 条中 0 条。结构原因：`RouteAOrderAdapter.cs:33-36` 不调用 `CommandProvenance.Instance.Record`（唯一调用点 `FormationCommandExecutor.cs:147`）→ **口径已由 Astra 2026-09-15 裁定采用方案 A（只改文档口径、不改码），落点见本档 §2 的 S5 行与 `docs/knowledge/CURRENT_STATE.md`** |
 
 **归档**：全量快照 `logs/CombatBrain-2026-09-14-full-1600.log`（52,159,044 bytes / 402,155 行，SHA256 `D6B80D36…`）；本 run 切片 `logs/run-4156cc25-20260914-twobattles.log`（488,112 bytes / 1594 行，SHA256 `54374180…`）。
 
@@ -177,7 +177,7 @@ Get-Content $env:TEMP\CombatBrain.log -Wait -Tail 200 | Select-String -Pattern '
 1. 记录 `run/session`、MCM 与战斗配置、日志归档路径到本表；
 2. 在 `docs/cps3r-routea-runtime-scenarios-2026-09-13.md` 新增 §3e：本场逐项（S1–S5）判定与证据；
 3. 更新 `docs/knowledge/CURRENT_STATE.md`：运行期证据、条件 5 状态（**仍不判 GO**，由 Astra/用户裁）；
-4. 台账 CB-REPAIR-0004 仍保持 `IN_PROGRESS`——**只有运行期验收齐备 + Astra 复核通过才可 `repair-close`**。
+4. 台账 CB-REPAIR-0004 当时要求保持 `IN_PROGRESS`——**已于 2026-09-15 由 Captain 执行 `repair-close`（运行期验收按 Astra 裁定 2/3 认定 + 裁定 7 认定具备关闭条件 + 用户授权），现为 `COMPLETED`（`commit=238e31a5…`、证据 4 条 PASS、`repair-verify=ALL CONSISTENT`）**。
 
 ## 4. 非阻断待整理（P2，Astra 标注）
 

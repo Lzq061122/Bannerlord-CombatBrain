@@ -29,7 +29,7 @@ active_task: none（收口执行清单 T1–T10 已完成：口径落修已提�
 
 ## Current Phase
 
-- **CPS-3R Route A 已修复并部署**（代码基线 `9a2afe4`；部署校验 src/dst SHA 一致，`Modules\CombatBrain`；游戏进程退出硬门通过）。
+- **CPS-3R Route A 已修复并部署**（部署校验 src/dst SHA 一致，`Modules\CombatBrain`；游戏进程退出硬门通过；**验证基线以 `last_verified_commit` 为准 = 生产语义 `395fe13`，上一已验基线 `9a2afe4`**）。
 - **Astra 2026-09-15 复审裁定：证据链 PASS**（探针 P1 已闭、无代码阻断）。九项裁定要点：①诊断构建样本**可计入** r3 运行期验收，限定为「**r3 的诊断衍生构建**」，绑定须含 `395fe13→a24e921` 差分 / DLL SHA / run·session / 同配置 / 1327/20/4=4 / 异常 0（**不得称同一 DLL、不得外推原生权重**）；②**S5 选①**——接受「离线证据 + 本轮机制观测」替代，**停止继续等正样本**，无需先取原生权重；③覆盖恢复语义另立设计决策卡且列 **DEFERRED**（冻结期不授权改码，不阻断本轮收口）；④**归因口径选 A**（只改文档口径：S5 归因改为以 `[RouteAEvent]` 的 `OrderApplied/SetterBegin/SetterCompleted` 自洽验 Route A，`[OrderTraceAgg]` 只验普通执行器与释放后窗口）；⑤**条件 5 本评审判 PASS**，但账面在文档落修前保持未通过，**不推出 CPS-4/GO**；⑥`CB-REPAIR-0004` **已具备关闭条件**，验证基线推进至生产语义 `395fe13`、`a24e921` 另记等价诊断证据，**CPS-4 保持 Pending**；⑦J-2 实现忠实、无更高规范硬冲突，「坏窗口」定义为「**本暂停期两次重取耗尽且无真实选中**」（不是"首次超时即退役"）；⑧玩家豁免列 GO 前产品口径裁决，`NavigationFailed`、J-3/J-4 列 **P2** 运行期/工程债，不阻断 0004。
 - **运行期验证（可执行场景已全部完成）**：场景 1（E_RouteA 采样）重跑 **未复现**「被外部覆盖后长时间不重落地」缺陷（`ExternalReplaced` → 5.00s 内 `EdgeRetry` → `OrderApplied`）；场景 2（战斗中热关闭）**PASS**（`Exit(Disabled)` + `Restore`，`restoreFailures=0`，关闭后无重新武装）；场景 5（增援/清空）**PASS**（run `b0e2e0a4`：6 次 Exit 全部配对 Restore，含 3 次 `LostAIControl`、1 次 `EmptyOrInvalid`；`restoreFailures=0`、`weightFlap=0`；每次退出后重新 `OrderApplied`；`identity` 恒为 1 = 同一对象重挂载）。**场景 3、4 与场景 5 子项「拆分」在本次采样口径下不适用（§3a/§3b/§3c）；其中 Rejoin 成功路径已于 2026-09-14 取得 1 次运行期样本（§3j，`run=4156cc25` session=1），但 `NavigationFailed` 失败路径仍无样本——不得声称结构上永久不可达。** **注意**：场景 5 采样使用了游戏快进与低 BattleSize，响应延迟不构成证据。
 - **Astra 离线回签（2026-09-14，历史块）**：CB-REPAIR-0004 r3（`395fe13`）**离线复审通过、允许进入受控部署采样**；该块当时记录「尚未取得运行期验收、条件 5 仍未满足、CPS-4/GO 不批准」——**运行期验收与条件 5 的状态已由 2026-09-15 复审更新（见上方 Current Phase 裁定块）**；**CPS-4/GO 仍不批准**（未变）。最终 GO 前仍须裁决**玩家豁免口径**（产品/规范事项）。非阻断待整理（P2）：重试事件 revision 配对；t12 源码不可重建。
@@ -66,7 +66,7 @@ active_task: none（收口执行清单 T1–T10 已完成：口径落修已提�
 - **CB-REPAIR-0002**（`a219c5b`）：`externalDuration` 口径统一为「最后一次外部覆盖时间结算」；F-2 覆盖释放语义裁决并在测试中锁定。
 - **CB-REPAIR-0003**（`9a2afe4`）：`RouteAExecutionEnabled()` 增加 `&& ObserverEnabled` 硬约束（E 模式无观测不执行）。
 - 离线回归基线：**1241 PASS / 0 FAIL 实测**（2026-09-13 口径，只增不减；历史 1174 为过期口径）。
-- 部署：代码基线 `9a2afe4` 已部署（src/dst SHA 一致）；**2026-09-14 09:34 起现网 DLL 更新为 r3 `395fe13`（`7E5FC25A…`，src=dst）**，用于本轮受控部署采样。
+- 部署：**现网 DLL = r3 `395fe13`（`7E5FC25A…`，src=dst SHA 一致；2026-09-14 09:34 首次部署；2026-09-15 诊断构建 `a24e921` 采样后已回滚回本 DLL）**；更早部署为上一基线 `9a2afe4`（src/dst 一致）。诊断构建样本按 Astra 裁定 2 计入运行期验收（限定为「r3 的诊断衍生构建」）。
 
 ## Frozen / Deferred
 
@@ -104,7 +104,7 @@ active_task: none（收口执行清单 T1–T10 已完成：口径落修已提�
 ## Evidence Pointers
 
 - `docs/cps3r-routea-diagnostic-sampling-2026-09-15.md`（诊断构建 `a24e921` 运行期采样：探针行全量、绑定表、归档 SHA；**Astra 裁定 2 的等价性绑定（差分包）见其 §9**）
-- `MBmod/CombatAI/tools/cps3r-routea-attribution-gap-report-2026-09-15.md`（归因渠道缺环调查报告）+ `…-attribution-verification-r2-…`（独立复核）、`MBmod/CombatAI/tools/cps3r-routea-p2-debt-consolidation-2026-09-15.md` + `…-consolidated-verification-r3-…`（P2 债务合并与复核）——**归因口径 A 已采纳，落点在采样表 §2 与状态档（勿改已复核报告正文）**
+- `MBmod/CombatAI/tools/cps3r-routea-attribution-gap-report-2026-09-15.md`（归因渠道缺环调查报告）+ `…-attribution-verification-r2-…`（独立复核）、`MBmod/CombatAI/tools/cps3r-routea-p2-debt-consolidation-2026-09-15.md` + `…-consolidated-verification-r3-…`（P2 债务合并与复核）——**归因口径 A 已采纳（Astra 2026-09-15），落点在采样表 §2 的 S5 行、`docs/cps4-hardgate-checklist-2026-09-08.md` 的 2026-09-15 更新节、与本节状态档；该两份已复核报告正文不改（其 `:146/:147/:149/:158/:172` 的「待裁/需裁决」表述以本处口径覆盖，属历史证据）。**
 - `MBmod/CombatAI/tools/CB-REPAIR-0006-部署前核对-2026-09-15.md`（§7 部署执行、§8 采样与回滚）
 - `docs/cps3r-routea-runtime-scenarios-2026-09-13.md`（Route A 运行期场景记录：场景 1、2、5 **PASS**；场景 3 与「拆分」采样不适用；Rejoin 成功路径见 **§3j**、失败路径仍无样本；§3c 的 CB-REPAIR-0004 根因与轮次、**§3d 的 r1→r2→r3 SHA 对应与 t12 双向独立复现**、§3e–§3k r3 运行期样本、**§3l 诊断构建采样（机制已由观测确立）**；含 run id、判定命令与体检工具 `MBmod/CombatAI/tools/routea-rejoin-check.ps1`）
 - `MBmod/CombatAI/prompts/active/CombatBrain-CB-REPAIR-0004-r3-周期重占位返修派单-2026-09-14.md`（r3 派单，registry CB-PROMPT-0041）
@@ -116,7 +116,7 @@ active_task: none（收口执行清单 T1–T10 已完成：口径落修已提�
 
 ## Staleness Notes
 
-- 本文件状态验证到代码基线 **`395fe13`（Astra 2026-09-15 裁定后的生产语义基线）**。若 Git HEAD 前进至新 commit 且未完成新验证 → 本文件**不自动**把新 HEAD 当已验证状态；应回报 `state may be stale / repository advanced beyond last verified baseline`。**当前 HEAD（`66c72e6`）已超出该基线，其间的提交为文档/状态类（汇报件 §0c/§0e、诊断采样档、运行场景 §3l、收口口径落修与状态同步），不含新的产品代码语义——`a24e921` 为诊断衍生构建（已在裁定 2 的限定下记为等价诊断证据）；CB-REPAIR-0004 r1 `723b457`／r2 `bc8449a` 既未部署也未运行期验证，不得当作已验证状态；其中 r2 的早期同标题提交 `6f632ae` 已被 amend 取代、不在祖先链。**
+- 本文件状态验证到代码基线 **`395fe13`（Astra 2026-09-15 裁定后的生产语义基线）**。**注：本节不逐提交跟踪 HEAD**——2026-09-15 收口期间 HEAD 多次前移（`30e299e`/`238e31a`/`66c72e6`/`399bce4`/后续文档提交），均为**文档与状态类**提交、不含新产品代码语义；核对时以 `git log` 与本节口径为准，不把更新的 HEAD 当已验证代码状态。若 Git HEAD 前进且含**产品代码**语义变更而未完成新验证 → 本文件**不自动**把新 HEAD 当已验证状态；应回报 `state may be stale / repository advanced beyond last verified baseline`。`a24e921` 为诊断衍生构建（已在裁定 2 的限定下记为等价诊断证据）；CB-REPAIR-0004 r1 `723b457`／r2 `bc8449a` 既未部署也未运行期验证，不得当作已验证状态；其中 r2 的早期同标题提交 `6f632ae` 已被 amend 取代、不在祖先链。
 - 运行期部分覆盖场景 1、2、5 与采样不适用项（场景 3 及「拆分」；Rejoin 成功路径已取样、失败路径未验证）；场景 5 采样含游戏快进与低 BattleSize，其数字不得与实时场次混比；诊断构建样本仅在裁定 2 的限定下计入；任何「Route A 运行期已验证」的表述都必须同时限定场次、构建与采样条件。
 - 维护责任：Captain / Integration Owner 唯一直接维护；普通 Sub-agent 只能提建议与 evidence。
 - 本文件由 MBmod manager 按 v1.1 Phase A 规范代建（2026-09-09），后续归属 Captain / Integration Owner。
