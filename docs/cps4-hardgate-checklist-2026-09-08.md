@@ -95,3 +95,12 @@
 - **CPS-4 重建基线前置**：重建归因基线时**必须显式写明「Route A 不进渠道①（provenance 聚合）」**，否则会把 CombatBrain 自己的 Route A 写入记为 0（即成"非 CB"），与 `CONSTITUTION.md` §7.1 的归因纪律方向相反。同理，CPS-4 条件 13（区分控制权问题与战术逻辑问题）不得把 `[OrderTraceAgg]` 当 Route A 的控制权指标。
 - **P2（不阻断，Astra 2026-09-15 列项）**：重试事件 revision 配对；t12 源码不可重建；`NavigationFailed` 失败路径无样本；J-3/J-4 低危未修；引擎侧「为何停止选中」的原生权重候选解释仍为 Inferred（未取证）。
 - **未决裁决项（GO 前必裁，产品口径）**：Route A 的玩家队排除**不受** MCM 开关 `PlayerTeamExemptionEnabled` 约束，与其它 7 个模块口径不一致。
+
+## 2026-09-16 更新：条件 14 文档面（ADR-0005 已落盘）
+
+> 与上文核验总表、`2026-09-14 更新`、`2026-09-15 更新` 三节并列的增量口径；判定时以本节 + `docs/knowledge/CURRENT_STATE.md` 为准。**上文 `2026-09-08` 快照原样保留**（其核验总表第 14 行「⏳ ADR 文档未写」属快照内容，按本件快照口径不改写）；**条件 14 的现行口径以本节为准**。
+
+- **事实**：ADR **已落盘** —— `docs/adr/ADR-0005-cps-execution-architecture-2026-09-15.md`（10,291 B / SHA256 `8D58553349CE8F746147FCA729F1461EBC15FFC2B3E53A9E1EAE3883A66970D2`，2026-09-16 本机实测），并已登记于 `docs/adr/README.md`。
+- **内容要点（逐字核对）**：`:3` 状态 = `PROPOSED`，且明写「**启用仍以 CPS-4 GO 为前置**；本 ADR 不得被用来替代 GO 判定」；`:12` 选定混合架构（**路线 A 为默认主路径** + **执行器仲裁**承接 Facing/Arrangement + **路线 B 退居窄域保险丝**）；`:13` **首个扩展域 = `Facing`**（顺序 `Facing → Arrangement → 非野战场景`）；`:108` 「用户批准后置 `ACCEPTED`」。
+- **条件 14 判定口径**：文档面**已具备**（ADR 存在、含架构选定与首个扩展域）。但 **`PROPOSED` ≠ GO**、ADR **不替代** GO 判定、其启用本身以 CPS-4 GO 为前提 ⇒ **条件 14 不因 ADR 落盘而单独影响 GO 结论**；CPS-4 维持 **Pending / GO 不通过**。
+- **与本件其它节的接口**：本节只更新条件 14 的文档面事实；玩家豁免规范一致性（上文「未决裁决项」）仍未决，属 CPS-4 GO 前置项，见 `docs/knowledge/CURRENT_STATE.md` Blocker 5 与 `CB-REPAIR-0008`。
