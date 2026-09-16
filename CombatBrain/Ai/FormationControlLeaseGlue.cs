@@ -431,6 +431,14 @@ namespace CombatBrain.Ai
                 CombatLog.Log(string.Format(
                     "[ControlLease] team={0} f={1} state=Release ai={2} release={3}",
                     team.TeamIndex, f.Index, acquiredByCb ? 1 : 0, d.ReleaseReason));
+                // t3 只读诊断（授权两行之一）：租约 Release 事件行 —— 补「租约释放/清零」可观测性
+                //   （gap-audit-2026-09-15 条件7：原日志只有 state=Release 快照，无 event= 释放事件、无 session/mission 时间基准）。
+                //   仅新增日志语句：不改控制流、不新增状态、不新增任何命令下发或控制权变更调用点；
+                //   沿用现有 [ControlLease] 通道与既有 Release 边沿防抖（_loggedRelease）。
+                CombatLog.Log(string.Format(
+                    "[ControlLease] event=Release path=Decision reason={0} team={1} f={2} session={3} missionTime={4:F3}",
+                    d.ReleaseReason, team.TeamIndex, f.Index, CbRouteAPoC.Control.Evidence.Session,
+                    mission != null ? mission.CurrentTime : -1f));
             }
         }
 
@@ -459,6 +467,12 @@ namespace CombatBrain.Ai
             }
             CombatLog.Log(string.Format(
                 "[ControlLease] team={0} f={1} state=ExpiredRelease release={2}", teamIndex, formationId, reason));
+            // t3 只读诊断（授权两行之一）：同一 Release 事件行的第二处发射点 —— 覆盖 watchdog TTL /
+            //   POC 开关关闭 / ReleaseAll(Clear, Mission 结束) 三条强制释放路径（gap-audit-2026-09-15 条件7 的「租约清零」）。
+            //   仅新增日志语句，不改控制流、不新增状态；沿用现有 [ControlLease] 通道（与上一行同一释放时刻）。
+            CombatLog.Log(string.Format(
+                "[ControlLease] event=Release path=Forced reason={0} team={1} f={2} session={3} missionTime={4:F3}",
+                reason, teamIndex, formationId, CbRouteAPoC.Control.Evidence.Session, mission.CurrentTime));
         }
 
         // atc5r-fix P1：外部/玩家接管判定（PlayerOwner/HasPlayerControlledTroop/IsPlayerTroopInFormation 无条件；

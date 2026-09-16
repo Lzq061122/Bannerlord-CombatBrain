@@ -176,6 +176,9 @@ namespace OfflineTests
             Console.WriteLine("== atc5r-lease FormationControlLease ==");
             TestFormationControlLease();
 
+            Console.WriteLine("== t3 diagnostic two lines ==");
+            TestT3DiagnosticLiterals();
+
             Console.WriteLine("== N2 NarrativeEvents ==");
             TestNarrativeEvents();
 
@@ -5058,6 +5061,32 @@ namespace OfflineTests
             });
             Check(noObj.Permission == CommitmentPermission.Hold && (noObj.Reasons & CommitmentReason.NoArmyObjective) != 0,
                 "atc4-int sample4 objective gone -> Hold/NoArmyObjective (P1-5 无残留)");
+        }
+
+        // t3（授权两行只读诊断，2026-09-15 用户授权）：锁定新增租约 Release 事件行的输出字段齐全。
+        // 说明：FormationControlLeaseGlue 依赖 Mission/Team/Formation 游戏对象，未 link 进本工程，
+        // 因此用源码文本锁定（自 AppDomain.BaseDirectory 向上定位仓库根的 CombatBrain/Ai/FormationControlLeaseGlue.cs），
+        // 断言两条发射点的日志格式串均含 event/path/reason/team/f/session/missionTime 全部字段。
+        private static void TestT3DiagnosticLiterals()
+        {
+            string path = null;
+            System.IO.DirectoryInfo dir = new System.IO.DirectoryInfo(AppDomain.CurrentDomain.BaseDirectory);
+            for (int i = 0; i < 8 && dir != null; i++)
+            {
+                string candidate = System.IO.Path.Combine(dir.FullName, "CombatBrain", "Ai", "FormationControlLeaseGlue.cs");
+                if (System.IO.File.Exists(candidate)) { path = candidate; break; }
+                dir = dir.Parent;
+            }
+            Check(path != null, "t3 glue source located for diagnostic literal lock");
+            if (path == null) return;
+
+            string src = System.IO.File.ReadAllText(path);
+            Check(src.Contains("[ControlLease] event=Release path=Decision reason={0} team={1} f={2} session={3} missionTime={4:F3}"),
+                "t3 release event line (Decision path) has all fields");
+            Check(src.Contains("[ControlLease] event=Release path=Forced reason={0} team={1} f={2} session={3} missionTime={4:F3}"),
+                "t3 release event line (Forced path) has all fields");
+            Check(src.Contains("CbRouteAPoC.Control.Evidence.Session"),
+                "t3 release event line carries the Route A session identifier");
         }
 
         // ATC-5R 编队控制权租约状态机（纯逻辑）：§8 四组 ≥30 断言。
