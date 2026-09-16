@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Diagnostics;
 using System.IO;
 using System.Text;
@@ -24,15 +24,38 @@ namespace CombatBrain
         private static Timer _flushTimer;
         private static bool _hooksInstalled;
 
+        // t28（用户 2026-09-16 授权 · 仅日志出口 plumbing）：输出路径**可覆盖 / 可关闭**。
+        //   背景（t26 归因）：本类静态构造把路径硬编码为 %TEMP%\CombatBrain.log，游戏与离线测试进程
+        //   共用同一 append-only 文件 ⇒ 离线用例产出（如 [RouteAOwnership] 夹具行）混入取证日志。
+        //   OverridePath：非空 ⇒ 写入该路径（离线 harness 指向 CombatBrain-offline.log）；
+        //   Disabled：true ⇒ 完全关闭输出（含 flush 钩子）；
+        //   环境变量 COMBATBRAIN_LOG_PATH：进程启动级覆盖（不改默认行为）。
+        //   注意：默认路径与既有行为**不变**；本改动不触碰任何判定逻辑。
+        public static string OverridePath;
+        public static bool Disabled;
+
         static CombatLog()
         {
             try { _logPath = Path.Combine(Path.GetTempPath(), "CombatBrain.log"); }
             catch { _logPath = null; }
+            try
+            {
+                string env = Environment.GetEnvironmentVariable("COMBATBRAIN_LOG_PATH");
+                if (!string.IsNullOrEmpty(env)) OverridePath = env;
+            }
+            catch { }
+        }
+
+        // 有效输出路径：关闭 ⇒ null（调用方直接返回，零 IO）；覆盖优先于默认。
+        private static string EffectivePath()
+        {
+            if (Disabled) return null;
+            return string.IsNullOrEmpty(OverridePath) ? _logPath : OverridePath;
         }
 
         public static void Log(string message)
         {
-            if (_logPath == null) return;
+            if (EffectivePath() == null) return;
             try
             {
                 lock (_lock)
@@ -49,7 +72,7 @@ namespace CombatBrain
         // 落盘残余缓冲（幂等，空缓冲无 IO；供进程退出钩子与未来显式调用点使用）
         public static void Flush()
         {
-            if (_logPath == null) return;
+            if (EffectivePath() == null) return;
             try { lock (_lock) { FlushInternal(); } }
             catch { }
         }
@@ -57,11 +80,13 @@ namespace CombatBrain
         private static void FlushInternal()
         {
             if (_buffer.Length == 0) return;
+            string path = EffectivePath();
+            if (path == null) { _buffer.Clear(); return; } // 已关闭：丢弃缓冲，避免下次误写到默认路径
             // 日志增强：UTF-8 with BOM 落盘——PowerShell Get-Content 默认按 BOM 识别编码，
             // 消除中文乱码（楠戝叺缂栭槦/澹皵 等，原为无 BOM 被 ANSI/GBK 误读）。
             // 注：BOM 仅在文件新建/为空时写入一次（AppendAllText 追加模式不重复写 BOM）；
             // 旧的无 BOM 日志文件删除后即以新编码重建。
-            File.AppendAllText(_logPath, _buffer.ToString(), _utf8Bom);
+            File.AppendAllText(path, _buffer.ToString(), _utf8Bom);
             _buffer.Clear();
         }
 

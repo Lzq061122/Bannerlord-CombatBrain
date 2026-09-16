@@ -1,4 +1,4 @@
-namespace CombatBrain.Coordination
+﻿namespace CombatBrain.Coordination
 {
     // atc4-snapshot-optimization OPT-4：Mission 状态生命周期（MissionStateLifecycle）——跨 Mission 静态/实例
     //   状态幂等清理的单一入口（有限拆分自 CombatAiMissionLogic.ClearMissionStaticState）。
@@ -16,7 +16,42 @@ namespace CombatBrain.Coordination
             CombatBrain.Ai.InGameFeedback.ClearAll();
             if (opponent != null) opponent.ClearAll();
             if (attackSuppression != null) attackSuppression.ClearAll(); // 联动清 _suppressedAttack（静态集合）
-            if (leaseGlue != null) leaseGlue.ReleaseAll(mission, LeaseReleaseReason.MissionEnding); // ATC-5R 租约幂等释放
+            if (leaseGlue != null)
+            {
+                // t28（用户 2026-09-16 授权 · 只读遥测，1 行）：Mission 边界租约清零**逐次可观测**。
+                //   背景（t26 归因）：M6-2 边界第 2 次租约静默清零，窗口内无任何 state=Release/event=Release 行，
+                //   故在此处以只读快照（HasActiveLease/ActiveCount）记录**被清零的 (team,f) 集合**与 reason。
+                //   仅查询 + 1 行日志：不改清理顺序、不改任何判定、不新增命令下发或控制权变更调用点。
+                string cleared = LeaseSet(leaseGlue, mission);
+                int activeBefore = leaseGlue.ActiveCount;
+                leaseGlue.ReleaseAll(mission, LeaseReleaseReason.MissionEnding); // ATC-5R 租约幂等释放
+                CombatLog.Log(string.Format(System.Globalization.CultureInfo.InvariantCulture,
+                    "[ControlLease] clear path=MissionStateLifecycle reason={0} activeBefore={1} activeAfter={2} cleared={3}",
+                    LeaseReleaseReason.MissionEnding, activeBefore, leaseGlue.ActiveCount, cleared));
+            }
+        }
+
+        // t28：只读快照——当前持有租约的 (team,f) 集合（"team:f,team:f" / "none" / "mission=null"）。
+        private static string LeaseSet(CombatBrain.Ai.FormationControlLeaseGlue glue, TaleWorlds.MountAndBlade.Mission mission)
+        {
+            if (mission == null) return "mission=null";
+            var sb = new System.Text.StringBuilder();
+            try
+            {
+                foreach (TaleWorlds.MountAndBlade.Team team in mission.Teams)
+                {
+                    if (team == null || !team.MBTeam.IsValid) continue;
+                    foreach (TaleWorlds.MountAndBlade.Formation f in team.FormationsIncludingEmpty)
+                    {
+                        if (f == null) continue;
+                        if (!glue.HasActiveLease(team.TeamIndex, f.Index)) continue;
+                        if (sb.Length > 0) sb.Append(',');
+                        sb.Append(team.TeamIndex).Append(':').Append(f.Index);
+                    }
+                }
+            }
+            catch { return "unreadable"; }
+            return sb.Length == 0 ? "none" : sb.ToString();
         }
     }
 }
