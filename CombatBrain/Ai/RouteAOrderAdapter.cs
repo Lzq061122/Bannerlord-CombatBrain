@@ -125,7 +125,25 @@ namespace CombatBrain.Ai
             Control.BeginSession(mission, Now);
             SetOrderObserver.RouteAEvidenceSink = Control.Evidence;
             Control.Evidence.SilenceObserved = LogSilenceProbe;
+            // t23（用户 2026-09-16 授权 · 只读遥测）：给 RouteAControl 的 Release 边沿注入触发项文本探针
+            //   （RouteAControl 不依赖 TaleWorlds 类型，故由适配器注入；仅日志，不参与判定）。
+            Control.ReleaseGateText = () => GateText(Enabled);
         }
+
+        // t23（用户 2026-09-16 授权 · 只读遥测）：Disabled / 退出边沿的触发项布尔量文本。
+        //   用途：归因 `Exit reason=Disabled`（M5 实机中出现，触发项在既有日志上不可判）。
+        public static string GateText(bool routeOn)
+        {
+            Mission m = Mission.Current;
+            bool ending = m != null && (m.MissionIsEnding || m.IsMissionEnding);
+            return string.Format(CultureInfo.InvariantCulture,
+                "enabled={0} mode={1} routeAEnabled={2} observerEnabled={3} ended={4} missionEnding={5} routeOn={6}",
+                Enabled ? 1 : 0, (int)Cps3RuntimeSettings.Mode, Cps2PoCSettings.RouteAEnabled ? 1 : 0,
+                Cps3RuntimeSettings.ObserverEnabled ? 1 : 0, _ended ? 1 : 0, ending ? 1 : 0, routeOn ? 1 : 0);
+        }
+
+        // t23：只读访问器（供 MissionLogic 的 Disabled 分支复用同一口径）。
+        public static bool Ended { get { return _ended; } }
         public static void ResetAll()
         {
             // Mission.Current 可能已经指向下一场；退出事件保留旧 Mission 的时间基准。
@@ -158,6 +176,12 @@ namespace CombatBrain.Ai
                 e.AiControlled = f.IsAIControlled;
                 e.PlayerOwned = f.Team == null || f.Team.IsPlayerTeam || f.PlayerOwner != null
                     || f.HasPlayerControlledTroop || f.IsPlayerTroopInFormation;
+                // t23（用户 2026-09-16 授权 · 只读遥测）：把归属原始输入分开落进结构体，仅供日志出口；
+                //   不参与任何判定（Rejection 仍只用上面 8 个字段）⇒ 零行为变更。
+                e.PlayerOwnerSet = f.PlayerOwner != null;
+                e.HasPlayerControlledTroop = f.HasPlayerControlledTroop;
+                e.IsPlayerTroopInFormation = f.IsPlayerTroopInFormation;
+                e.PlayerTeam = f.Team == null || f.Team.IsPlayerTeam;
                 e.Infantry = f.QuerySystem != null && f.QuerySystem.IsInfantryFormation;
             }
             catch (Exception) { e.Present = false; }
@@ -200,7 +224,12 @@ namespace CombatBrain.Ai
             try
             {
                 RouteAEligibility e = Eligibility(f, Mission.Current);
-                if (e.Rejection != RouteAExit.None) { Control.Release(e.Rejection, Now); return false; }
+                if (e.Rejection != RouteAExit.None)
+                {
+                    // t28：归属行已下移到 Control.Release 总出口（见 RouteAControl.Release），此处不再单独打点。
+                    Control.Release(e.Rejection, Now);
+                    return false;
+                }
                 Cps2RouteAIntent intent = Cps2RouteAPolicy.MapFormationToIntent(
                     missionIntent == FormationMission.Retreat, (int)missionIntent, phase);
                 RouteAHandle h = EnsureBehaviors(f);

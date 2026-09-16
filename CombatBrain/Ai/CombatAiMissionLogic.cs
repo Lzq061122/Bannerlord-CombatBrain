@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Runtime.CompilerServices;
@@ -2377,6 +2377,13 @@ namespace CombatBrain.Ai
             CbRouteAPoC.Reconcile(mission);
             if (!routeOn || mission == null)
             {
+                // t23（用户 2026-09-16 授权 · 只读遥测）：Disabled 触发项布尔量（enabled/mode/RouteAEnabled/
+                //   ObserverEnabled/ended/missionEnding + routeOn）。仅在**真实释放边沿**（Target != null）
+                //   输出，避免该分支每帧命中时刷屏；仅日志，不改控制流、不下发任何命令。
+                if (CbRouteAPoC.Control.Evidence.Capture && CbRouteAPoC.Control.Target != null)
+                    CombatLog.Log(string.Format(System.Globalization.CultureInfo.InvariantCulture,
+                        "[RouteAExitGate] where=DisabledBranch session={0} missionTime={1:F3} {2}",
+                        CbRouteAPoC.Control.Evidence.Session, CbRouteAPoC.Now, CbRouteAPoC.GateText(routeOn)));
                 CbRouteAPoC.Control.Release(RouteAExit.Disabled, CbRouteAPoC.Now);
                 return;
             }

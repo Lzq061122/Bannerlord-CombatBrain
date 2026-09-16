@@ -32,8 +32,8 @@ namespace CombatBrain.Ai
         private float _sinceTick;   // producer 0.5s 节拍
         private float _logTimer;    // [ControlLease] 5s 汇总兜底
         private readonly Dictionary<long, string> _lastFallback = new Dictionary<long, string>(); // 边沿日志防抖（每租约上次 fallback）
-        private readonly HashSet<long> _loggedAcquire = new HashSet<long>();  // Acquire 边沿只记一次
-        private readonly HashSet<long> _loggedRelease = new HashSet<long>();  // Release 边沿只记一次
+        private readonly HashSet<long> _loggedAcquire = new HashSet<long>();  // 保留：t23 起仅作边沿键登记，不再门控日志
+        private readonly HashSet<long> _loggedRelease = new HashSet<long>();  // 保留：t23 起仅作边沿键登记，不再门控日志
         // atc5r-fix OPT：watchdog 过期租约复用缓冲（每帧 Clear 复用，无租约时零分配）
         private readonly List<KeyValuePair<int, int>> _expiredBuffer = new List<KeyValuePair<int, int>>();
 
@@ -399,8 +399,9 @@ namespace CombatBrain.Ai
                 }
             }
 
-            // Acquire 边沿日志（只记一次；permission/reason 从 lease 快照）
-            if (_loggedAcquire.Add(key))
+            // Acquire 边沿日志（t23：**每一次** Acquire 边沿都记录；原「每 (team,f) 每 Mission 只记一次」
+            //   去抖已按用户 2026-09-16 授权解除，使逐次 Acquire/Release 边缘可观测。仅边沿记录 + 保留既有
+            //   5 s 汇总，故不引入每帧刷日志；见 tools/cps4-telemetry-card-2026-09-16.md §2b）
             {
                 string permName = lease.SafeCommandKind == SafeFallbackKind.Rejoin ? "Denied" : "Hold";
                 CombatLog.Log(string.Format(
@@ -426,15 +427,15 @@ namespace CombatBrain.Ai
                 f.SetControlledByAI(true); // 无损恢复原生 AI（§5.3：仅已 Acquire 且外部未接管的编队）
             }
             _lastFallback.Remove(key);
-            if (_loggedRelease.Add(key))
+            // t23：Release 边沿改为**每一次**都记录（去抖已按用户 2026-09-16 授权解除）。
             {
                 CombatLog.Log(string.Format(
                     "[ControlLease] team={0} f={1} state=Release ai={2} release={3}",
                     team.TeamIndex, f.Index, acquiredByCb ? 1 : 0, d.ReleaseReason));
                 // t3 只读诊断（授权两行之一）：租约 Release 事件行 —— 补「租约释放/清零」可观测性
                 //   （gap-audit-2026-09-15 条件7：原日志只有 state=Release 快照，无 event= 释放事件、无 session/mission 时间基准）。
-                //   仅新增日志语句：不改控制流、不新增状态、不新增任何命令下发或控制权变更调用点；
-                //   沿用现有 [ControlLease] 通道与既有 Release 边沿防抖（_loggedRelease）。
+                //   仅新增日志语句：不改控制流、不新增状态、不新增任何命令下发或控制权变更调用点。
+                //   t23（用户授权）起不再受「每 (team,f) 每 Mission 只记一次」去抖限制 ⇒ 逐次释放均可观测。
                 CombatLog.Log(string.Format(
                     "[ControlLease] event=Release path=Decision reason={0} team={1} f={2} session={3} missionTime={4:F3}",
                     d.ReleaseReason, team.TeamIndex, f.Index, CbRouteAPoC.Control.Evidence.Session,

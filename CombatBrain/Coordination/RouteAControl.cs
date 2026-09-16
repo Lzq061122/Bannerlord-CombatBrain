@@ -1,6 +1,7 @@
 namespace CombatBrain.Coordination
 {
     using System;
+    using System.Globalization;
 
     // Route A 的单槽对象注册表。对象引用而非 Index/哈希决定身份；同一实例用于生产和离线回归。
     public interface IRouteAWeights
@@ -44,6 +45,9 @@ namespace CombatBrain.Coordination
     public struct RouteAEligibility
     {
         public bool Enabled, FieldBattle, Present, Alive, AiControlled, PlayerOwned, Infantry, ForcedTick;
+        // t23（用户 2026-09-16 授权 · 只读遥测）：控制权归属的**原始输入**，仅供日志出口使用。
+        //   不参与 Rejection 判定（判定仍只用上面 8 个字段）⇒ 零行为变更。
+        public bool PlayerOwnerSet, HasPlayerControlledTroop, IsPlayerTroopInFormation, PlayerTeam;
         public RouteAExit Rejection
         {
             get
@@ -106,6 +110,23 @@ namespace CombatBrain.Coordination
         // CB-REPAIR-0005：覆盖时刻 + 探针节拍/计数。只在 _externalRetryArmed 期间使用。
         private float _silenceAt, _silenceNextAt;
         private int _silenceProbes;
+        // t23（用户 2026-09-16 授权 · 只读遥测）：评估周期**代理口径**的可观测计数（引擎内部周期不可观测，
+        //   需 Harmony 拦截，冻结令下不做）。代理 = 交付期内本编队观测通道上的原生 Movement 写入事件数、
+        //   引擎选中回调数、以及两者最近时刻。仅计数与只读输出，不参与任何判定。
+        private int _proxyTicks, _proxyNativeWrites, _proxySelects;
+        private float _proxyLastNativeAt = float.NegativeInfinity;
+        // t23：Release 边沿触发项文本（由适配器注入的只读探针；未接线时为 null ⇒ 不打印）。
+        public Func<string> ReleaseGateText;
+        // t28（用户 2026-09-16 授权 · **遥测态**，Captain 裁定 2026-09-16）：最近一次资格判定快照 ——
+        //   使归属行可在**释放总出口**（Release）统一产出，覆盖全部直调点（19 处调用点 / 其中 15 处
+        //   在 t28 前未被任何挂点覆盖；M6 的 reason=7/17 均不经「资格拒绝」路径）。
+        //   授权语义：与 t23 的 `_proxyTicks/_proxyNativeWrites/_proxySelects` 同属**遥测态**——
+        //     ① 仅由既有挂点（Reconcile/Update/TrySelect）写入、仅由日志出口读取；
+        //     ② **不进任何判定/分支**（Rejection、去抖、控制流均不读它）；
+        //     ③ 新鲜度上界 **≤1 拍**（Reconcile 每帧、Update/TrySelect 每决策拍更新）；
+        //     ④ **随 Release 与 BeginSession 复位**（防跨释放/跨 Mission 串档产出假证据）。
+        private RouteAEligibility _lastEligibility;
+        private bool _hasLastEligibility;
         public int IntentChanges { get; private set; }
         public int Flaps { get; private set; }
 
@@ -116,6 +137,10 @@ namespace CombatBrain.Coordination
 
         public void BeginSession(object mission, float now)
         {
+            // t28（遥测态，Captain 裁定）：Mission 边界复位归属快照 —— 禁止把上一场 Mission 的归属
+            //   输出到本场的释放边沿（否则会产出假证据）。复位只影响日志字段，不影响任何判定。
+            _lastEligibility = default(RouteAEligibility);
+            _hasLastEligibility = false;
             if (ReferenceEquals(_mission, mission)) return;
             Release(RouteAExit.MissionEnding, now);
             _mission = mission;
@@ -145,13 +170,18 @@ namespace CombatBrain.Coordination
         // 必须在新候选枚举前调用；失踪/清空对象同样到达 Restore。
         public void Reconcile(RouteAEligibility eligibility, float now)
         {
+            _lastEligibility = eligibility; _hasLastEligibility = true; // t28：缓存供释放总出口输出
             if (Target != null && eligibility.Rejection != RouteAExit.None)
+            {
                 Release(eligibility.Rejection, now);
+            }
         }
 
         public bool Update(IRouteAWeights target, RouteAEligibility eligibility, Cps2RouteAIntent intent,
             bool commandValid, float x, float y, int situationSignal, int team, int formation, float now)
         {
+            _proxyTicks++; // t23 只读遥测：交付期内拍计数（评估周期代理口径之一）
+            _lastEligibility = eligibility; _hasLastEligibility = true; // t28：缓存供释放总出口输出
             if (Target != null && (target == null || !ReferenceEquals(Target.Identity, target.Identity)))
                 Release(RouteAExit.Replaced, now);
             RouteAExit reject = eligibility.Rejection;
@@ -209,6 +239,8 @@ namespace CombatBrain.Coordination
                 for (int i = 0; i < 4; i++) _original[i] = target.GetWeight(i);
                 Target = target;
                 IdentityId = id;
+                _proxyTicks = _proxyNativeWrites = _proxySelects = 0; // t23：交付期代理计数随取得所有权清零
+                _proxyLastNativeAt = float.NegativeInfinity;
                 Intent = Cps2RouteAIntent.None;
                 _hasChange = false;
                 _writtenRevision = _writtenActivation = -1;
@@ -282,6 +314,7 @@ namespace CombatBrain.Coordination
                 || !ReferenceEquals(behavior, Target.Behavior((int)Intent - 1)))
             { Release(RouteAExit.InvalidCommand, now); return false; }
             Evidence.Selected(IdentityId, Revision, now);
+            _proxySelects++; // t23 只读遥测：引擎选中回调计数（评估周期代理口径）
             _deliveredAt = now; // 引擎可交付：刷新交付上限时钟；armed 重试正是依赖此回调执行。
             // r3：引擎确实还在回调 → 占位风险消失，重置暂停期重试预算（下一轮超时从零开始计数）。
             _suspendedReattempts = 0;
@@ -307,6 +340,8 @@ namespace CombatBrain.Coordination
         private void OnExternalWriteObserved(int id, bool replaced, float now)
         {
             if (Target == null || id != IdentityId) return;
+            _proxyNativeWrites++;            // t23 只读遥测：原生写入事件计数（评估周期代理口径）
+            _proxyLastNativeAt = now;
             if (replaced)
             {
                 if (!_externalRetryUsed)
@@ -367,6 +402,29 @@ namespace CombatBrain.Coordination
             catch (Exception) { }
         }
 
+        // t23（用户 2026-09-16 授权 · 只读遥测）：控制权归属输入 + session/missionTime + 评估周期代理计数。
+        //   目标：让条件 6 的「写入者身份」从不可判变为可判——RouteAEvidence.cs:146 的改标规则会把
+        //   「同 scope 重入的 CB 写」标成 ExternalUnknown，使 source 字段无法区分
+        //   「玩家命令 / 交回原生后的 team AI 写 / 重入 CB 写」；本行把该拍的控制权归属原始输入一并落盘。
+        //   t28：改由 Release() 总出口调用（覆盖全部直调点）；haveEligibility 标明快照是否为最近一拍。
+        //   零控制流改动：只读字段 + 本地计数，仅在真实释放边沿产出 1 行。
+        public void LogOwnership(RouteAEligibility e, string where, float now, bool haveEligibility)
+        {
+            if (!Evidence.Capture) return;
+            float lastSel = Evidence.LastSelectedAtFor(IdentityId);
+            CombatLog.Log(string.Format(CultureInfo.InvariantCulture,
+                "[RouteAOwnership] where={0} session={1} missionTime={2:F3} playerOwned={3} playerOwnerSet={4} hasPlayerControlledTroop={5} isPlayerTroopInFormation={6} playerTeam={7} isAIControlled={8} reject={9} proxyTicks={10} proxyNativeWrites={11} proxySelects={12} sinceLastNativeWrite={13} sinceLastSelect={14} eligibilityFresh={15}",
+                where, Evidence.Session, now,
+                e.PlayerOwned ? 1 : 0, e.PlayerOwnerSet ? 1 : 0, e.HasPlayerControlledTroop ? 1 : 0,
+                e.IsPlayerTroopInFormation ? 1 : 0, e.PlayerTeam ? 1 : 0, e.AiControlled ? 1 : 0, (int)e.Rejection,
+                _proxyTicks, _proxyNativeWrites, _proxySelects,
+                float.IsNegativeInfinity(_proxyLastNativeAt)
+                    ? "never" : (now - _proxyLastNativeAt).ToString("F3", CultureInfo.InvariantCulture) + "s",
+                float.IsNegativeInfinity(lastSel)
+                    ? "never" : (now - lastSel).ToString("F3", CultureInfo.InvariantCulture) + "s",
+                haveEligibility ? 1 : 0));
+        }
+
         public void Release(RouteAExit reason, float now)
         {
             IRouteAWeights previous = Target;
@@ -375,6 +433,19 @@ namespace CombatBrain.Coordination
             // 暂停形同虚设、占位以周期形式回归。指定 reason（Disabled/ModeChanged/MissionEnding）的主动解锁
             // 需 Captain 裁决后再加；Mission 轮换由 BeginSession 重置（见该方法）。
             if (previous == null) return;
+            // t23（用户 2026-09-16 授权 · 只读遥测）：真实释放边沿的触发项布尔量 + 评估周期代理计数。
+            //   仅日志；不打任何命令、不改控制权。只在真实释放边沿输出（早退之后）以避免每帧刷日志。
+            if (Evidence.Capture && ReleaseGateText != null)
+                CombatLog.Log(string.Format(CultureInfo.InvariantCulture,
+                    "[RouteAExitGate] where=ReleaseEntry reason={0} session={1} missionTime={2:F3} proxyTicks={3} proxyNativeWrites={4} proxySelects={5} {6}",
+                    (int)reason, Evidence.Session, now, _proxyTicks, _proxyNativeWrites, _proxySelects, ReleaseGateText()));
+            // t28（用户 2026-09-16 授权 · 遥测态）：归属行的**统一出口** —— 每次真实释放（任意 reason、
+            //   任意直调点）都产出 1 行；eligibility 取最近一次缓存（Reconcile/Update/TrySelect 每拍更新，
+            //   上界陈旧 1 拍）。输出后**立即复位**：下一次释放若没有新的快照，必须显式报
+            //   `eligibilityFresh=0`，不得复用陈旧值（防假证据）。
+            LogOwnership(_lastEligibility, "Release:" + (int)reason, now, _hasLastEligibility);
+            _lastEligibility = default(RouteAEligibility);
+            _hasLastEligibility = false;
             _deliverySuspended = false;
             // r3：交付超时自身的释放仍属同一暂停期（重试预算继续累计，防周期占位）；其它真实释放意味着
             // 局面已被外部事件改变（热关闭/资格门/替换等）→ 暂停期结束，重试预算归零。
@@ -390,6 +461,8 @@ namespace CombatBrain.Coordination
             Evidence.Restored(id, reason, now, RestoreFailures);
             Intent = Cps2RouteAIntent.None;
             IdentityId = 0;
+            _proxyTicks = _proxyNativeWrites = _proxySelects = 0; // t23：交付期代理计数随释放清零
+            _proxyLastNativeAt = float.NegativeInfinity;
             _hasChange = false;
             _externalRetryArmed = false;
             _externalRetryUsed = false;

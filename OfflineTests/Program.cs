@@ -45,6 +45,16 @@ namespace OfflineTests
         {
             _failures = 0;
 
+            // t28（用户 2026-09-16 授权）：离线 harness 走独立日志文件，**不再污染 %TEMP%\CombatBrain.log**。
+            //   背景（t26 归因）：CombatLog 默认路径与游戏进程共用同一 append-only 文件，离线用例产出
+            //   （如 [RouteAOwnership] 夹具行）会混入取证日志。此处显式覆盖为 CombatBrain-offline.log。
+            try
+            {
+                CombatBrain.CombatLog.OverridePath = System.IO.Path.Combine(
+                    System.IO.Path.GetTempPath(), "CombatBrain-offline.log");
+            }
+            catch { }
+
             Console.WriteLine("== F0 FighterProfile ==");
             TestFighterProfile();
             Console.WriteLine("== F6 MovementController ==");
@@ -178,6 +188,8 @@ namespace OfflineTests
 
             Console.WriteLine("== t3 diagnostic two lines ==");
             TestT3DiagnosticLiterals();
+            TestT23TelemetryLiterals();
+            TestT28PatchLiterals();
 
             Console.WriteLine("== N2 NarrativeEvents ==");
             TestNarrativeEvents();
@@ -5087,6 +5099,106 @@ namespace OfflineTests
                 "t3 release event line (Forced path) has all fields");
             Check(src.Contains("CbRouteAPoC.Control.Evidence.Session"),
                 "t3 release event line carries the Route A session identifier");
+        }
+
+        // t23（用户 2026-09-16 授权 · 只读遥测卡）：三项遥测的源码级锁定。
+        //   ① 控制权归属输入输出；② 评估周期代理口径 + 逐次 Acquire/Release 边缘（去抖解除）；③ Disabled 六布尔量。
+        //   仅断言源码中的字段/格式串存在与去抖确实移除，不声称任何运行期行为（运行期验证属 Captain/用户授权后的部署场次）。
+        private static void TestT23TelemetryLiterals()
+        {
+            string root = null;
+            System.IO.DirectoryInfo dir = new System.IO.DirectoryInfo(AppDomain.CurrentDomain.BaseDirectory);
+            for (int i = 0; i < 8 && dir != null; i++)
+            {
+                if (System.IO.Directory.Exists(System.IO.Path.Combine(dir.FullName, "CombatBrain"))) { root = dir.FullName; break; }
+                dir = dir.Parent;
+            }
+            Check(root != null, "t23 repo root located for telemetry literal lock");
+            if (root == null) return;
+            string control = System.IO.File.ReadAllText(System.IO.Path.Combine(root, "CombatBrain", "Coordination", "RouteAControl.cs"));
+            string adapter = System.IO.File.ReadAllText(System.IO.Path.Combine(root, "CombatBrain", "Ai", "RouteAOrderAdapter.cs"));
+            string glue = System.IO.File.ReadAllText(System.IO.Path.Combine(root, "CombatBrain", "Ai", "FormationControlLeaseGlue.cs"));
+            string logic = System.IO.File.ReadAllText(System.IO.Path.Combine(root, "CombatBrain", "Ai", "CombatAiMissionLogic.cs"));
+
+            // ① 控制权归属遥测
+            Check(control.Contains("[RouteAOwnership] where={0} session={1} missionTime={2:F3}"),
+                "t23 ownership line carries where/session/missionTime");
+            Check(control.Contains("playerOwned={3} playerOwnerSet={4} hasPlayerControlledTroop={5} isPlayerTroopInFormation={6} playerTeam={7} isAIControlled={8}"),
+                "t23 ownership line prints all five ownership inputs + isAIControlled");
+            Check(adapter.Contains("e.PlayerOwnerSet = f.PlayerOwner != null;")
+                && adapter.Contains("e.HasPlayerControlledTroop = f.HasPlayerControlledTroop;")
+                && adapter.Contains("e.IsPlayerTroopInFormation = f.IsPlayerTroopInFormation;")
+                && adapter.Contains("e.PlayerTeam = f.Team == null || f.Team.IsPlayerTeam;"),
+                "t23 eligibility wires the four raw ownership inputs (log-only fields)");
+
+            // ②(a) 评估周期代理口径
+            Check(control.Contains("proxyTicks={10} proxyNativeWrites={11} proxySelects={12} sinceLastNativeWrite={13} sinceLastSelect={14}"),
+                "t23 evaluation-cycle proxy counters are emitted on the ownership edge");
+
+            // ②(b) 逐次 Acquire/Release 边缘（去抖解除）
+            Check(!glue.Contains("_loggedAcquire.Add(key)") && !glue.Contains("_loggedRelease.Add(key)"),
+                "t23 lease edge debounce removed (every Acquire/Release edge is observable)");
+            Check(glue.Contains("[ControlLease] summary active={0}"),
+                "t23 5s lease summary retained (edge logging must not replace the summary)");
+
+            // ③ Disabled 六布尔量
+            Check(adapter.Contains("public static string GateText(bool routeOn)"),
+                "t23 gate text helper exists");
+            Check(adapter.Contains("enabled={0} mode={1} routeAEnabled={2} observerEnabled={3} ended={4} missionEnding={5} routeOn={6}"),
+                "t23 gate text prints the six booleans + routeOn");
+            Check(logic.Contains("[RouteAExitGate] where=DisabledBranch")
+                && control.Contains("[RouteAExitGate] where=ReleaseEntry"),
+                "t23 both Disabled-branch and Release-entry edges are annotated");
+        }
+
+        // t28（用户 2026-09-16 授权 · 补丁卡）：三个缺口的源码级锁定。
+        //   ① 归属行下移到 Release 总出口；② CombatLog 路径可覆盖/可关闭 + 离线 harness 走独立文件；
+        //   ③ Mission 边界租约清零逐次可观测。仅断言源码结构，不声称运行期行为。
+        private static void TestT28PatchLiterals()
+        {
+            string root = null;
+            System.IO.DirectoryInfo dir = new System.IO.DirectoryInfo(AppDomain.CurrentDomain.BaseDirectory);
+            for (int i = 0; i < 8 && dir != null; i++)
+            {
+                if (System.IO.Directory.Exists(System.IO.Path.Combine(dir.FullName, "CombatBrain"))) { root = dir.FullName; break; }
+                dir = dir.Parent;
+            }
+            Check(root != null, "t28 repo root located for patch literal lock");
+            if (root == null) return;
+            string control = System.IO.File.ReadAllText(System.IO.Path.Combine(root, "CombatBrain", "Coordination", "RouteAControl.cs"));
+            string log = System.IO.File.ReadAllText(System.IO.Path.Combine(root, "CombatBrain", "CombatLog.cs"));
+            string life = System.IO.File.ReadAllText(System.IO.Path.Combine(root, "CombatBrain", "Coordination", "MissionStateLifecycle.cs"));
+            string adapter = System.IO.File.ReadAllText(System.IO.Path.Combine(root, "CombatBrain", "Ai", "RouteAOrderAdapter.cs"));
+
+            // ① 归属行统一出口
+            Check(control.Contains("LogOwnership(_lastEligibility, \"Release:\" + (int)reason, now, _hasLastEligibility)"),
+                "t28 ownership line is emitted from the unified Release() exit");
+            Check(control.Contains("_lastEligibility = eligibility; _hasLastEligibility = true;")
+                && control.Contains("private RouteAEligibility _lastEligibility;"),
+                "t28 eligibility snapshot cached for the unified exit");
+            Check(!control.Contains("LogOwnership(eligibility, \"Reconcile\"") && !control.Contains("LogOwnership(eligibility, \"Update\"")
+                && !control.Contains("LogOwnership(eligibility, \"TrySelect\"") && !adapter.Contains("LogOwnership(e, \"ApplySingle\""),
+                "t28 the four old per-site ownership call sites are removed (single line per release stays)");
+            Check(control.Contains("eligibilityFresh={15}"),
+                "t28 ownership line marks snapshot freshness");
+            Check(control.Contains("_lastEligibility = default(RouteAEligibility);")
+                && control.Contains("_hasLastEligibility = false;"),
+                "t28 telemetry-state cache is reset (Release + BeginSession) to forbid stale/跨 Mission reuse");
+            Check(control.Contains("遥测态") && control.Contains("不进任何判定"),
+                "t28 cache field is declared as telemetry state (log-only, not in any decision path)");
+
+            // ② 日志路径可覆盖/可关闭 + 离线独立文件
+            Check(log.Contains("public static string OverridePath;") && log.Contains("public static bool Disabled;")
+                && log.Contains("COMBATBRAIN_LOG_PATH") && log.Contains("private static string EffectivePath()"),
+                "t28 CombatLog path is overridable and closable");
+            Check(System.IO.File.ReadAllText(System.IO.Path.Combine(root, "OfflineTests", "Program.cs")).Contains("CombatBrain-offline.log"),
+                "t28 offline harness writes to its own log file");
+
+            // ③ Mission 边界清零可观测
+            Check(life.Contains("[ControlLease] clear path=MissionStateLifecycle reason={0} activeBefore={1} activeAfter={2} cleared={3}"),
+                "t28 mission-boundary lease clear line present");
+            Check(life.Contains("glue.HasActiveLease(team.TeamIndex, f.Index)"),
+                "t28 cleared (team,f) set is snapshotted read-only");
         }
 
         // ATC-5R 编队控制权租约状态机（纯逻辑）：§8 四组 ≥30 断言。
