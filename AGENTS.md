@@ -15,8 +15,9 @@ v1.0 2026-09-10 21:20 | role=Project Governance Maintainer | model=DeepSeek V4.1
 
 # CombatBrain — Repo Agent Bootstrap
 
-> status: active
-> authority: canonical-bootstrap
+> status: archived
+> authority: non-authoritative (historical record)
+> superseded-by: E:\Agent\6a9268112aeaf49072bef052  (current 1.x canonical authority)
 >
 > 依据：CombatBrain Knowledge Architecture v1.1 — Traffic Cutover（Phase B 验证通过，2026-09-09）。
 > 本文件是 Codex / 从本仓启动的 Agent 的标准入口，不是知识中心。

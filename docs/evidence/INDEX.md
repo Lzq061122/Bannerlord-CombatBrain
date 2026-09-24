@@ -1,7 +1,8 @@
 # CombatBrain Evidence — Router / Index
 
-> status: active
-> authority: canonical-bootstrap
+> status: archived
+> authority: non-authoritative (historical record)
+> superseded-by: E:\Agent\6a9268112aeaf49072bef052  (current 1.x canonical authority)
 > 依据：CombatBrain Knowledge Architecture — Phase C4B（Evidence & ADR Canonicalization）。
 > 本文件是 **evidence router/index**：让 Agent 在**不加载全部历史**的前提下定位证据。不是巨型 evidence 文档。
 > 现有权威报告/交接/按域记录以**指针登记**为主，不复制正文。

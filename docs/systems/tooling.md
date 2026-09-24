@@ -1,7 +1,9 @@
 # CombatBrain Tooling — Stable Technical & Operator Facts
 
-> status: active
-> authority: canonical-bootstrap (Phase C2 建立)
+> status: archived
+> authority: non-authoritative (historical record)
+> superseded-by: E:\Agent\6a9268112aeaf49072bef052  (current 1.x canonical authority)
+> historical-note: original canonical-bootstrap declaration was established in Phase C2
 > 依据：CombatBrain Knowledge Architecture — Phase C4A（Operational & System Canonicalization）。
 > 角色契约见下。稳定工具链/操作事实 C4A 已自 legacy CONTEXT §5/§8 迁入；CONTEXT 段落保留为临时重复。
 

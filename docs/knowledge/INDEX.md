@@ -1,7 +1,8 @@
 # CombatBrain Knowledge INDEX — Context Router
 
-> status: active
-> authority: canonical-bootstrap
+> status: archived
+> authority: non-authoritative (historical record)
+> superseded-by: E:\Agent\6a9268112aeaf49072bef052  (current 1.x canonical authority)
 >
 > 依据：CombatBrain Knowledge Architecture v1.1 — Traffic Cutover（Phase B 验证通过）。
 > 本文件是 **Context Router**，不是目录清单。它决定 Agent 冷启动后加载什么、不加载什么。

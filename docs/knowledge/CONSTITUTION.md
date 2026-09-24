@@ -1,7 +1,8 @@
 # CombatBrain CONSTITUTION — Canonical Normative Core
 
-> status: active
-> authority: canonical-bootstrap
+> status: archived
+> authority: non-authoritative (historical record)
+> superseded-by: E:\Agent\6a9268112aeaf49072bef052  (current 1.x canonical authority)
 > 依据：CombatBrain Knowledge Architecture — Phase C3（Normative Canonicalization）。
 > 本文件是 CombatBrain **稳定规范核心（canonical NORMATIVE CORE）的唯一 canonical 家**。
 > AGENTS / INDEX 只摘要或路由到本文件；Master Spec 可详述产品/设计意图，但不得与本文件静默竞争。

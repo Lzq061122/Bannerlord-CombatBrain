@@ -1,7 +1,8 @@
 # CombatBrain ADR — Architecture Decision Records
 
-> status: active
-> authority: canonical-bootstrap
+> status: archived
+> authority: non-authoritative (historical record)
+> superseded-by: E:\Agent\6a9268112aeaf49072bef052  (current 1.x canonical authority)
 > 依据：CombatBrain Knowledge Architecture — Phase C4B（Evidence & ADR Canonicalization）。
 > 职责：登记**持久决策**的 rationale/alternatives/consequences。ADR 解释「为何」，CONSTITUTION 陈述「现行规则」；
 > 若未来 ADR 改变规范，**必须显式更新 CONSTITUTION**，ADR 不静默覆盖。

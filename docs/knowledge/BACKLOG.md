@@ -1,7 +1,9 @@
 # CombatBrain BACKLOG — Currently Unresolved Work / Debt
 
-> status: active
-> authority: canonical-bootstrap (Phase C2 建立；C4A 首次入住)
+> status: archived
+> authority: non-authoritative (historical record)
+> superseded-by: E:\Agent\6a9268112aeaf49072bef052  (current 1.x canonical authority)
+> historical-note: original canonical-bootstrap declaration was established in Phase C2; C4A 首次入住
 > 依据：CombatBrain Knowledge Architecture — Phase C4A（Operational & System Canonicalization）。
 > C4B：以代码证据关闭 BL-013（atc1-advance-to-engage → RESOLVED，BattlePhaseFSM.cs:40,97–103）。
 > 角色契约见 §1；准入规则见 §2；条目正文 C4A 已按当前证据分类入住。

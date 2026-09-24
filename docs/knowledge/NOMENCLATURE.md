@@ -1,7 +1,9 @@
 # CombatBrain NOMENCLATURE — Stable Identifiers & Naming Rules
 
-> status: active
-> authority: canonical-bootstrap (Phase C2 建立)
+> status: archived
+> authority: non-authoritative (historical record)
+> superseded-by: E:\Agent\6a9268112aeaf49072bef052  (current 1.x canonical authority)
+> historical-note: original canonical-bootstrap declaration was established in Phase C2
 > 依据：CombatBrain Knowledge Architecture — Phase C2。
 > 角色契约见下。本文件是**编号/术语的 canonical 家**；CONTEXT 头部与 Master Spec §0.1 的重复表在 C3 去重。
 
