@@ -1,0 +1,3 @@
+# Preserve existing documentation bytes exactly.
+*.md  -text diff
+*.txt -text diff

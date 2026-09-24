@@ -1,0 +1,462 @@
+结论
+这份 Charter 适合作为 CombatBrain 2.0 的“最终状态宪章”，但不适合直接拿来当开发顺序。
+它实际上描述的是一个相当完整的闭环：
+理解己方 → 理解敌方与战场 → 判断取胜方式 → 形成计划 → 分配任务 → 执行 → 观察反馈 → 更新价值判断 → 扩大战果/控制损失 → 重新规划。  Charter V0.2
+
+如果一上来就要求 Agent “实现 Charter”，很容易同时开十几个系统，最后每个都只有半套。
+我建议把 CombatBrain 2.0 拆成 P0～P6 七个阶段，而且核心原则是：
+每一个阶段都必须形成一个可以实际跑起来的小型闭环，而不是先把某几个模块做满。
+
+P0：2.0 基础设施与可观测性
+核心问题
+我们能不能可靠地知道 CombatBrain 2.0 在干什么？
+
+这个阶段基本不做“聪明 AI”。
+主要完成：
+- CombatBrain 2.0 模块能够被游戏加载；
+- CBATH 能确认加载的是 CombatBrain 2.0，而不是原版 AI / 老 CombatBrain；
+- 可以读取：
+  - 双方 Formation；
+  - 人数；
+  - 兵种结构；
+  - 位置；
+  - Formation 状态；
+- 能观察 CombatBrain 发出的命令；
+- 建立结构化日志：
+  - State；
+  - Plan；
+  - Task；
+  - Command；
+  - Feedback；
+  - Replan reason；
+- 能判断命令到底来自：
+  - CombatBrain；
+  - 原生 Tactic；
+  - FormationAI；
+  - 其他来源。
+P0 不做
+- 不做包抄；
+- 不做骑兵冲锋算法；
+- 不做远程保护策略；
+- 不做机会利用；
+- 不做复杂评分系统。
+P0 Exit Gate
+至少能回答：
+“这一场战斗里 CombatBrain 2.0 看到了什么、决定了什么、为什么这么决定、最终下了什么命令？”
+
+这其实就是你最近一直在折腾 CBATH 的意义。
+P1：最小指挥闭环 Minimum Commander Loop
+这是 CombatBrain 2.0 真正开始写 AI 的阶段。
+核心问题
+它能不能从战场状态产生一个整体计划，然后真的执行？
+
+只实现 Charter 决策循环最小版本。
+例如：
+BattleState
+    ↓
+SituationAssessment
+    ↓
+BattleObjective
+    ↓
+Plan
+    ↓
+FormationTask
+    ↓
+Command
+
+先不要追求“聪明”。
+重点验证的是：
+① 状态是共享的
+所有 Formation 看的是同一个 BattleState。
+② 有真正的 Plan
+不能只是：
+弓兵看到敌人 → 后退
+骑兵看到弓兵 → 冲锋
+步兵看到敌人 → 前进
+
+必须变成：
+Objective:
+利用远程优势削弱敌军
+
+Plan:
+保持远程输出条件
+
+Task:
+Infantry → SCREEN
+Archer → DAMAGE
+Cavalry → RESERVE
+
+Command:
+Infantry → move X
+Archer → face Y
+Cavalry → hold Z
+
+Charter 对这一点要求其实非常明确：Plan 和 Command 必须是两个不同层级。   Charter V0.2
+③ 有最基本的计划连续性
+不能每 Tick 换主意。
+需要：
+- PlanId
+- Objective
+- Reason
+- StartTime
+- ContinueCondition
+- AbortCondition
+Decision Cadence 和 Plan Stability 从这里就应该存在。
+不需要马上把时间参数调得非常好，但架构不能以后再补。
+P1 Exit Gate
+在一个非常简单的 CustomBattle 场景里：
+CombatBrain 能产生一个可解释的整体计划，并让多个 Formation 围绕这个计划行动至少一段时间。
+
+这里甚至不用要求它打赢玩家。
+P1 验证的是：
+CombatBrain 有没有“大脑”。
+
+而不是大脑聪不聪明。
+P2：多 Formation 协同
+核心问题
+它现在有大脑了，但整个军队是不是一个整体？
+
+Charter 明确反对：
+Infantry AI
+Archer AI
+Cavalry AI
+HorseArcher AI
+
+四套各玩各的系统。  Charter V0.2
+所以 P2 开始建立：
+Plan
+ ↓
+Task Allocation
+ ↓
+┌ Infantry
+├ Archer
+├ Cavalry
+└ HorseArcher
+
+重点不是把每个兵种 AI 做强，而是建立任务语义。
+例如：
+PROTECT
+OUTPUT
+PIN
+BREAKTHROUGH
+SUPPORT
+RESERVE
+EXPLOIT
+
+这些不是兵种专属：
+骑兵 = 突破
+步兵 = 正面
+弓兵 = 输出
+
+而应该是：
+根据当前 Plan，某个 Formation 此刻承担什么职责。
+
+这里还要解决一个非常重要的问题
+命令冲突。
+例如：
+Plan:
+Cavalry = PROTECT_ARCHERS
+
+局部逻辑：
+Cavalry = ATTACK_EXPOSED_ENEMY
+
+到底谁优先？
+这个阶段应该把：
+Plan → Task → Command
+
+的权限链真正立住。
+P2 Exit Gate
+典型验收战：
+AI 有远程优势。
+
+不要求它一定采用某个固定阵型。
+但是最终应该观察到：
+- 远程部队在发挥优势；
+- 其他 Formation 的行为能够解释为服务这个目标；
+- 不应该出现骑兵自己跑掉、步兵自己冲锋、弓兵自己后退的三个独立 AI。
+P2 验证的是：
+CombatBrain 有没有“军队级指挥”。
+
+P3：反馈、止损与重新规划
+这是我认为 CombatBrain 2.0 第一个真正产生“智能感”的阶段。
+核心问题
+它能不能意识到自己的计划成功了或者失败了？
+
+对应 Charter：
+- 战果利用；
+- 损失控制；
+- 动态重新规划。  Charter V0.2
+开始形成：
+Plan
+ ↓
+Action
+ ↓
+Observed Result
+ ↓
+Expected vs Actual
+ ↓
+Positive / Negative Feedback
+ ↓
+Continue / Intensify / Modify / Abort
+
+例如：
+正反馈
+骑兵攻击侧翼后：
+enemy formation cohesion ↓
+enemy ranged protection ↓
+local force advantage ↑
+
+CombatBrain 得出：
+Opportunity increased
+
+于是：
+Cavalry: HARASS
+        ↓
+Cavalry: EXPLOIT
+
+Infantry:
+PIN → ADVANCE
+
+这才是 Charter 所说的“扩大战果”。
+反过来：
+Cavalry casualties ↑↑
+enemy infantry turns to support
+target no longer exposed
+
+那么：
+Expected value ↓
+Risk ↑
+
+于是：
+Abort current action
+→ Withdraw
+→ Reassign
+
+P3 才开始真正实现
+Charter 的：
+Victory 50% / Casualty Preservation 50%。  Charter V0.2
+但我建议这里把它理解成评价函数的设计原则，不要早早写死：
+score =
+0.5 * victory
++ 0.5 * casualty
+
+否则很可能把概念 Charter 错误地固化成一个数学公式。
+P3 Exit Gate
+让测试系统人为制造变化：
+开始：
+AI 当前计划合理
+
+↓
+
+中途：
+敌军重新部署 / AI 部队损失严重 / 原目标失去价值
+
+↓
+
+结果：
+CombatBrain 主动修改或终止 Plan
+
+并且日志必须明确给出：
+Plan changed because ...
+
+而不是仅仅看到 Formation 突然换了方向。
+P4：主动权与战术博弈
+到这里才开始做你这个项目最有意思、同时也是最难的东西。
+核心问题
+CombatBrain 能不能主动让玩家犯错，而不只是响应玩家？
+
+对应 Charter 的：
+试探 → 观察 → 判断 → 利用。  Charter V0.2
+
+例如：
+当前双方对峙
+
+普通 AI：
+继续等
+
+CombatBrain：
+当前状态没有优势
+↓
+需要改变状态
+↓
+候选行动：
+A 局部推进
+B 骑兵施压
+C 改变部署
+↓
+选择 B
+
+然后玩家：
+抽调步兵保护侧翼
+
+CombatBrain 观察：
+enemy center weakened
+
+于是：
+re-evaluate
+→ center opportunity ↑
+→ shift main effort
+
+这时候才真正出现 Charter 最核心的：
+AI行动
+→ 玩家应对
+→ AI观察
+→ AI调整
+→ 玩家再次反制
+
+为什么不能 P1 就做这个
+因为如果：
+- State 不可靠；
+- Plan 不存在；
+- Task 没有统一；
+- Feedback 不存在；
+- Replan 不稳定；
+那么所谓：
+“试探玩家”
+
+最后一定会变成：
+if 某条件:
+    骑兵试探
+
+然后重新走回老 CombatBrain 的规则堆积路线。
+P4 Exit Gate
+必须设计一个玩家反制测试：
+CombatBrain 采取行动。
+玩家改变部署。
+然后验证：
+CombatBrain 是否确实因为玩家的变化改变后续计划。
+
+而不是脚本自己走到下一阶段。
+P5：泛化
+前面 P1～P4 都可以刻意限制测试环境。
+P5 才问：
+这个架构究竟只是能跑 Demo，还是能处理 Bannerlord 战场？
+
+逐渐扩大：
+- 不同兵力比；
+- 不同兵种组成；
+- 不同 Formation 数量；
+- 进攻方 / 防守方；
+- 玩家不同部署；
+- AI 自己不同军队结构；
+- 战斗中 Formation 损失和结构变化。
+这里尤其重要的一条是：
+不要出现新场景，就增加一个新战术系统。
+
+Charter 已经明确规定：
+优先扩展状态、评价、计划、任务、反馈等共享机制，而不是“发现暴露弓兵 → 启动攻击弓兵逻辑”。  Charter V0.2
+
+所以 P5 每发现一种失败案例，都应该先问：
+为什么统一模型无法表达它？
+
+例如：
+AI 不会处理孤立弓兵
+
+先不要写：
+AntiExposedArcherModule
+
+应该检查：
+TargetValue 是否缺失？
+Exposure 是否没表示？
+LocalRisk 是否错误？
+Plan candidate 是否缺少 exploitation？
+
+这一步实际上就是 CombatBrain 2.0 防止重新变成 CombatBrain 1.x 的关键阶段。
+P6：Charter 完整体验收
+最后才开始真正拿 Charter 最上面的目标来问：
+它能不能成为一个真正有威胁的对手？
+
+Charter 最终要求并不是“系统全部存在”，而是：
+在不存在明显客观劣势时，AI 应具备实际击败玩家的能力，其威胁应来源于态势理解、规划、协调、反制、战果利用和重新规划，而不是 Buff 或隐藏信息。  Charter V0.2
+
+P6 主要就不是“开发某模块”了。
+而是大量：
+A/B 战斗
+Vanilla AI
+Old CombatBrain
+CombatBrain 2.0
+
+同样：
+- 地图；
+- 兵力；
+- 兵种；
+- 玩家策略。
+观察差异。
+以及：
+行为审计
+玩家能不能回答：
+“它这一场到底想干什么？”
+
+因为 Charter 对最终体验还有一个非常关键的要求：
+不同行为应该能够被解释为同一个作战目标下的连续决策。  Charter V0.2
+
+有几条规则不能“以后再做”
+这里需要特别区分。
+虽然我把功能拆成 P0～P6，但有些东西不是某个阶段的 Feature，而是从 P0/P1 开始就必须遵守的 invariant。
+主要是这几条：
+约束	从什么时候开始
+Formation 级边界，不控制 Agent	P0 起永久
+不用隐藏 Buff / 不公平信息	P0 起永久
+Plan 与 Command 分离	P1 起永久
+所有 Formation 共享统一目标	P1 起永久
+不为单场景轻易增加专用系统	P1 起永久
+Decision Cadence	P1 起存在
+Command Latency	P1 架构预留，后期调参
+不人为随机犯错	永久
+个性系统	P6 之前都不做
+范围冻结	永久
+
+
+特别是个性系统，Charter 已经明确写了当前暂缓，先验证一个统一、稳定、高决策能力的 AI。  Charter V0.2
+所以整个开发路线其实可以压缩成一句话
+P0  看得见它
+ ↓
+P1  它会形成计划
+ ↓
+P2  它会指挥整支军队
+ ↓
+P3  它知道自己干得好不好
+ ↓
+P4  它会和玩家博弈
+ ↓
+P5  它能适应不同战场
+ ↓
+P6  它真的成为一个有威胁的指挥官
+
+这个顺序我认为比：
+先写态势系统
+→ 再写骑兵
+→ 再写弓兵
+→ 再写包抄
+→ 再写撤退
+
+安全得多。
+因为后者非常容易再次得到一个功能很多但没有统一大脑的 CombatBrain 1.x。
+我建议我们现在就正式这样处理 Charter
+不要把 Charter v0.2 大改成阶段版。
+它应该继续作为：
+CombatBrain 2.0 Constitution / Final Target
+
+然后在它下面新增一个开发文件，例如：
+CombatBrain 2.0 Development Roadmap v0.1
+
+专门定义：
+P0
+P1
+P2
+P3
+P4
+P5
+P6
+
+每阶段只有四类东西：
+目标、允许开发的范围、明确非目标、Exit Gate。
+这样以后给 Agent 派单时就会形成三级约束：
+Charter
+   ↓
+Current Phase
+   ↓
+Current Task
+
+这是我认为接下来最重要的一步。尤其 Charter 已经明确要求未被当前范围纳入的功能默认不实现，阶段 Roadmap 正好把这里的“当前范围”进一步具体化。  Charter V0.2
+我建议现在不要直接派第一张 CombatBrain 2.0 功能开发单。先把这份 P0～P6 Roadmap 固化下来，然后第一张正式开发单从 P0 的“CombatBrain 2.0 可加载 + CBATH 可确认 + 最小观测闭环”开始。
