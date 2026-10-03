@@ -29,6 +29,18 @@
 
 ---
 
+## 相关仓库
+
+| 仓库 | 内容 |
+|---|---|
+| [`Lzq061122/Bannerlord-CBATH`](https://github.com/Lzq061122/Bannerlord-CBATH) | **CBATH（CombatBrain Autonomous Test Harness）** —— 独立的自动化测试基础设施，目标是不经人工操作完成「启动游戏 → 进入战斗 → 观测 → 采集证据 → 判定」闭环 |
+
+CBATH 与本仓库**无源码依赖**：其 108 个跟踪文件中引用本仓库路径的数量为 0。它只在运行期通过两个自带的 legacy adapter 读取 CombatBrain 日志做时间关联。
+
+CBATH 的定位是**验证工具，不是 CombatBrain 2.0 决策能力的完成证据**（见 `CombatBrain-2.0/charter/CombatBrain-2.0-Development-Roadmap-v0.1.md`）。
+
+---
+
 ## 两个目录的关系
 
 `CombatBrain-2.0/` 是 **2.0 的设计权威来源**，`CombatBrain/` 是 **当前在跑的代码**。
