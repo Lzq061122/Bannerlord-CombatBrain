@@ -1,3 +1,17 @@
+<!-- PROMPT META
+Name: CombatBrain Knowledge Context Router
+Version: 1.1
+Author Role: Project Governance Maintainer
+Model: GPT-6
+Created: 2026-10-01
+Updated: 2026-10-01
+Target: All CombatBrain Agents
+-->
+
+<!-- CHANGE LOG (newest first, keep last 3)
+v1.1 2026-10-01 23:36 | role=Project Governance Maintainer | model=GPT-6 | editor=codex-paipos-20261001 | note=部署 PAIPOS Lite 并接入所有项目 Harness 的必读入口
+-->
+
 # CombatBrain Knowledge INDEX — Context Router
 
 > status: active
@@ -125,7 +139,7 @@ source_decision: <批准该例外的决策出处>
 ## 5. Context Routes
 
 ### Route R1 — 通用冷启动 / 任意任务开始
-- REQUIRED: `docs/knowledge/CURRENT_STATE.md`
+- REQUIRED: `docs/knowledge/PAIPOS_LITE.md`（先查 CombatAI 的 prompts/registry.json 确认为 ACTIVE）、`docs/knowledge/CURRENT_STATE.md`
 - OPTIONAL: 任务相关子系统 spec；CONSTITUTION（判断/触碰不变量、闸语义或需架构依据时）；BACKLOG（领取/路由任务前查开环项时）；NOMENCLATURE（引用/解释 F/S/H/P/T/X/B/t/G/CPS 编号体系时）；systems/tooling（涉工具链/部署操作时）
 - NEVER_BY_DEFAULT: 历史 handoff、旧 X/N/T prompts、research archive、Master Spec 全文、evidence/ 与 adr/ 默认不加载
 
@@ -236,3 +250,11 @@ CONTEXT 决策性结论            → adr/（符合准入判据者）
 - 上述目的地登记**不改变** CONTEXT §2/§4 的现存 OPTIONAL 引用（CPS/Astra/legacy 工作流仍依赖）；
   正式迁移时同步改写这些引用为语义标识。
 - CPS §4 与 CPS-3R 综述保持冻结，直至适用 review / GO / ADR 闭环（C2 不迁）。
+
+## PAIPOS Lite 项目工作流（所有 Harness 必读）
+
+- 开始项目任务前，先查生命周期登记表 `E:\MBmod\CombatAI\prompts\registry.json` 中 `root=repo, path=docs/knowledge/PAIPOS_LITE.md` 为 ACTIVE，再完整读取该文件；缺失或不可用时报告 BOOTSTRAP_FAILURE，不静默沿用旧流程。
+- 本规则适用于开发、设计、质检，以及所有模型和 Harness；不依赖共享聊天历史。新会话、恢复会话及角色接手均须加载；正在运行的其他 Harness 须在下一次任务开始前重新读取。
+- 用户手动切换 Harness；当前角色准备简短交接，不自动创建或调度其他角色。小而可控的修改自检即可，跨模块、核心行为或重要交付增加独立质检。
+- PAIPOS Lite 统一角色切换和检查力度；项目宪法、冻结令、部署硬门及用户有效约束继续适用。旧建组模板中固定三角色、每次强制独立 review、每次小修改强制建任务/台账的要求，按本工作流的影响范围执行。
+- 不自动发现项目规则的 Harness，须在其项目指令或启动提示词中显式注入本段和代码仓 locator；首次接手简短报告实际读取的工作流路径及版本。

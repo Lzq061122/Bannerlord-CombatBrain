@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using CombatBrain;
 using CombatBrain.Combat;
@@ -189,6 +189,7 @@ namespace OfflineTests
             Console.WriteLine("== t3 diagnostic two lines ==");
             TestT3DiagnosticLiterals();
             TestT23TelemetryLiterals();
+            TestT5OwnershipProbeLiterals();
             TestT28PatchLiterals();
 
             Console.WriteLine("== N2 NarrativeEvents ==");
@@ -3147,7 +3148,7 @@ namespace OfflineTests
             // §10.5 ④ 复核引用（既有断言已覆盖）：Retreat 不被 Brace/Protect 覆盖（cps1-mig retreat not overridden）、
             //    Limited/InContact 不被 Denied 锁死（atc4 defensive override/in contact -> Limited + atc5r Limited 不夺权）、
             //    合法 Flank/Intercept 不召回（cps1-spec flank/intercept charge not recalled）
-            Check(true, "cps1-scan §10.5 回归项核对完成 (Retreat 不被覆盖/Limited 不锁死/Flank 不召回 既有断言覆盖)");
+            Console.WriteLine("  [INFO] cps1-scan §10.5 refers to existing Retreat/Limited/Flank assertions; no extra assertion counted");
         }
 
         // t16 repair（QC BLOCKER：骑兵 Charge 目标丢失）：执行器 Charge+TargetId 映射——
@@ -3586,7 +3587,7 @@ namespace OfflineTests
             //    SetMovementOrder(input)/SetFacingOrder(order)/SetArrangementOrder(order)）
             string[] pnames = SetOrderObserver.Patches.PatchTargetParameterNames;
             Check(pnames.Length == 3 && pnames[0] == "input" && pnames[1] == "order" && pnames[2] == "order",
-                "cps3-paramnames setter parameter names input/order/order (Harmony 按参数名绑定)");
+                "cps3-paramnames expected parameter table input/order/order (compiled signatures checked by RouteAStaticChecks)");
             // 与目标方法名一一对应（下标对齐）
             string[] targets = SetOrderObserver.Patches.PatchTargetMethodNames;
             Check(targets.Length == pnames.Length
@@ -5154,6 +5155,63 @@ namespace OfflineTests
         // t28（用户 2026-09-16 授权 · 补丁卡）：三个缺口的源码级锁定。
         //   ① 归属行下移到 Release 总出口；② CombatLog 路径可覆盖/可关闭 + 离线 harness 走独立文件；
         //   ③ Mission 边界租约清零逐次可观测。仅断言源码结构，不声称运行期行为。
+        // t5 (user 2026-09-16 authorized, plan B, read-only telemetry): source-level lock for the same-tick
+        //   live recompute probe. Asserts structure only; it does NOT claim runtime behaviour.
+        private static void TestT5OwnershipProbeLiterals()
+        {
+            string root = null;
+            System.IO.DirectoryInfo dir = new System.IO.DirectoryInfo(AppDomain.CurrentDomain.BaseDirectory);
+            for (int i = 0; i < 8 && dir != null; i++)
+            {
+                if (System.IO.Directory.Exists(System.IO.Path.Combine(dir.FullName, "CombatBrain"))) { root = dir.FullName; break; }
+                dir = dir.Parent;
+            }
+            Check(root != null, "t5 repo root located for ownership probe literal lock");
+            if (root == null) return;
+            string control = System.IO.File.ReadAllText(System.IO.Path.Combine(root, "CombatBrain", "Coordination", "RouteAControl.cs"));
+            string adapter = System.IO.File.ReadAllText(System.IO.Path.Combine(root, "CombatBrain", "Ai", "RouteAOrderAdapter.cs"));
+
+            // (1) single injection point: the live delegate field exists exactly once
+            string controlCode = RemoveSourceTrivia(control);
+            string adapterCode = RemoveSourceTrivia(adapter);
+            Check(controlCode.Contains("public Func<string> ReleaseLiveText;"),
+                "t5 live-probe delegate field exists on RouteAControl");
+            Check(controlCode.Split(new string[] { "public Func<string> ReleaseLiveText;" }, StringSplitOptions.None).Length - 1 == 1,
+                "t5 live-probe delegate field is declared exactly once");
+
+            // (2) the probe is emitted on the real release edge, gated by Evidence.Capture
+            Check(control.Contains("[RouteAOwnership] where=ReleaseLive reason={0} session={1} missionTime={2:F3} {3}"),
+                "t5 live-probe line carries where=ReleaseLive + session + missionTime");
+            Check(control.Contains("if (Evidence.Capture && ReleaseLiveText != null)"),
+                "t5 live-probe output is gated by Evidence.Capture and nullable-safe");
+            Check(control.Contains("if (previous == null) return;")
+                && control.IndexOf("where=ReleaseLive") > control.IndexOf("if (previous == null) return;"),
+                "t5 live probe sits after the real-release-edge early return");
+
+            // (3) freshness labelling: live source labelled, and the cached family keeps its own labels
+            Check(adapter.Contains("liveSource=sameTickRecompute"),
+                "t5 live probe labels its freshness source (sameTickRecompute)");
+            Check(adapter.Contains("playerOwned={0} playerOwnerSet={1} hasPlayerControlledTroop={2} isPlayerTroopInFormation={3} playerTeam={4} isAIControlled={5}"),
+                "t5 live probe prints all five ownership inputs + isAIControlled");
+            Check(control.Contains("eligibilityFresh={15}"),
+                "t5 cached family keeps its own freshness marker (eligibilityFresh)");
+
+            // (4) same-tick recompute + honest no-formation marker + wiring
+            Check(adapterCode.Contains("RouteAEligibility e = Eligibility(f, Mission.Current);"),
+                "t5 live probe recomputes eligibility on the call tick");
+            Check(adapter.Contains("live=noref"),
+                "t5 live probe reports noref instead of inventing values when no formation is bound");
+            Check(adapterCode.Contains("Control.ReleaseLiveText = () => LiveOwnershipText();"),
+                "t5 adapter has an uncommented live probe assignment (compiled wiring checked by RouteAStaticChecks)");
+            Check(adapterCode.Contains("internal static Formation _probeFormation;"),
+                "t5 probe anchor field exists");
+            Check(adapterCode.Contains("_probeFormation = null;"),
+                "t5 probe anchor resets with the session");
+
+            // (5) zero new setter sites: the probe is a log statement only
+            Check(!control.Contains("SetOrder(") && !control.Contains("SetControlledByAI("),
+                "t5 RouteAControl still has zero SetOrder/SetControlledByAI call sites");
+        }
         private static void TestT28PatchLiterals()
         {
             string root = null;

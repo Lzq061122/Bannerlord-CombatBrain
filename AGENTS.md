@@ -1,15 +1,16 @@
 <!-- PROMPT META
 Name: CombatBrain Repo Agent Bootstrap
-Version: 1.0
+Version: 1.1
 Author Role: Project Governance Maintainer
-Model: GPT-5
+Model: GPT-6
 Created: 2026-09-09
-Updated: 2026-09-10
+Updated: 2026-10-01
 Target: Codex / Agents starting from the code repo
 Scope: CombatBrain / Repo Bootstrap
 -->
 
 <!-- CHANGE LOG (newest first, keep last 3)
+v1.1 2026-10-01 23:36 | role=Project Governance Maintainer | model=GPT-6 | editor=codex-paipos-20261001 | note=接入 PAIPOS Lite 统一工作流与 Harness 必读要求
 v1.0 2026-09-10 21:20 | role=Project Governance Maintainer | model=DeepSeek V4.1 Flash | editor=manager | note=触碰时迁移补齐题头；新增 §7 提交署名（Editor-* trailer）
 -->
 
@@ -87,3 +88,11 @@ docs/knowledge/CURRENT_STATE.md ← 需要当前状态判断时读（先核对 l
 - 不得依赖 `git config user.name` 作为身份来源。
 
 规则出处：`E:\MBmod\manager\Prompt 题头元数据规范.md` §16。
+
+## PAIPOS Lite 项目工作流（所有 Harness 必读）
+
+- 开始项目任务前，先查生命周期登记表 `E:\MBmod\CombatAI\prompts\registry.json` 中 `root=repo, path=docs/knowledge/PAIPOS_LITE.md` 为 ACTIVE，再完整读取该文件；缺失或不可用时报告 BOOTSTRAP_FAILURE，不静默沿用旧流程。
+- 本规则适用于开发、设计、质检，以及所有模型和 Harness；不依赖共享聊天历史。新会话、恢复会话及角色接手均须加载；正在运行的其他 Harness 须在下一次任务开始前重新读取。
+- 用户手动切换 Harness；当前角色准备简短交接，不自动创建或调度其他角色。小而可控的修改自检即可，跨模块、核心行为或重要交付增加独立质检。
+- PAIPOS Lite 统一角色切换和检查力度；项目宪法、冻结令、部署硬门及用户有效约束继续适用。旧建组模板中固定三角色、每次强制独立 review、每次小修改强制建任务/台账的要求，按本工作流的影响范围执行。
+- 不自动发现项目规则的 Harness，须在其项目指令或启动提示词中显式注入本段和代码仓 locator；首次接手简短报告实际读取的工作流路径及版本。

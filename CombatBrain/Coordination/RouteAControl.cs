@@ -1,4 +1,4 @@
-namespace CombatBrain.Coordination
+﻿namespace CombatBrain.Coordination
 {
     using System;
     using System.Globalization;
@@ -117,6 +117,12 @@ namespace CombatBrain.Coordination
         private float _proxyLastNativeAt = float.NegativeInfinity;
         // t23：Release 边沿触发项文本（由适配器注入的只读探针；未接线时为 null ⇒ 不打印）。
         public Func<string> ReleaseGateText;
+        // t5（user 2026-09-16 authorized, plan B, read-only telemetry）: same-tick live recompute probe text for the release outlet.
+        //   Same injection pattern as ReleaseGateText: RouteAControl does not reference TaleWorlds types, so the
+        //   adapter injects it and recomputes the five ownership inputs plus isAIControlled on the very tick of
+        //   the call (instead of reusing the cached _lastEligibility snapshot). Read-only: log outlet only, never
+        //   read by any branch; gated by Evidence.Capture; when null the live segment is omitted entirely.
+        public Func<string> ReleaseLiveText;
         // t28（用户 2026-09-16 授权 · **遥测态**，Captain 裁定 2026-09-16）：最近一次资格判定快照 ——
         //   使归属行可在**释放总出口**（Release）统一产出，覆盖全部直调点（19 处调用点 / 其中 15 处
         //   在 t28 前未被任何挂点覆盖；M6 的 reason=7/17 均不经「资格拒绝」路径）。
@@ -436,9 +442,31 @@ namespace CombatBrain.Coordination
             // t23（用户 2026-09-16 授权 · 只读遥测）：真实释放边沿的触发项布尔量 + 评估周期代理计数。
             //   仅日志；不打任何命令、不改控制权。只在真实释放边沿输出（早退之后）以避免每帧刷日志。
             if (Evidence.Capture && ReleaseGateText != null)
-                CombatLog.Log(string.Format(CultureInfo.InvariantCulture,
-                    "[RouteAExitGate] where=ReleaseEntry reason={0} session={1} missionTime={2:F3} proxyTicks={3} proxyNativeWrites={4} proxySelects={5} {6}",
-                    (int)reason, Evidence.Session, now, _proxyTicks, _proxyNativeWrites, _proxySelects, ReleaseGateText()));
+            {
+                // Diagnostic delegates may read invalid engine objects; they must not prevent release.
+                try
+                {
+                    CombatLog.Log(string.Format(CultureInfo.InvariantCulture,
+                        "[RouteAExitGate] where=ReleaseEntry reason={0} session={1} missionTime={2:F3} proxyTicks={3} proxyNativeWrites={4} proxySelects={5} {6}",
+                        (int)reason, Evidence.Session, now, _proxyTicks, _proxyNativeWrites, _proxySelects, ReleaseGateText()));
+                }
+                catch (Exception) { }
+            }
+            // t5 (user 2026-09-16 authorized, plan B, read-only telemetry): the same-tick live recompute
+            //   probe, emitted only on a REAL release edge (after the early return above) so the cached
+            //   family (Reconcile/Update/TrySelect snapshot) and the live family can be compared line by line.
+            //   Zero behaviour change: a log statement only; no SetOrder / SetControlledByAI call site,
+            //   no reason semantics, no release ordering, and no branch reads the probe.
+            if (Evidence.Capture && ReleaseLiveText != null)
+            {
+                try
+                {
+                    CombatLog.Log(string.Format(CultureInfo.InvariantCulture,
+                        "[RouteAOwnership] where=ReleaseLive reason={0} session={1} missionTime={2:F3} {3}",
+                        (int)reason, Evidence.Session, now, ReleaseLiveText()));
+                }
+                catch (Exception) { }
+            }
             // t28（用户 2026-09-16 授权 · 遥测态）：归属行的**统一出口** —— 每次真实释放（任意 reason、
             //   任意直调点）都产出 1 行；eligibility 取最近一次缓存（Reconcile/Update/TrySelect 每拍更新，
             //   上界陈旧 1 拍）。输出后**立即复位**：下一次释放若没有新的快照，必须显式报

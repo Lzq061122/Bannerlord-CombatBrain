@@ -169,6 +169,7 @@ namespace OfflineTests
             TestRouteAReArmBounded();
             TestRouteASilenceProbe();
             TestRouteASilenceFailureBoundary();
+            TestReleaseDiagnosticBoundary();
         }
 
         // CB-REPAIR-0004 r2（review findings）：①交付暂停只能由「真实释放」终结——候选扇描失败拍的空释放
