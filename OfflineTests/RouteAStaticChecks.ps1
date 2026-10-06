@@ -5,6 +5,13 @@ $ErrorActionPreference = 'Stop'
 $repo = Split-Path -Parent $PSScriptRoot
 $gameDll = Join-Path $GameBin 'TaleWorlds.MountAndBlade.dll'
 $modDll = Join-Path $repo 'CombatBrain\bin\Win64_Shipping_Client\CombatBrain.dll'
+$compiledDir = Join-Path $PSScriptRoot ('bin\contracts\' + [Guid]::NewGuid().ToString('N'))
+New-Item -ItemType Directory -Path $compiledDir -Force | Out-Null
+function Invoke-VerificationContracts([string]$Mode, [string]$Target) {
+    & node (Join-Path $PSScriptRoot 'VerificationContracts.js') $Mode $Target
+    if ($LASTEXITCODE -ne 0) { throw "Verification contracts failed: $Mode" }
+}
+Invoke-VerificationContracts '--source' $repo
 function Assert-Contract([bool]$Condition, [string]$Message) {
     if (-not $Condition) { throw $Message }
     Write-Output "[PASS] $Message"
@@ -32,6 +39,7 @@ function Test-CallOrder([string]$Code, [string]$First, [string]$Second) {
 function Read-CompiledType([string]$Dll, [string]$Type) {
     $code = (& ilspycmd --disable-updatecheck -r $GameBin -t $Type $Dll) -join "`n"
     if ($LASTEXITCODE -ne 0) { throw "Decompile failed: $Type" }
+    Set-Content -LiteralPath (Join-Path $compiledDir ($Type + '.cs')) -Value $code -Encoding UTF8
     return Remove-CSharpTrivia $code
 }
 Assert-Contract (Test-CallOrder 'First(); Second();' 'First()' 'Second()') 'Call-order checker accepts two present calls in order'
@@ -61,7 +69,7 @@ foreach ($name in @('CbHoldBehavior','CbAdvanceBehavior','CbRejoinBehavior','CbR
     $code = Read-CompiledType $modDll "CombatBrain.Ai.$name"
     $calculate = Read-Method $code 'CalculateCurrentOrder()'
     Assert-Contract ($calculate -notmatch 'SetMovementOrder|TryApply|RecordBehaviorSelected|\.Selected\(') "$name compiled candidate calculation has no write/selection side effects"
-    Assert-Contract ($calculate -match 'IsCurrentOrderChanged = false') "$name cannot leak its prepared order into FormationAI fallback apply"
+    Assert-Contract ($calculate -match 'IsCurrentOrderChanged = false') "$name compiled candidate contains a false flag assignment (strict body checked below)"
 }
 $ai = Read-CompiledType $gameDll 'TaleWorlds.MountAndBlade.FormationAI'
 $find = Read-Method $ai 'private bool FindBestBehavior()'
@@ -77,10 +85,10 @@ $restore = Read-Method $formation 'public void SetControlledByAI('
 Assert-Contract ($restore -match 'ForceTickOccasionally = true' -and $restore -match 'AI.Tick\(\)' -and $restore -match 'SetMovementOrder\(AI.ActiveBehavior.CurrentOrder\)') 'Installed AI-control restoration has a forced tick followed by a separate engine setter'
 $missionSource = Remove-CSharpTrivia ([IO.File]::ReadAllText((Join-Path $repo 'CombatBrain\Ai\CombatAiMissionLogic.cs')))
 $missionTick = Read-Method $missionSource 'public override void OnMissionTick('
-Assert-Contract (Test-CallOrder $missionTick 'ApplyRouteASingle(mission, CbRouteAPoC.Enabled)' '_commandExecutor.Tick(mission,') 'Production reserves RouteA Movement before ordinary executor writes'
+Assert-Contract (Test-CallOrder $missionTick 'ApplyRouteASingle(mission, CbRouteAPoC.Enabled)' '_commandExecutor.Tick(mission,') 'Source Mission tick contains RouteA before executor (direct statements checked separately)'
 $compiledTick = Read-Method (Read-CompiledType $modDll 'CombatBrain.Ai.CombatAiMissionLogic') 'public override void OnMissionTick('
 $routeCall = [regex]::Match($compiledTick, 'ApplyRouteASingle\([^;]*CbRouteAPoC\.Enabled\)')
-Assert-Contract ($routeCall.Success -and (Test-CallOrder $compiledTick $routeCall.Value '_commandExecutor.Tick(')) 'Compiled Mission tick reserves RouteA before executor writes'
+Assert-Contract ($routeCall.Success -and (Test-CallOrder $compiledTick $routeCall.Value '_commandExecutor.Tick(')) 'Compiled Mission tick contains RouteA before executor (direct statements checked separately)'
 foreach ($hook in @('public override void OnMissionStateFinalized()', 'public override void OnClearScene()')) {
     $method = Read-Method $missionSource $hook
     Assert-Contract (Test-CallOrder $method 'CbRouteAPoC.ResetAll()' 'base.') "$hook releases RouteA before native teardown"
@@ -97,6 +105,16 @@ foreach ($binding in @(
     $prefix = [regex]::Match($patches, 'private static void ' + $binding[1] + '\(Formation\s+__instance,\s*' + $binding[2] + '\s+(?<name>\w+)(?:,|\))')
     Assert-Contract ($target.Success -and $prefix.Success -and $target.Groups['name'].Value -eq $prefix.Groups['name'].Value) ("Compiled {0} parameter matches installed {1}" -f $binding[1], $binding[0])
 }
+# Decompile MCM beside its installed references without loading its UI or changing production output.
+$mcmBin = Join-Path (Split-Path -Parent (Split-Path -Parent $GameBin)) 'Modules\Bannerlord.MBOptionScreen\bin\Win64_Shipping_Client'
+$referenceDir = Join-Path $compiledDir 'references'
+New-Item -ItemType Directory -Path $referenceDir -Force | Out-Null
+Get-ChildItem -LiteralPath $mcmBin -Filter '*.dll' | Copy-Item -Destination $referenceDir
+$snapshotDll = Join-Path $referenceDir 'CombatBrain.dll'
+Copy-Item -LiteralPath $modDll -Destination $snapshotDll
+Assert-Contract ((Get-FileHash -LiteralPath $snapshotDll -Algorithm SHA256).Hash -eq (Get-FileHash -LiteralPath $modDll -Algorithm SHA256).Hash) 'MCM structural check reads the same production DLL'
+$null = Read-CompiledType $snapshotDll 'CombatBrain.Mcm.CombatBrainMcmSettings'
+Invoke-VerificationContracts '--compiled' $compiledDir
 Write-Output ('Production DLL SHA256: ' + (Get-FileHash -LiteralPath $modDll -Algorithm SHA256).Hash)
 Write-Output ('Installed game DLL SHA256: ' + (Get-FileHash -LiteralPath $gameDll -Algorithm SHA256).Hash)
 Write-Output 'Static and installed-engine contract checks passed. This is not a live battle test.'

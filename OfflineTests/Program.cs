@@ -25,6 +25,7 @@ namespace OfflineTests
 
         private static void Check(bool cond, string name)
         {
+            _checks++;
             if (cond)
             {
                 Console.WriteLine("  [PASS] " + name);
@@ -44,6 +45,8 @@ namespace OfflineTests
         private static int Main()
         {
             _failures = 0;
+            _checks = 0;
+            _completedGroups.Clear();
 
             // t28（用户 2026-09-16 授权）：离线 harness 走独立日志文件，**不再污染 %TEMP%\CombatBrain.log**。
             //   背景（t26 归因）：CombatLog 默认路径与游戏进程共用同一 append-only 文件，离线用例产出
@@ -56,243 +59,243 @@ namespace OfflineTests
             catch { }
 
             Console.WriteLine("== F0 FighterProfile ==");
-            TestFighterProfile();
+            RunTest(TestFighterProfile);
             Console.WriteLine("== F6 MovementController ==");
-            TestMovement();
+            RunTest(TestMovement);
             Console.WriteLine("== F7 SurvivalInstinct ==");
-            TestSurvival();
+            RunTest(TestSurvival);
             Console.WriteLine("== F8 CavalryWaveFSM ==");
-            TestCavalry();
+            RunTest(TestCavalry);
             Console.WriteLine("== F9 RangedBrain ==");
-            TestRanged();
+            RunTest(TestRanged);
             Console.WriteLine("== F12 DecisionJitter ==");
-            TestCompliance();
+            RunTest(TestCompliance);
             Console.WriteLine("== F11 MoralePropagation ==");
-            TestMorale();
+            RunTest(TestMorale);
             Console.WriteLine("== F11 PhasedRetreat ==");
-            TestPhasedRetreat();
+            RunTest(TestPhasedRetreat);
             Console.WriteLine("== F10 CounterMatrix ==");
-            TestCounterMatrix();
+            RunTest(TestCounterMatrix);
             Console.WriteLine("== F10 CampaignHabits ==");
-            TestCampaignHabits();
+            RunTest(TestCampaignHabits);
             Console.WriteLine("== F1 TacticManual/SituationVector ==");
-            TestTacticManual();
+            RunTest(TestTacticManual);
             Console.WriteLine("== F2 OpponentModel/BeliefEngine ==");
-            TestOpponentModel();
+            RunTest(TestOpponentModel);
             Console.WriteLine("== F3 ProtectPlan ==");
-            TestProtectPlan();
+            RunTest(TestProtectPlan);
             Console.WriteLine("== F4 BracePlan ==");
-            TestBracePlan();
+            RunTest(TestBracePlan);
 
             Console.WriteLine("== T1 DecisionBranchTally ==");
-            TestObservationTally();
+            RunTest(TestObservationTally);
 
             Console.WriteLine("== T3 AttackSuppressionState ==");
-            TestAttackSuppression();
+            RunTest(TestAttackSuppression);
 
             Console.WriteLine("== T4 WindowCache ==");
-            TestWindowCache();
+            RunTest(TestWindowCache);
 
             Console.WriteLine("== P1-1 TerrainSampler ==");
-            TestTerrainSampler();
+            RunTest(TestTerrainSampler);
 
             Console.WriteLine("== T1-01 FormationIntegrity ==");
-            TestFormationIntegrity();
+            RunTest(TestFormationIntegrity);
 
             Console.WriteLine("== T26-01 CultureTables ==");
-            TestCultureTables();
+            RunTest(TestCultureTables);
 
             Console.WriteLine("== T38-01 BattleTelemetry ==");
-            TestBattleTelemetry();
+            RunTest(TestBattleTelemetry);
 
             Console.WriteLine("== T39-01 AnomalyDetector ==");
-            TestAnomalyDetector();
+            RunTest(TestAnomalyDetector);
 
             Console.WriteLine("== T2-01 FormationTactics ==");
-            TestFormationTactics();
+            RunTest(TestFormationTactics);
 
             Console.WriteLine("== T3-01 RangedPosition ==");
-            TestRangedPosition();
+            RunTest(TestRangedPosition);
 
             Console.WriteLine("== T6-01 RallyPointSelector ==");
-            TestRallyPointSelector();
+            RunTest(TestRallyPointSelector);
 
             Console.WriteLine("== T8-01 UnitPreservation ==");
-            TestUnitPreservation();
+            RunTest(TestUnitPreservation);
 
             Console.WriteLine("== T18-01 StalemateDetector ==");
-            TestStalemateDetector();
+            RunTest(TestStalemateDetector);
 
             Console.WriteLine("== t89 FormationTacticsTakeover ==");
-            TestFormationTacticsTakeover();
+            RunTest(TestFormationTacticsTakeover);
 
             Console.WriteLine("== X0 DecisionDelay ==");
-            TestDecisionDelay();
+            RunTest(TestDecisionDelay);
 
             Console.WriteLine("== X1 FormationTargeting ==");
-            TestFormationTargeting();
+            RunTest(TestFormationTargeting);
 
             Console.WriteLine("== X2 HandSkillProfile ==");
-            TestHandSkillProfile();
+            RunTest(TestHandSkillProfile);
 
             Console.WriteLine("== X3 FacingCorrection ==");
-            TestFacingCorrection();
+            RunTest(TestFacingCorrection);
 
             Console.WriteLine("== X4 FrameRelease ==");
-            TestFrameRelease();
+            RunTest(TestFrameRelease);
 
             Console.WriteLine("== X5-1 TroopClassifier ==");
-            TestTroopClassifier();
+            RunTest(TestTroopClassifier);
 
             Console.WriteLine("== X5-2 SlotLayout ==");
-            TestSlotLayout();
+            RunTest(TestSlotLayout);
 
             Console.WriteLine("== X5-3 TerrainWarp ==");
-            TestTerrainWarp();
+            RunTest(TestTerrainWarp);
 
             Console.WriteLine("== X5-4 SlotAssigner ==");
-            TestSlotAssigner();
+            RunTest(TestSlotAssigner);
 
             Console.WriteLine("== X5-5 FormationDiscipline ==");
-            TestFormationDiscipline();
+            RunTest(TestFormationDiscipline);
 
             Console.WriteLine("== X5-6 ExecutionPolicy ==");
-            TestX5ExecutionPolicy();
+            RunTest(TestX5ExecutionPolicy);
 
             Console.WriteLine("== X6 KnowledgeView/PerceptionFilter ==");
-            TestPerception();
+            RunTest(TestPerception);
 
             Console.WriteLine("== atc4-perc PerceptionPipeline 完整流程 ==");
-            TestPerceptionPipeline();
+            RunTest(TestPerceptionPipeline);
 
             Console.WriteLine("== atc4-fog CommitmentContact ==");
-            TestCommitmentContact();
+            RunTest(TestCommitmentContact);
 
             Console.WriteLine("== atc4-reserve ReserveClassifier ==");
-            TestReserveClassifier();
+            RunTest(TestReserveClassifier);
 
             Console.WriteLine("== atc4-opt CoordinationController ==");
-            TestCoordinationController();
+            RunTest(TestCoordinationController);
 
             Console.WriteLine("== atc4-integration samples ==");
-            TestIntegrationSamples();
+            RunTest(TestIntegrationSamples);
 
             Console.WriteLine("== N1 NarratorPure ==");
-            TestNarratorPure();
+            RunTest(TestNarratorPure);
 
             Console.WriteLine("== narrate-fix P0 崩溃回归 ==");
-            TestNarrateFix();
+            RunTest(TestNarrateFix);
 
             Console.WriteLine("== atc5r-lease FormationControlLease ==");
-            TestFormationControlLease();
+            RunTest(TestFormationControlLease);
 
             Console.WriteLine("== t3 diagnostic two lines ==");
-            TestT3DiagnosticLiterals();
-            TestT23TelemetryLiterals();
-            TestT5OwnershipProbeLiterals();
-            TestT28PatchLiterals();
+            RunTest(TestT3DiagnosticLiterals);
+            RunTest(TestT23TelemetryLiterals);
+            RunTest(TestT5OwnershipProbeLiterals);
+            RunTest(TestT28PatchLiterals);
 
             Console.WriteLine("== N2 NarrativeEvents ==");
-            TestNarrativeEvents();
+            RunTest(TestNarrativeEvents);
 
             Console.WriteLine("== N3 NarrativeBuffer ==");
-            TestNarrativeBuffer();
+            RunTest(TestNarrativeBuffer);
 
             Console.WriteLine("== ATC0 CommandProvenance ==");
-            TestCommandProvenance();
+            RunTest(TestCommandProvenance);
 
             Console.WriteLine("== ATC0 OutputLayer ==");
-            TestProvenanceOutput();
+            RunTest(TestProvenanceOutput);
 
             Console.WriteLine("== CPS0 ProvenanceTruth ==");
-            TestCps0ProvenanceTruth();
+            RunTest(TestCps0ProvenanceTruth);
 
             Console.WriteLine("== CPS1 CommandProposal ==");
-            TestCps1CommandProposal();
+            RunTest(TestCps1CommandProposal);
 
             Console.WriteLine("== CPS1 CommandExecutor ==");
-            TestCps1CommandExecutor();
+            RunTest(TestCps1CommandExecutor);
 
             Console.WriteLine("== CPS1 MigrateDefense ==");
-            TestCps1MigrateDefense();
+            RunTest(TestCps1MigrateDefense);
 
             Console.WriteLine("== CPS1 MigrateSpecialists ==");
-            TestCps1MigrateSpecialists();
+            RunTest(TestCps1MigrateSpecialists);
 
             Console.WriteLine("== CPS1 RemoveDirectWriters ==");
-            TestCps1RemoveDirectWriters();
+            RunTest(TestCps1RemoveDirectWriters);
 
             Console.WriteLine("== CPS1 RepairChargeTarget ==");
-            TestCps1RepairChargeTarget();
+            RunTest(TestCps1RepairChargeTarget);
 
             Console.WriteLine("== CPS2 LeaseIntegration ==");
-            TestCps2LeaseIntegration();
+            RunTest(TestCps2LeaseIntegration);
 
             Console.WriteLine("== CPS2 OwnershipPoc ==");
-            TestCps2OwnershipPoc();
+            RunTest(TestCps2OwnershipPoc);
 
             Console.WriteLine("== CPS3 RuntimePrep ==");
-            TestCps3RuntimePrep();
+            RunTest(TestCps3RuntimePrep);
 
             Console.WriteLine("== CPS3 McmSwitches ==");
-            TestCps3McmSwitches();
+            RunTest(TestCps3McmSwitches);
 
             Console.WriteLine("== CPS3 ObservationHotswap ==");
-            TestCps3ObservationHotswap();
+            RunTest(TestCps3ObservationHotswap);
 
             Console.WriteLine("== CPS3 ModeSync ==");
-            TestCps3ModeSync();
+            RunTest(TestCps3ModeSync);
 
             Console.WriteLine("== CPS3 ObserverDiagnostics ==");
-            TestCps3ObserverDiagnostics();
+            RunTest(TestCps3ObserverDiagnostics);
 
             Console.WriteLine("== CPS3 HarmonyExplicitPatch ==");
-            TestCps3HarmonyExplicitPatch();
+            RunTest(TestCps3HarmonyExplicitPatch);
 
             Console.WriteLine("== CPS3 HarmonyParamNames ==");
-            TestCps3HarmonyParamNames();
+            RunTest(TestCps3HarmonyParamNames);
 
             Console.WriteLine("== CPS3r EvidenceChain ==");
-            TestCps3rEvidenceChain();
+            RunTest(TestCps3rEvidenceChain);
 
             Console.WriteLine("== CPS3r RepairPrefixStage ==");
-            TestCps3rRepairPrefixStage();
+            RunTest(TestCps3rRepairPrefixStage);
 
             Console.WriteLine("== CPS3r ForceLeaseCandidate ==");
-            TestCps3rForceLeaseCandidate();
+            RunTest(TestCps3rForceLeaseCandidate);
 
             Console.WriteLine("== CPS3r ForceArmTriggerSplit ==");
-            TestCps3rForceArmTriggerSplit();
+            RunTest(TestCps3rForceArmTriggerSplit);
 
             Console.WriteLine("== CPS3r RouteAHardgates ==");
-            TestCps3rRouteAHardgates();
+            RunTest(TestCps3rRouteAHardgates);
 
             Console.WriteLine("== CPS3r RouteARepair2 ==");
-            TestCps3rRouteARepair2();
+            RunTest(TestCps3rRouteARepair2);
 
             Console.WriteLine("== CPS3r DRouteAMode ==");
-            TestCps3rDRouteAMode();
+            RunTest(TestCps3rDRouteAMode);
 
             Console.WriteLine("== CPS3r McmDropdownE ==");
-            TestCps3rMcmDropdownE();
+            RunTest(TestCps3rMcmDropdownE);
 
             Console.WriteLine("== NarrativeFactionFix ==");
-            TestNarrativeFactionFix();
+            RunTest(TestNarrativeFactionFix);
 
             Console.WriteLine("== RouteAFinalBlocker ==");
-            TestRouteAFinalRepair();
+            RunTest(TestRouteAFinalRepair);
 
             Console.WriteLine("== ATC1 BattlePhaseFSM ==");
-            TestBattlePhaseFSM();
+            RunTest(TestBattlePhaseFSM);
 
             Console.WriteLine("== ATC2 ArmyContext ==");
-            TestArmyContext();
+            RunTest(TestArmyContext);
 
             Console.WriteLine("== ATC3 Mission/Isolation ==");
-            TestFormationMission();
+            RunTest(TestFormationMission);
 
             Console.WriteLine("== ATC4 CommitmentEvaluator ==");
-            TestCommitmentEvaluator();
+            RunTest(TestCommitmentEvaluator);
 
             Console.WriteLine();
             if (_failures == 0)
@@ -3427,7 +3430,7 @@ namespace OfflineTests
             Check(CombatBrain.Settings.Cps3RuntimeSettings.SelectedIndexFromMode(CombatBrain.Settings.Cps3Mode.A_NativeBaseline) == 0,
                 "cps3-mcm default index 0 = A (安全态)");
 
-            // D) MCM get/set 直读写（字段即存储）：Mode 与开关 roundtrip
+            // D) 配置字段 roundtrip；真实 MCM 属性桥接由编译产物契约单独检查。
             CombatBrain.Settings.Cps3RuntimeSettings.Mode = CombatBrain.Settings.Cps3Mode.D_ExclusivePoc;
             CombatBrain.Settings.Cps3RuntimeSettings.Enabled = true;
             CombatBrain.Settings.Cps3RuntimeSettings.ObserverEnabled = true;
@@ -3538,12 +3541,10 @@ namespace OfflineTests
                 && log3.Contains("id=com.combatbrain.setorderobserver") && log3.Contains("prefixes=3"),
                 "cps3-diag mount log format (3/3 prefixes OK)");
 
-            // C) MCM 写回链路核实：Cps3ObserverEnabled get/set 直读写 Cps3RuntimeSettings.ObserverEnabled
-            //    （CombatBrainMcmSettings.cs 薄转发；字段 roundtrip 即写回链路正确——t26 cps3-mcm 断言已覆盖，
-            //    此处复核字段语义）
+            // C) 此处只验证配置字段；不替代真实 Cps3ObserverEnabled 属性的接线检查。
             CombatBrain.Settings.Cps3RuntimeSettings.ObserverEnabled = true;
             Check(CombatBrain.Settings.Cps3RuntimeSettings.ObserverEnabled,
-                "cps3-diag observer-enabled field roundtrip (MCM 写回链路)");
+                "cps3-diag observer-enabled field roundtrip (actual MCM bridge checked separately)");
             CombatBrain.Settings.Cps3RuntimeSettings.ObserverEnabled = false;
 
             // D) 失败场景：Enable 失败沿用「观测不可用」日志（t3 §4.2.8 路径保留）——BuildMountLog 仅成功串；

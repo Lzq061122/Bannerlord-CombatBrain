@@ -162,14 +162,14 @@ namespace OfflineTests
             Check(Cps2RouteAPolicy.MapFormationToIntent(false, (int)FormationMission.SupportMainEffort, BattlePhase.Engage)
                 == Cps2RouteAIntent.Advance, "routeA real Engage phase is not treated as Deployment/Rejoin");
 
-            TestRouteAEvidence();
-            TestRouteAFlapAndMode();
-            TestRouteADeliveryDeadline();
-            TestRouteARepairRound2();
-            TestRouteAReArmBounded();
-            TestRouteASilenceProbe();
-            TestRouteASilenceFailureBoundary();
-            TestReleaseDiagnosticBoundary();
+            RunTest(TestRouteAEvidence);
+            RunTest(TestRouteAFlapAndMode);
+            RunTest(TestRouteADeliveryDeadline);
+            RunTest(TestRouteARepairRound2);
+            RunTest(TestRouteAReArmBounded);
+            RunTest(TestRouteASilenceProbe);
+            RunTest(TestRouteASilenceFailureBoundary);
+            RunTest(TestReleaseDiagnosticBoundary);
         }
 
         // CB-REPAIR-0004 r2（review findings）：①交付暂停只能由「真实释放」终结——候选扇描失败拍的空释放

@@ -15,7 +15,7 @@ $report = [ordered]@{
     Stages = @()
 }
 function Get-SourceHash {
-    $files = @(& rg --files CombatBrain OfflineTests -g '*.cs' -g '*.csproj' -g '*.ps1' -g '*.xml' -g '!**/obj/**' -g '!**/bin/**')
+    $files = @(& rg --files CombatBrain OfflineTests -g '*.cs' -g '*.csproj' -g '*.ps1' -g '*.xml' -g '*.js' -g '*.json' -g '!**/obj/**' -g '!**/bin/**')
     if ($LASTEXITCODE -ne 0) { throw 'Cannot enumerate verification inputs' }
     $entries = foreach ($file in ($files | Sort-Object)) {
         $file + ':' + (Get-FileHash -LiteralPath $file -Algorithm SHA256).Hash
@@ -48,7 +48,17 @@ function Invoke-Stage([string]$Name, [string]$Command, [string[]]$Arguments) {
     $lines = @(Get-Content -LiteralPath $log)
     $stage.Pass = @($lines | Where-Object { $_ -match '^\s*\[PASS\]' }).Count
     $stage.Fail = @($lines | Where-Object { $_ -match '^\s*\[FAIL\]' }).Count
-    $emptyChecks = $Name -in @('Regression', 'StaticContracts') -and $stage.Pass -eq 0
+    if ($Name -eq 'ContractCheckerTests') {
+        $passes = @($lines | Select-String '^# pass (\d+)$')
+        $failures = @($lines | Select-String '^# fail (\d+)$')
+        if ($passes.Count -ne 1 -or $failures.Count -ne 1) {
+            $stage.Status = 'FAIL'
+            throw 'Missing contract-checker test summary'
+        }
+        $stage.Pass = [int]$passes[0].Matches[0].Groups[1].Value
+        $stage.Fail = [int]$failures[0].Matches[0].Groups[1].Value
+    }
+    $emptyChecks = $Name -in @('Regression', 'StaticContracts', 'RegressionCompleteness', 'ContractCheckerTests') -and $stage.Pass -eq 0
     if ($stage.ExitCode -ne 0 -or $stage.Fail -gt 0 -or $emptyChecks) {
         $stage.Status = 'FAIL'
         throw "$Name failed; see $log"
@@ -57,7 +67,7 @@ function Invoke-Stage([string]$Name, [string]$Command, [string[]]$Arguments) {
 }
 Push-Location $repo
 try {
-    foreach ($command in @('dotnet', 'ilspycmd', 'rg', 'git')) { Get-Command $command -ErrorAction Stop | Out-Null }
+    foreach ($command in @('dotnet', 'ilspycmd', 'rg', 'git', 'node')) { Get-Command $command -ErrorAction Stop | Out-Null }
     $report.GitHead = (& git rev-parse HEAD) -join ''
     if ($LASTEXITCODE -ne 0) { throw 'Cannot identify checkout' }
     $report.GitStatus = @(& git status --porcelain)
@@ -69,7 +79,9 @@ try {
     $report.ProductionDllSHA256 = (Get-FileHash -LiteralPath $modDll -Algorithm SHA256).Hash
     Invoke-Stage 'OfflineBuild' 'dotnet' @('build', 'OfflineTests\OfflineTests.csproj', '-c', 'Debug', '--nologo', '-t:Rebuild', '-warnaserror')
     $report.OfflineExeSHA256 = (Get-FileHash -LiteralPath (Join-Path $PSScriptRoot 'bin\Debug\net472\OfflineTests.exe') -Algorithm SHA256).Hash
+    Invoke-Stage 'ContractCheckerTests' 'node' @('--test', '--test-reporter=tap', (Join-Path $PSScriptRoot 'VerificationContracts.test.js'))
     Invoke-Stage 'Regression' 'dotnet' @('run', '--project', 'OfflineTests\OfflineTests.csproj', '-c', 'Debug', '--no-build')
+    Invoke-Stage 'RegressionCompleteness' 'node' @((Join-Path $PSScriptRoot 'VerificationContracts.js'), '--regression-log', (Join-Path $runDir 'Regression.log'))
     Invoke-Stage 'StaticContracts' 'powershell.exe' @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', (Join-Path $PSScriptRoot 'RouteAStaticChecks.ps1'))
     $gameHashLine = Get-Content -LiteralPath (Join-Path $runDir 'StaticContracts.log') | Where-Object { $_ -match '^Installed game DLL SHA256: ' }
     $report.GameDllSHA256 = ($gameHashLine -replace '^Installed game DLL SHA256: ', '').Trim()

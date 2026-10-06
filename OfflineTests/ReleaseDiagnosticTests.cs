@@ -89,7 +89,7 @@ namespace OfflineTests
                 selectionTimeout |= deadlineEvent.Kind == RouteAEventKind.Exit && deadlineEvent.Reason == RouteAExit.SelectionTimeout;
             Check(selectionTimeout, "release diagnostics: failing callbacks retain the SelectionTimeout reason");
 
-            TestReleaseDiagnosticOutput();
+            RunTest(TestReleaseDiagnosticOutput);
         }
 
         private static void TestReleaseDiagnosticOutput()
