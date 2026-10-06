@@ -5171,22 +5171,8 @@ namespace OfflineTests
             string control = System.IO.File.ReadAllText(System.IO.Path.Combine(root, "CombatBrain", "Coordination", "RouteAControl.cs"));
             string adapter = System.IO.File.ReadAllText(System.IO.Path.Combine(root, "CombatBrain", "Ai", "RouteAOrderAdapter.cs"));
 
-            // (1) single injection point: the live delegate field exists exactly once
-            string controlCode = RemoveSourceTrivia(control);
             string adapterCode = RemoveSourceTrivia(adapter);
-            Check(controlCode.Contains("public Func<string> ReleaseLiveText;"),
-                "t5 live-probe delegate field exists on RouteAControl");
-            Check(controlCode.Split(new string[] { "public Func<string> ReleaseLiveText;" }, StringSplitOptions.None).Length - 1 == 1,
-                "t5 live-probe delegate field is declared exactly once");
-
-            // (2) the probe is emitted on the real release edge, gated by Evidence.Capture
-            Check(control.Contains("[RouteAOwnership] where=ReleaseLive reason={0} session={1} missionTime={2:F3} {3}"),
-                "t5 live-probe line carries where=ReleaseLive + session + missionTime");
-            Check(control.Contains("if (Evidence.Capture && ReleaseLiveText != null)"),
-                "t5 live-probe output is gated by Evidence.Capture and nullable-safe");
-            Check(control.Contains("if (previous == null) return;")
-                && control.IndexOf("where=ReleaseLive") > control.IndexOf("if (previous == null) return;"),
-                "t5 live probe sits after the real-release-edge early return");
+            // Release identity, capture gating and real-edge semantics are exercised by ReleaseDiagnosticTests.
 
             // (3) freshness labelling: live source labelled, and the cached family keeps its own labels
             Check(adapter.Contains("liveSource=sameTickRecompute"),
@@ -5201,12 +5187,9 @@ namespace OfflineTests
                 "t5 live probe recomputes eligibility on the call tick");
             Check(adapter.Contains("live=noref"),
                 "t5 live probe reports noref instead of inventing values when no formation is bound");
-            Check(adapterCode.Contains("Control.ReleaseLiveText = () => LiveOwnershipText();"),
-                "t5 adapter has an uncommented live probe assignment (compiled wiring checked by RouteAStaticChecks)");
-            Check(adapterCode.Contains("internal static Formation _probeFormation;"),
-                "t5 probe anchor field exists");
-            Check(adapterCode.Contains("_probeFormation = null;"),
-                "t5 probe anchor resets with the session");
+            Check(System.Text.RegularExpressions.Regex.IsMatch(adapterCode,
+                @"Control\.ReleaseLiveText\s*=\s*\(?\s*(?:object\s+)?(\w+)\s*\)?\s*=>\s*LiveOwnershipText\(\1\s+as\s+Formation\)\s*;"),
+                "t5 adapter forwards the released identity (compiled wiring checked by RouteAStaticChecks)");
 
             // (5) zero new setter sites: the probe is a log statement only
             Check(!control.Contains("SetOrder(") && !control.Contains("SetControlledByAI("),

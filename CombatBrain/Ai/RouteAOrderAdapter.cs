@@ -23,7 +23,6 @@ namespace CombatBrain.Ai
             try
             {
                 RouteAEligibility eligibility = CbRouteAPoC.Eligibility(h.Formation, Mission.Current);
-                CbRouteAPoC._probeFormation = h.Formation; // t5: read-only probe anchor (log outlet only)
                 bool valid = CbRouteAPoC.CommandValid(h, behavior.CurrentOrder);
                 if (!CbRouteAPoC.Control.TrySelect(h.Formation, behavior, h.Formation.AI.ActiveBehavior,
                     eligibility, valid, now)) return false;
@@ -110,10 +109,6 @@ namespace CombatBrain.Ai
         public static readonly RouteAControl Control = new RouteAControl();
         private static Mission _mission;
         private static bool _ended;
-        internal static Formation _probeFormation; // t5: read-only probe anchor (log outlet only)
-        // t5 (user 2026-09-16 authorized, plan B, read-only telemetry): formation reference for the
-        //   same-tick live recompute probe. Set only where eligibility is already computed on an existing
-        //   hook; read only by the probe (log outlet). Never read by any decision branch.
         private static readonly string RunId = Guid.NewGuid().ToString("N");
         public static float Now { get { return Mission.Current != null ? Mission.Current.CurrentTime : SetOrderObserver.LastTick; } }
         public static bool Enabled { get { return Cps3RuntimeSettings.RouteAExecutionEnabled(); } }
@@ -138,7 +133,7 @@ namespace CombatBrain.Ai
             //   called (i.e. at the Release outlet), instead of reusing the cached _lastEligibility snapshot;
             //   that is what separates the cached family from the live family. Read-only: log outlet only,
             //   never read by any decision branch.
-            Control.ReleaseLiveText = () => LiveOwnershipText();
+            Control.ReleaseLiveText = identity => LiveOwnershipText(identity as Formation);
         }
 
         // t23（用户 2026-09-16 授权 · 只读遥测）：Disabled / 退出边沿的触发项布尔量文本。
@@ -149,12 +144,11 @@ namespace CombatBrain.Ai
         //     cached = the snapshot RouteAControl took on its last Reconcile/Update/TrySelect hook (<=1 beat old,
         //              printed by the LogOwnership line of the same release edge with eligibilityFresh=0/1);
         //     a comparison of the two families on one release edge is what makes the writer identity decidable.
-        //   Reset semantics: _probeFormation is (re)bound on every eligibility computation and cleared with the
-        //   session; when no formation is bound the probe reports live=noref rather than inventing values.
-        public static string LiveOwnershipText()
+        //   Release supplies its target directly so unrelated behavior callbacks cannot change the probe identity.
+        //   If that identity is not a Formation, report noref instead of inventing values.
+        public static string LiveOwnershipText(Formation f)
         {
-            Formation f = _probeFormation;
-            if (f == null) return "live=noref (no formation bound on this session; live inputs not computable)";
+            if (f == null) return "live=noref (released identity is not a formation; live inputs not computable)";
             RouteAEligibility e = Eligibility(f, Mission.Current);
             return string.Format(CultureInfo.InvariantCulture,
                 "liveSource=sameTickRecompute playerOwned={0} playerOwnerSet={1} hasPlayerControlledTroop={2} isPlayerTroopInFormation={3} playerTeam={4} isAIControlled={5} reject={6} enabled={7} fieldBattle={8} present={9} alive={10}",
@@ -182,7 +176,6 @@ namespace CombatBrain.Ai
             Control.EndSession(_mission != null ? _mission.CurrentTime : Now);
             FlushEvidence(); // Exit/Restore 必须先落盘；下一 Mission 才清计数。
             _ended = true;
-            _probeFormation = null; // t5: probe reset with the session (no cross-mission staleness)
             _mission = null;
         }
 
