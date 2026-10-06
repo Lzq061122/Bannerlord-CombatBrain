@@ -122,7 +122,7 @@
         //   adapter injects it and recomputes the five ownership inputs plus isAIControlled on the very tick of
         //   the call (instead of reusing the cached _lastEligibility snapshot). Read-only: log outlet only, never
         //   read by any branch; gated by Evidence.Capture; when null the live segment is omitted entirely.
-        public Func<string> ReleaseLiveText;
+        public Func<object, string> ReleaseLiveText;
         // t28（用户 2026-09-16 授权 · **遥测态**，Captain 裁定 2026-09-16）：最近一次资格判定快照 ——
         //   使归属行可在**释放总出口**（Release）统一产出，覆盖全部直调点（19 处调用点 / 其中 15 处
         //   在 t28 前未被任何挂点覆盖；M6 的 reason=7/17 均不经「资格拒绝」路径）。
@@ -187,9 +187,9 @@
             bool commandValid, float x, float y, int situationSignal, int team, int formation, float now)
         {
             _proxyTicks++; // t23 只读遥测：交付期内拍计数（评估周期代理口径之一）
-            _lastEligibility = eligibility; _hasLastEligibility = true; // t28：缓存供释放总出口输出
             if (Target != null && (target == null || !ReferenceEquals(Target.Identity, target.Identity)))
                 Release(RouteAExit.Replaced, now);
+            _lastEligibility = eligibility; _hasLastEligibility = true; // 旧 owner 释放后才缓存新候选的资格。
             RouteAExit reject = eligibility.Rejection;
             if (reject == RouteAExit.None && (!commandValid || intent == Cps2RouteAIntent.None))
                 reject = intent == Cps2RouteAIntent.Rejoin ? RouteAExit.NavigationFailed : RouteAExit.InvalidCommand;
@@ -311,6 +311,7 @@
             RouteAEligibility eligibility, bool commandValid, float now)
         {
             if (!Owns(identity)) return false;
+            _lastEligibility = eligibility; _hasLastEligibility = true; // 当前 owner 的本次快照供释放日志使用。
             if (eligibility.Rejection != RouteAExit.None || !commandValid)
             {
                 Release(eligibility.Rejection != RouteAExit.None ? eligibility.Rejection : RouteAExit.InvalidCommand, now);
@@ -419,7 +420,7 @@
             if (!Evidence.Capture) return;
             float lastSel = Evidence.LastSelectedAtFor(IdentityId);
             CombatLog.Log(string.Format(CultureInfo.InvariantCulture,
-                "[RouteAOwnership] where={0} session={1} missionTime={2:F3} playerOwned={3} playerOwnerSet={4} hasPlayerControlledTroop={5} isPlayerTroopInFormation={6} playerTeam={7} isAIControlled={8} reject={9} proxyTicks={10} proxyNativeWrites={11} proxySelects={12} sinceLastNativeWrite={13} sinceLastSelect={14} eligibilityFresh={15}",
+                "[RouteAOwnership] where={0} session={1} missionTime={2:F3} playerOwned={3} playerOwnerSet={4} hasPlayerControlledTroop={5} isPlayerTroopInFormation={6} playerTeam={7} isAIControlled={8} reject={9} proxyTicks={10} proxyNativeWrites={11} proxySelects={12} sinceLastNativeWrite={13} sinceLastSelect={14} eligibilityFresh={15} identity={16}",
                 where, Evidence.Session, now,
                 e.PlayerOwned ? 1 : 0, e.PlayerOwnerSet ? 1 : 0, e.HasPlayerControlledTroop ? 1 : 0,
                 e.IsPlayerTroopInFormation ? 1 : 0, e.PlayerTeam ? 1 : 0, e.AiControlled ? 1 : 0, (int)e.Rejection,
@@ -428,7 +429,7 @@
                     ? "never" : (now - _proxyLastNativeAt).ToString("F3", CultureInfo.InvariantCulture) + "s",
                 float.IsNegativeInfinity(lastSel)
                     ? "never" : (now - lastSel).ToString("F3", CultureInfo.InvariantCulture) + "s",
-                haveEligibility ? 1 : 0));
+                haveEligibility ? 1 : 0, IdentityId));
         }
 
         public void Release(RouteAExit reason, float now)
@@ -462,8 +463,8 @@
                 try
                 {
                     CombatLog.Log(string.Format(CultureInfo.InvariantCulture,
-                        "[RouteAOwnership] where=ReleaseLive reason={0} session={1} missionTime={2:F3} {3}",
-                        (int)reason, Evidence.Session, now, ReleaseLiveText()));
+                        "[RouteAOwnership] where=ReleaseLive reason={0} session={1} missionTime={2:F3} {3} identity={4}",
+                        (int)reason, Evidence.Session, now, ReleaseLiveText(previous.Identity), IdentityId));
                 }
                 catch (Exception) { }
             }

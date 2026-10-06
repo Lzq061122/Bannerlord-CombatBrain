@@ -54,7 +54,7 @@ $selectionGuard = [regex]::Match($adapter, 'if\s*\(\s*!CbRouteAPoC\.Control\.Try
 Assert-Contract ($selectionGuard.Success -and (Test-CallOrder $adapter $selectionGuard.Value '.SetMovementOrder(')) 'Compiled adapter rejects failed selection before its setter'
 $routeA = Read-CompiledType $modDll 'CombatBrain.Ai.CbRouteAPoC'
 $beginSession = Read-Method $routeA 'public static void BeginSession('
-Assert-Contract ($beginSession -match 'Control\.ReleaseLiveText\s*=\s*\(\)\s*=>\s*LiveOwnershipText\(\)\s*;') 'Compiled BeginSession wires the live ownership probe'
+Assert-Contract ($beginSession -match 'Control\.ReleaseLiveText\s*=\s*\(?\s*(?:object\s+)?(\w+)\s*\)?\s*=>\s*LiveOwnershipText\(\1\s+as\s+Formation\)\s*;') 'Compiled BeginSession forwards the released identity to the live ownership probe'
 Assert-Contract ($beginSession -match 'Control\.ReleaseGateText\s*=\s*\(\)\s*=>\s*GateText\(Enabled\)\s*;') 'Compiled BeginSession wires the release gate probe'
 
 foreach ($name in @('CbHoldBehavior','CbAdvanceBehavior','CbRejoinBehavior','CbRetreatBehavior')) {
