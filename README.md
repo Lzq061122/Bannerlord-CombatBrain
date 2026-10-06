@@ -34,6 +34,9 @@
 | 仓库 | 内容 |
 |---|---|
 | [`Lzq061122/Bannerlord-CBATH`](https://github.com/Lzq061122/Bannerlord-CBATH) | **CBATH（CombatBrain Autonomous Test Harness）** —— 独立的自动化测试基础设施，目标是不经人工操作完成「启动游戏 → 进入战斗 → 观测 → 采集证据 → 判定」闭环 |
+| [`Lzq061122/TacticalCommandLab`](https://github.com/Lzq061122/TacticalCommandLab) | **Tactical Command Lab** —— 独立的战术指挥实验项目（`CommandLab.slnx`，139 个跟踪文件） |
+
+TacticalCommandLab 与本仓库**无源码依赖**：它是独立的实验工程，只与 CombatBrain 共享同一位作者与同一套实验方法论。
 
 CBATH 与本仓库**无源码依赖**：其 108 个跟踪文件中引用本仓库路径的数量为 0。它只在运行期通过两个自带的 legacy adapter 读取 CombatBrain 日志做时间关联。
 
